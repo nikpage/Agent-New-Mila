@@ -1,0 +1,13 @@
+name: Production Cron Trigger
+on:
+  schedule:
+    - cron: '0 13 * * *'  # Automatic daily run
+  workflow_dispatch:      # Manual "Run" button in GitHub Actions tab
+
+jobs:
+  ping-mila:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Morning Brief
+        run: |
+           curl -H "Authorization: Bearer 2xuRyOk8QbeDkosQQOKDVTcaG+MHmuilSAWtuuFASkA=" http://localhost:3000/api/cron/morning-brief

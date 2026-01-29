@@ -1,7 +1,7 @@
 // features/planning/service.ts
 
 import { createClient } from '@supabase/supabase-js';
-import { genAI, AI_CONFIG } from '../shared/ai';
+import { ai, AI_CONFIG } from '../shared/ai';
 import { ActionPlan } from './types';
 import { SchemaType } from "@google/generative-ai";
 
@@ -117,7 +117,7 @@ export async function planNextMove(
   `;
 
   // Initialize model with specific configuration for structured output
-  const model = genAI.getGenerativeModel({
+  const model = ai.getGenerativeModel({
     model: AI_CONFIG.models.smart,
     generationConfig: {
       responseMimeType: "application/json",

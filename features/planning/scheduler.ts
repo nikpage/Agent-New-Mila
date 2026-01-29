@@ -2,42 +2,73 @@
 
 import { google } from 'googleapis';
 import { createClient } from '@supabase/supabase-js';
+import { AI_MODELS } from '../../lib/ai/config';
+import { genAI } from '../shared/ai';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY!
 );
 
-const addHours = (date: Date, h: number) => new Date(date.getTime() + h * 60 * 60 * 1000);
-const addDays = (date: Date, d: number) => new Date(date.getTime() + d * 24 * 60 * 60 * 1000);
+/**
+ * LOGIC GATE: RESOLVE LOCATION
+ * Maps nicknames (e.g., "The Office") to real addresses using
+ * User settings or Counterparty JSONB data for travel calculations.
+ */
+export function resolveLocation(locationName: string, userSettings: any, cpData: any): string {
+  if (!locationName) return '';
 
-// Helper to check idempotency for events
-async function assertEventNotProcessed(title: string, userId: string): Promise<boolean> {
-  const { data: existing } = await supabase
-    .from('todos')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('description', title)
-    .maybeSingle();
+  // 1. Check User's Saved Locations (from users.settings)
+  const savedLocation = userSettings.locations?.find(
+    (l: any) => l.label.toLowerCase() === locationName.toLowerCase()
+  );
+  if (savedLocation) return savedLocation.address;
 
-  return !existing;
+  // 2. Check Counterparty's Saved Locations (from cps table JSONB 'locations' field)
+  const cpLocation = cpData.locations?.find(
+    (l: any) => l.label.toLowerCase() === locationName.toLowerCase()
+  );
+  if (cpLocation) return cpLocation.address;
+
+  return locationName;
 }
 
-async function findFreeSlots(calendar: any, startSearch: Date, durationMins: number, count = 3) {
-  const slots:  { start: string; end: string }[] = [];
-  let candidate = new Date(startSearch);
+/**
+ * LOGIC GATE: SMART SLOTS
+ * Finds free calendar slots respecting User Workday and Travel Buffers.
+ */
+async function findSmartSlots(
+  calendar: any,
+  userSettings: any,
+  durationMins: number,
+  count = 3
+) {
+  const slots: { start: string; end: string }[] = [];
+  const { workday, buffer_minutes = 20 } = userSettings;
 
-  const endSearch = addDays(candidate, 3);
+  // Total block needed = Buffer + Meeting + Buffer
+  const totalBlockNeeded = durationMins + (buffer_minutes * 2);
 
-  while (slots.length < count && candidate < endSearch) {
+  let candidate = new Date();
+  candidate.setHours(candidate.getHours() + 2); // Start looking 2 hours from now
+
+  const startHour = parseInt(workday.start.split(':')[0]);
+  const endHour = parseInt(workday.end.split(':')[0]);
+
+  while (slots.length < count) {
     const hour = candidate.getHours();
-    if (hour < 9 || hour > 17) {
-      candidate = addHours(candidate, 1);
+
+    // 1. Workday Gate: If outside hours, move to start of next workday
+    if (hour < startHour || hour >= endHour) {
+      candidate.setHours(startHour);
+      candidate.setMinutes(0);
+      candidate.setDate(candidate.getDate() + 1);
       continue;
     }
 
-    const endCandidate = new Date(candidate.getTime() + durationMins * 60000);
+    const endCandidate = new Date(candidate.getTime() + totalBlockNeeded * 60000);
 
+    // 2. Calendar Conflict Check
     const res = await calendar.events.list({
       calendarId: 'primary',
       timeMin: candidate.toISOString(),
@@ -45,26 +76,43 @@ async function findFreeSlots(calendar: any, startSearch: Date, durationMins: num
       singleEvents: true
     });
 
-    const items = (res.data.items) ?? [];
-     if (items.length === 0) {
-      slots.push({ start: candidate.toISOString(), end: endCandidate.toISOString() });
-      candidate = addHours(candidate, 2);
+    if ((res.data.items || []).length === 0) {
+      // 3. Found slot: Center the meeting within the buffered block
+      const meetingStart = new Date(candidate.getTime() + buffer_minutes * 60000);
+      const meetingEnd = new Date(meetingStart.getTime() + durationMins * 60000);
+
+      slots.push({
+        start: meetingStart.toISOString(),
+        end: meetingEnd.toISOString()
+      });
+      candidate.setHours(candidate.getHours() + 2);
     } else {
-      candidate = addHours(candidate, 1);
+      candidate.setMinutes(candidate.getMinutes() + 30);
     }
   }
   return slots;
 }
 
+/**
+ * MAIN SERVICE: SCHEDULE ACTION
+ * Orchestrates the scheduling proposal for the Morning Brief.
+ */
 export async function scheduleAction(
   userId: string,
   googleTokens: any,
   cpId: string,
   classification: any,
   emailData: any,
-  threadId: string | null
+  threadId: string
 ): Promise<void> {
-  // Setup Calendar Client
+
+  // 1. Fetch Context (Settings from User, Extras from CP JSONB)
+  const { data: user } = await supabase.from('users').select('settings').eq('id', userId).single();
+  const { data: cp } = await supabase.from('cps').select('*').eq('id', cpId).single();
+
+  if (!user?.settings) throw new Error("User settings missing");
+
+  // 2. Setup Google Calendar
   const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET
@@ -72,67 +120,42 @@ export async function scheduleAction(
   oauth2Client.setCredentials(googleTokens);
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 
-  const actionWords = ['meet', 'call', 'viewing', 'schedule', 'book', 'schůzka', 'prohlídka'];
-  const emailText = (emailData.bodyPlain || '').toLowerCase();
-  const hasActionWord = actionWords.some(word => emailText.includes(word));
-
-  const isEvent = classification?.category === 'BUSINESS' || classification?.type === 'EVENT';
-
-  if (!hasActionWord && !isEvent) {
-    return;
-  }
+  // 3. Resolve Logistics (Nickname -> Address)
+  const rawLocation = classification.event_details?.location || '';
+  const resolvedAddress = resolveLocation(rawLocation, user.settings, cp);
 
   const duration = classification.event_details?.duration_minutes || 60;
-  const requestedTime = classification.event_details?.requested_time
-    ? new Date(classification.event_details.requested_time)
-    : addDays(new Date(), 1);
 
-  // Check Conflict
-  const conflictCheck = await calendar.events.list({
-    calendarId: 'primary',
-    timeMin: requestedTime.toISOString(),
-    timeMax: new Date(requestedTime.getTime() + duration * 60000).toISOString(),
-    singleEvents: true
-  });
+  // 4. Find Slots (Applying Workday & Travel Padding)
+  const alternatives = await findSmartSlots(calendar, user.settings, duration);
 
-  let draftReply = '';
-  const conflictItems = (conflictCheck.data.items) ?? [];
+  const altText = alternatives
+    .map(s => new Date(s.start).toLocaleString('cs-CZ'))
+    .join(', ');
 
-  if (conflictItems.length === 0) {
-    // FREE -> Suggest Accept
-    draftReply = `Dobrý den, potvrzuji termín ${requestedTime.toLocaleString('cs-CZ')}.`;
+  // 5. Generate Draft using Gemini 2.5 Flash
+  const model = genAI.getGenerativeModel({ model: AI_MODELS.writing });
+  const prompt = `
+    Write a brief, professional Czech response suggesting these times: ${altText}.
+    Location: ${resolvedAddress || 'to be determined'}.
+    Context: ${emailData.subject}
+  `;
+  const result = await model.generateContent(prompt);
+  const draftReply = result.response.text();
 
-    // Tentative Hold
-    const summary = classification.summary || classification.summary_czech || "Meeting";
-    await calendar.events.insert({
-      calendarId: 'primary',
-      requestBody: {
-        summary: `[HOLD] ${summary}`,
-        start: { dateTime: requestedTime.toISOString() },
-        end: { dateTime: new Date(requestedTime.getTime() + duration * 60000).toISOString() },
-        colorId: '8'
-      }
-    });
-
-  } else {
-    // BUSY -> Suggest Options
-    const alternatives = await findFreeSlots(calendar, requestedTime, duration);
-    const altText = alternatives.map(s => new Date(s.start).toLocaleString('cs-CZ')).join(', ');
-    draftReply = `Bohužel v tento čas nemohu. Hodilo by se vám: ${altText}?`;
-  }
-
-  // Save Action to DB (Using Todos as "Action Items")
-  const todoDescription = `REPLY DRAFT: ${draftReply}`;
-
-  const canInsert = await assertEventNotProcessed(todoDescription, userId);
-  if (!canInsert) return;
-
-  await supabase.from('todos').insert({
+  // 6. Store Action Proposal for Morning Brief
+  await supabase.from('action_proposals').insert({
     user_id: userId,
     cp_id: cpId,
-    thread_id: threadId,
-    description: todoDescription,
+    conversation_id: threadId,
+    action_type: 'SCHEDULE',
     status: 'pending',
-    due_date: new Date().toISOString().split('T')[0]
+    priority_score: 8, // Default for scheduling, adjusted by planning service
+    draft_body_text: draftReply,
+    rationale: `Suggested slots based on ${user.settings.workday.start}-${user.settings.workday.end} workday and ${user.settings.buffer_minutes}m travel buffer. Location resolved to: ${resolvedAddress || 'None'}.`,
+    payload: {
+      resolved_address: resolvedAddress,
+      slots: alternatives
+    }
   });
 }

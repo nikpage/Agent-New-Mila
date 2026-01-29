@@ -153,8 +153,8 @@ async function runAgentLoop() {
 
         // "BLACKLIST CP" -> Block counterparty
         if (command.command === 'BLACKLIST_CP') {
-             const { error: blockError } = await supabase.from('counterparties')
-                .update({ status: 'blocked' })
+             const { error: blockError } = await supabase.from('cps')
+                .update({ is_blacklisted: true })
                 .eq('id', cpId);
 
              if (!blockError) console.log(`      \x1b[31m[BLOCK]\x1b[0m Counterparty ${cpId} BLACKLISTED.`);

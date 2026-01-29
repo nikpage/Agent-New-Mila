@@ -13,9 +13,9 @@ export async function resolveCounterparty(userId: string, fromHeader: string): P
     const email = match ? match[1].toLowerCase() : fromHeader.toLowerCase().trim();
 
     // Check DB for existing counterparty
-    const { data: existing } = await supabase.from('counterparties')
+    const { data: existing } = await supabase.from('cps')
         .select('id')
-        .eq('email', email)
+        .eq('primary_identifier', email)
         .maybeSingle();
 
     if (existing) return existing.id;
@@ -23,18 +23,18 @@ export async function resolveCounterparty(userId: string, fromHeader: string): P
     // Create new counterparty if not found
     const name = fromHeader.replace(/<.*>/, '').trim() || email.split('@')[0];
 
-    const { data: newCp, error } = await supabase.from('counterparties').insert({
+    const { data: newCp, error } = await supabase.from('cps').insert({
         user_id: userId,
-        email: email,
+        primary_identifier: email
         name: name,
-        status: 'active'
+        
     }).select('id').single();
 
     if (error) {
         // Handle race condition if created concurrently
-        const { data: retry } = await supabase.from('counterparties')
+        const { data: retry } = await supabase.from('cps')
             .select('id')
-            .eq('email', email)
+            .eq('primary_identifier', email)
             .single();
         if (retry) return retry.id;
         throw error;
