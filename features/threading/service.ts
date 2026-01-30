@@ -2,7 +2,8 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { generateEmbedding } from './embeddings';
-import { ai, AI_CONFIG } from '../shared/ai';
+import { genAI, AI_CONFIG } from '../shared/ai';
+import { SchemaType as Type } from "@google/generative-ai";
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,
@@ -125,25 +126,27 @@ export async function updateThreadSummary(threadId: string): Promise<void> {
   `;
 
   // 3. Call AI
-  const response = await ai.models.generateContent({
-    model: AI_CONFIG.models.smart, // Use smarter model for summarization
-    contents: prompt,
-    config: {
+  const model = genAI.getGenerativeModel({
+    model: AI_CONFIG.models.smart,
+    generationConfig: {
       responseMimeType: "application/json",
       responseSchema: {
-        type: 'OBJECT',
+        type: Type.OBJECT,
         properties: {
-          context: { type: 'STRING' },
-          currentState: { type: 'STRING' },
-          nextSteps: { type: 'ARRAY', items: { type: 'STRING' } },
-          risks: { type: 'ARRAY', items: { type: 'STRING' } }
+          context: { type: Type.STRING },
+          currentState: { type: Type.STRING },
+          nextSteps: { type: Type.ARRAY, items: { type: Type.STRING } },
+          risks: { type: Type.ARRAY, items: { type: Type.STRING } }
         }
       }
     }
   });
 
-  if (response.text) {
-    const summary = JSON.parse(response.text);
+  const response = await model.generateContent(prompt);
+  const text = response.response.text();
+
+  if (text) {
+    const summary = JSON.parse(text);
 
     // 4. Update DB
     await supabase

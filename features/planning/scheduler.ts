@@ -2,8 +2,7 @@
 
 import { google } from 'googleapis';
 import { createClient } from '@supabase/supabase-js';
-import { AI_MODELS } from '../../lib/ai/config';
-import { genAI } from '../shared/ai';
+import { AI_MODELS, genAI } from '../shared/ai';
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,

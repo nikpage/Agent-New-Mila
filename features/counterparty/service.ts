@@ -25,9 +25,9 @@ export async function resolveCounterparty(userId: string, fromHeader: string): P
 
     const { data: newCp, error } = await supabase.from('cps').insert({
         user_id: userId,
-        primary_identifier: email
+        primary_identifier: email,
         name: name,
-        
+
     }).select('id').single();
 
     if (error) {

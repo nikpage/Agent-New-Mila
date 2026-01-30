@@ -1,8 +1,6 @@
 // app/api/cron/morning-brief/route.ts
-
 import { createClient } from '@supabase/supabase-js';
-import { AI_MODELS } from '../../../../lib/ai/config';
-import { genAI } from '../../../../features/shared/ai';
+import { AI_MODELS, genAI } from '../../../../features/shared/ai';
 import { sendGmailMessage } from '../../../../features/shared/outbound';
 
 export async function GET(req: Request) {

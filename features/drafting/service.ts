@@ -1,7 +1,7 @@
 // features/drafting/service.ts
-
-import { ai, AI_CONFIG } from '../shared/ai';
+import { genAI, AI_CONFIG } from '../shared/ai';
 import { ActionPlan } from '../planning/types';
+import { SchemaType as Type } from "@google/generative-ai";
 
 export interface DraftResult {
   subject: string;
@@ -13,14 +13,12 @@ export async function generateDraft(
   plan: ActionPlan,
   threadSummary: any
 ): Promise<DraftResult> {
-
   if (!plan.draftingContext) {
     return { subject: "", body: "" };
   }
 
   const prompt = `
     Write a email for a Real Estate Agent.
-
     Recipient: ${senderName}
     Intent: ${plan.draftingContext.intent}
     Key Points to Hit:
@@ -33,23 +31,25 @@ export async function generateDraft(
     Output pure JSON with subject and body.
   `;
 
-  const response = await ai.models.generateContent({
-    model: AI_CONFIG.models.fast, // Use fast model for writing
-    contents: prompt,
-    config: {
+  const model = genAI.getGenerativeModel({
+    model: AI_CONFIG.models.fast,
+    generationConfig: {
       responseMimeType: "application/json",
       responseSchema: {
-        type: 'OBJECT',
+        type: Type.OBJECT,
         properties: {
-          subject: { type: 'STRING' },
-          body: { type: 'STRING' }
+          subject: { type: Type.STRING },
+          body: { type: Type.STRING }
         },
         required: ['subject', 'body']
       }
     }
   });
 
-  if (!response.text) return { subject: "Draft Generation Failed", body: "" };
+  const response = await model.generateContent(prompt);
+  const text = response.response.text();
 
-  return JSON.parse(response.text) as DraftResult;
+  if (!text) return { subject: "Draft Generation Failed", body: "" };
+
+  return JSON.parse(text) as DraftResult;
 }

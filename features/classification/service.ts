@@ -1,21 +1,19 @@
 // features/classification/service.ts
 
-import { ai, AI_CONFIG } from "../shared/ai";
+import { genAI, AI_CONFIG } from "../shared/ai";
 import { IngestedEmail } from "../ingestion/types";
 import { SchemaType as Type } from "@google/generative-ai";
 
 export async function classifyEmail(email: IngestedEmail) {
   const prompt = `Classify this email.
-
   From: ${email.from}
   Subject: ${email.subject}
   Body: ${email.bodyPlain.substring(0, 2000)}
   `;
 
-  const response = await ai.models.generateContent({
+  const model = genAI.getGenerativeModel({
     model: AI_CONFIG.models.fast,
-    contents: prompt,
-    config: {
+    generationConfig: {
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -43,7 +41,8 @@ export async function classifyEmail(email: IngestedEmail) {
     },
   });
 
-  const text = response.text;
+  const response = await model.generateContent(prompt);
+  const text = response.response.text();
 
   try {
     return JSON.parse(text || "{}");
