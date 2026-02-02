@@ -1,7 +1,6 @@
 // features/shared/outbound.ts
 
 import { google } from 'googleapis';
-import { decryptToken } from '../shared/crypto'; // To be implemented in Block 3
 
 export async function sendGmailMessage(userId: string, googleTokens: any, details: {
   to: string;
@@ -14,9 +13,8 @@ export async function sendGmailMessage(userId: string, googleTokens: any, detail
     process.env.GOOGLE_CLIENT_SECRET
   );
 
-  // Decrypt tokens before use
-  const decryptedTokens = decryptToken(googleTokens);
-  oauth2Client.setCredentials(decryptedTokens);
+  // Tokens are passed as JSON objects from the DB/User context, no decryption needed
+  oauth2Client.setCredentials(googleTokens);
 
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
