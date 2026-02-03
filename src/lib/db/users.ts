@@ -21,10 +21,12 @@ export async function getUserById(userId: string): Promise<User | null> {
     .single()
 
   if (error) {
+    console.log('[getUserById] Error:', error.code, error.message, error.details)
     if (error.code === 'PGRST116') return null // Not found
     throw new Error(`Failed to get user: ${error.message}`)
   }
 
+  console.log('[getUserById] Found user:', data?.id, data?.email)
   return data
 }
 
