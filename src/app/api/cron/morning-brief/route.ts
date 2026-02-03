@@ -10,6 +10,10 @@ export async function GET(request: NextRequest) {
     const authHeader = request.headers.get('authorization')
     const token = authHeader?.replace('Bearer ', '')
 
+    const cronSecret = process.env.CRON_SECRET
+    console.log(`[Cron] token received: "${token}" (len=${token?.length})`)
+    console.log(`[Cron] CRON_SECRET:    "${cronSecret}" (len=${cronSecret?.length})`)
+
     if (!token || !validateCronToken(token)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
