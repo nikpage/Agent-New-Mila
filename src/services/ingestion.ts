@@ -15,6 +15,17 @@ import { createMessage, messageExists } from '@/lib/db/messages'
 import { getUserById } from '@/lib/db/users'
 import { v4 as uuidv4 } from 'uuid'
 
+/**
+ * Senders that are always skipped — no message or CP is created for these.
+ * These are automated / no-reply addresses that the AI classifier
+ * occasionally lets through as actionable.
+ */
+const BLOCKED_SENDERS = [
+  'no-reply@accounts.google.com',
+  'noreply@google.com',
+  'info@x.com',
+]
+
 export interface IngestedMessage {
   id: string
   email: EmailMessage
@@ -56,6 +67,12 @@ export async function ingestEmailsForUser(
         continue
       }
 
+      // Hard-block known automated / no-reply senders before classification
+      if (BLOCKED_SENDERS.includes(senderEmail)) {
+        console.log(`[Ingest] Blocked sender skipped: ${senderEmail} (${email.id})`)
+        continue
+      }
+
       // Classify the email
       const classification = await classifyEmail(
         email.subject,
@@ -63,22 +80,9 @@ export async function ingestEmailsForUser(
         email.from
       )
 
-      // Skip non-actionable emails
+      // Skip non-actionable emails entirely — no message stored without a CP
       if (!classification.isActionable) {
-        // Still store the message but mark it appropriately
-        await createMessage({
-          id: uuidv4(),
-          user_id: userId,
-          external_id: email.id,
-          external_thread_id: email.threadId,
-          universal_message_id: email.id,
-          direction: 'inbound',
-          raw_text: email.body,
-          cleaned_text: email.body.slice(0, 5000), // Limit size
-          tag_primary: classification.category,
-          timestamp: email.date.toISOString(),
-          occurred_at: email.date.toISOString(),
-        })
+        console.log(`[Ingest] Non-actionable email skipped: ${classification.category} from ${senderEmail} (${email.id})`)
         continue
       }
 
