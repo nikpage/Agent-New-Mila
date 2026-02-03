@@ -1,3 +1,19 @@
 {
-  "crons": [{"path": "/api/cron/morning-brief", "schedule": "0 8 * * *"}]
+  "crons": [
+    {
+      "path": "/api/cron/morning-brief",
+      "schedule": "0 8 * * *"
+    }
+  ],
+  "functions": {
+    "src/app/api/cron/**/*.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/agent/**/*.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/ingest/**/*.ts": {
+      "maxDuration": 300
+    }
+  }
 }
