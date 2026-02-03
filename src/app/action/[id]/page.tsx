@@ -105,6 +105,25 @@ function ActionContent() {
     })
   }
 
+  async function handleToDo() {
+    const response = await fetch(`/api/action/${actionId}/todo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json()
+      throw new Error(errorData.error || 'Failed to save to-do')
+    }
+
+    setSuccess({
+      show: true,
+      message: 'Saved to To-Do',
+      subMessage: 'This will resurface when the score demands it.',
+    })
+  }
+
   async function handleBlacklist() {
     const response = await fetch(`/api/action/${actionId}/blacklist`, {
       method: 'POST',
@@ -176,6 +195,7 @@ function ActionContent() {
           onDoIt={handleDoIt}
           onEdit={handleEdit}
           onIllDoIt={handleIllDoIt}
+          onToDo={handleToDo}
           onBlacklist={handleBlacklist}
         />
       </div>

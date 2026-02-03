@@ -11,14 +11,24 @@ import { getEventsForToday } from '@/lib/db/events'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefHeadline } from '@/lib/ai/gemini'
 import { generateActionToken } from '@/lib/auth/tokens'
-import type { ActionProposal } from '@/lib/supabase/types'
+import type { ActionProposal, ConversationSummary } from '@/lib/supabase/types'
 
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:3000'
 
+function getUrgency(score: number): { label: string; bg: string; color: string } {
+  if (score >= 80) return { label: 'NOW',      bg: '#c0392b', color: '#ffffff' }
+  if (score >= 40) return { label: 'TODAY',    bg: '#e67e22', color: '#ffffff' }
+  if (score >= 15) return { label: 'TOMORROW', bg: '#f39c12', color: '#ffffff' }
+  return                   { label: 'SOON',    bg: '#2a3a54', color: '#9ca3af' }
+}
+
 interface BriefAction {
-  action: ActionProposal
-  cpName: string
-  topic: string
+  action:   ActionProposal
+  cpName:   string
+  cpRole:   string | null
+  topic:    string
+  dealType: string | null
+  summary:  ConversationSummary | null
   actionUrl: string
 }
 
@@ -59,8 +69,11 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
 
       briefActions.push({
         action,
-        cpName: cp.name || cp.primary_identifier,
-        topic: conversation.topic,
+        cpName:   cp.name || cp.primary_identifier,
+        cpRole:   cp.role || null,
+        topic:    conversation.topic,
+        dealType: conversation.deal_type || null,
+        summary:  conversation.summary_json as ConversationSummary | null,
         actionUrl,
       })
     }
@@ -207,35 +220,95 @@ function generateBriefEmailHtml(
             <td>
               <h2 style="margin: 0 0 12px; color: #9ca3af; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em;">Needs Your Attention</h2>
 
-              ${actions.map(({ action, cpName, topic, actionUrl }) => `
+              ${actions.map(({ action, cpName, cpRole, topic, dealType, summary, actionUrl }) => {
+                const urgency = getUrgency(action.priority_score)
+                const adjValue = action.dollar_value * (action.offer_multiplier ?? 1)
+                return `
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #1a2744; border-radius: 8px; margin-bottom: 12px;">
                 <tr>
-                  <td style="padding: 16px;">
-                    <!-- Badge and Priority -->
+                  <td style="padding: 20px;">
+
+                    <!-- Badge + Urgency row -->
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
                       <tr>
                         <td>
-                          <span style="display: inline-block; padding: 4px 8px; background-color: ${actionTypeColors[action.action_type] || '#4a5568'}; color: white; font-size: 12px; font-weight: 500; border-radius: 4px;">${actionTypeLabels[action.action_type] || action.action_type}</span>
+                          <span style="display: inline-block; padding: 4px 10px; background-color: ${actionTypeColors[action.action_type] || '#4a5568'}; color: white; font-size: 12px; font-weight: 600; border-radius: 4px;">${actionTypeLabels[action.action_type] || action.action_type}</span>
                         </td>
                         <td align="right">
-                          <span style="color: #9ca3af; font-size: 12px;">Priority: ${Math.round(action.priority_score)}</span>
+                          <span style="display: inline-block; padding: 3px 8px; background-color: ${urgency.bg}; color: ${urgency.color}; font-size: 11px; font-weight: 700; border-radius: 3px; letter-spacing: 0.08em;">${urgency.label}</span>
                         </td>
                       </tr>
                     </table>
 
-                    <!-- Name and Topic -->
-                    <h3 style="margin: 12px 0 4px; color: #e5e7eb; font-size: 16px; font-weight: 600;">${cpName}</h3>
-                    <p style="margin: 0 0 12px; color: #9ca3af; font-size: 14px;">${topic}</p>
+                    <!-- CP name · role -->
+                    <h3 style="margin: 14px 0 2px; color: #e5e7eb; font-size: 18px; font-weight: 600;">${cpName}${cpRole ? `<span style="font-size: 13px; font-weight: 400; color: #9ca3af; margin-left: 6px;">· ${cpRole}</span>` : ''}</h3>
 
-                    <!-- Rationale -->
-                    <p style="margin: 0 0 16px; padding: 12px; background-color: #0f1623; border-radius: 6px; color: #e5e7eb; font-size: 14px; line-height: 1.5;">${action.rationale}</p>
+                    <!-- Deal type · topic -->
+                    <p style="margin: 0 0 14px; color: #9ca3af; font-size: 13px;">${dealType ? `${dealType} · ` : ''}${topic}</p>
+
+                    <!-- Priority (large) -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 14px;">
+                      <tr>
+                        <td style="width: 72px; vertical-align: middle;">
+                          <table role="presentation" cellspacing="0" cellpadding="0" style="margin: 0 auto;">
+                            <tr>
+                              <td align="center" style="width: 64px; height: 64px; background-color: #0f1623; border-radius: 10px;">
+                                <span style="font-size: 28px; font-weight: 700; color: #e5e7eb; line-height: 64px;">${Math.round(action.priority_score)}</span>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                        <td style="padding-left: 16px; vertical-align: middle;">
+                          <span style="color: #6b7280; font-size: 11px;">Value: </span><span style="color: #e5e7eb; font-size: 11px; font-weight: 600;">$${adjValue.toLocaleString()}</span><br>
+                          <span style="color: #6b7280; font-size: 11px;">Urgency: </span><span style="color: #e5e7eb; font-size: 11px; font-weight: 600;">${action.urgency}/10</span><span style="color: #6b7280; font-size: 11px; margin-left: 12px;">Pain: </span><span style="color: #e5e7eb; font-size: 11px; font-weight: 600;">${action.pain_factor}/10</span>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Why now (rationale) -->
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 10px;">
+                      <tr>
+                        <td style="padding: 10px 12px; background-color: #0f1623; border-radius: 6px;">
+                          <p style="margin: 0 0 4px; color: #6b7280; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;">Why now</p>
+                          <p style="margin: 0; color: #e5e7eb; font-size: 13px; line-height: 1.5;">${action.rationale}</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Conversation snapshot -->
+                    ${summary ? `
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 12px;">
+                      <tr>
+                        <td style="padding: 10px 12px; background-color: #122038; border-radius: 6px;">
+                          <p style="margin: 0 0 6px; color: #6b7280; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;">Conversation snapshot</p>
+                          <p style="margin: 0 0 3px; color: #c0c8d4; font-size: 12px;"><span style="color: #9ca3af;">State:</span> ${summary.currentState || ''}</p>
+                          ${summary.risks && summary.risks.length > 0 ? `<p style="margin: 3px 0; color: #c0c8d4; font-size: 12px;"><span style="color: #c0392b;">Risk:</span> ${summary.risks.join(' · ')}</p>` : ''}
+                          ${summary.nextSteps && summary.nextSteps.length > 0 ? `<p style="margin: 3px 0 0; color: #c0c8d4; font-size: 12px;"><span style="color: #27ae60;">Next:</span> ${summary.nextSteps.join(' · ')}</p>` : ''}
+                        </td>
+                      </tr>
+                    </table>
+                    ` : ''}
+
+                    <!-- Draft preview (if available) -->
+                    ${action.draft_body_text ? `
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 14px;">
+                      <tr>
+                        <td style="padding: 10px 12px; background-color: #152033; border: 1px solid #2a3a54; border-radius: 6px;">
+                          <p style="margin: 0 0 4px; color: #6b7280; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;">Draft</p>
+                          ${action.draft_subject ? `<p style="margin: 0 0 3px; color: #e5e7eb; font-size: 13px; font-weight: 600;">${action.draft_subject}</p>` : ''}
+                          <p style="margin: 0; color: #9ca3af; font-size: 12px; line-height: 1.4;">${action.draft_body_text.slice(0, 200)}${action.draft_body_text.length > 200 ? '…' : ''}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    ` : ''}
 
                     <!-- CTA Button -->
-                    <a href="${actionUrl}" style="display: inline-block; padding: 10px 20px; background-color: #6b3d3d; color: white; text-decoration: none; font-weight: 500; border-radius: 6px; font-size: 14px;">View &amp; Respond</a>
+                    <a href="${actionUrl}" style="display: inline-block; padding: 10px 22px; background-color: #6b3d3d; color: white; text-decoration: none; font-weight: 600; border-radius: 6px; font-size: 14px;">View &amp; Respond</a>
                   </td>
                 </tr>
               </table>
-              `).join('')}
+              `
+              }).join('')}
             </td>
           </tr>
 
