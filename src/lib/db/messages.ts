@@ -191,7 +191,7 @@ export async function getLatestMessageFromCP(
     .select('*')
     .eq('user_id', userId)
     .eq('cp_id', cpId)
-    .eq('direction', 'INBOUND')
+    .eq('direction', 'inbound')
     .order('timestamp', { ascending: false })
     .limit(1)
     .single()

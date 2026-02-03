@@ -43,7 +43,7 @@ export async function generateActionProposal(
 
   // Get the primary CP (most recent message sender)
   const latestInbound = recentMessages
-    .filter(m => m.direction === 'INBOUND' && m.cp_id)
+    .filter(m => m.direction === 'inbound' && m.cp_id)
     .pop()
 
   if (!latestInbound?.cp_id) {

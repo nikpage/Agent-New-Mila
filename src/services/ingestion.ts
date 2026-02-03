@@ -72,7 +72,7 @@ export async function ingestEmailsForUser(
           external_id: email.id,
           external_thread_id: email.threadId,
           universal_message_id: email.id,
-          direction: 'INBOUND',
+          direction: 'inbound',
           raw_text: email.body,
           cleaned_text: email.body.slice(0, 5000), // Limit size
           tag_primary: classification.category,
@@ -94,7 +94,7 @@ export async function ingestEmailsForUser(
         external_id: email.id,
         external_thread_id: email.threadId,
         universal_message_id: email.id,
-        direction: 'INBOUND',
+        direction: 'inbound',
         raw_text: email.body,
         cleaned_text: email.body.slice(0, 5000),
         tag_primary: classification.category,
