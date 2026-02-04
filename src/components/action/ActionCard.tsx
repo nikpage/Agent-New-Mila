@@ -8,39 +8,26 @@ import type { ActionProposal, ConversationThread, CP, ConversationSummary } from
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function getUrgency(score: number): { label: string; cls: string } {
-  if (score >= 80) return { label: 'NOW',      cls: 'bg-red-600 text-white' }
-  if (score >= 40) return { label: 'TODAY',    cls: 'bg-orange-500 text-white' }
-  if (score >= 15) return { label: 'TOMORROW', cls: 'bg-amber-500 text-white' }
-  return                   { label: 'SOON',    cls: 'bg-primary-light text-text-muted' }
-}
-
 function daysIgnored(createdAt: string): number {
   return Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000))
 }
 
 const TYPE_LABEL: Record<string, string> = {
-  REPLY: 'Reply', SCHEDULE: 'Schedule', WAIT: 'Waiting', FILE: 'Archive', DELEGATE: 'Delegate',
+  REPLY: 'REPLY', SCHEDULE: 'SCHEDULE', WAIT: 'WAIT', FILE: 'FILE', DELEGATE: 'DELEGATE',
 }
 
 const TYPE_VARIANT: Record<string, 'accent' | 'warning' | 'success' | 'default'> = {
   REPLY: 'accent', SCHEDULE: 'warning', WAIT: 'default', FILE: 'success', DELEGATE: 'warning',
 }
 
-// ─── Payload shape (from Gemini via planning.ts) ──────────────────────────────
+// ─── Intent extraction ────────────────────────────────────────────────────────
+// Primary source: payload.original_proposal.proposedResponse (Mila's commitment summary)
+// Fallback: rationale
 
-interface MissingInfoField {
-  label: string
-  placeholder: string
-}
-
-interface OriginalProposal {
-  proposedResponse?: string | null
-  missingInfo?: MissingInfoField[]
-}
-
-function getProposal(action: ActionProposal): OriginalProposal | null {
-  return (action.payload as { original_proposal?: OriginalProposal })?.original_proposal ?? null
+function getIntent(action: ActionProposal): string {
+  const proposal = (action.payload as { original_proposal?: { proposedResponse?: string | null } })?.original_proposal
+  if (proposal?.proposedResponse) return proposal.proposedResponse
+  return action.rationale
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -56,45 +43,30 @@ export interface ActionCardProps {
   conversation:  ConversationThread
   cp:            CP
   recentMessage?: string
-  participants?: Participant[]
+  participants?: Participant[]       // available for future contexts; not rendered on card surface
   onDoIt:        () => Promise<void>
-  onEdit:        (subject: string, body: string, to?: string) => Promise<void>
+  onEdit:        (notes: string) => Promise<void>
   onIllDoIt:     () => Promise<void>
-  onToDo:        () => Promise<void>
+  onToDo?:       () => Promise<void> // kept optional for backward compat; not used by this card
   onBlacklist?:  () => Promise<void>
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function ActionCard({
-  action, conversation, cp, recentMessage, participants,
-  onDoIt, onEdit, onIllDoIt, onToDo, onBlacklist,
+  action, conversation, cp, recentMessage,
+  onDoIt, onEdit, onIllDoIt, onBlacklist,
 }: ActionCardProps) {
-  const [mode, setMode]                   = useState<'view' | 'edit'>('view')
-  const [detailOpen, setDetailOpen]       = useState(false)
-  const [loading, setLoading]             = useState<string | null>(null)
-  const [editSubject, setEditSubject]     = useState(action.draft_subject || '')
-  const [editBody,    setEditBody]        = useState(action.draft_body_text || '')
-  const [editTo,      setEditTo]          = useState(
-    ((action.payload as Record<string, unknown>)?.editedTo as string) || cp.primary_identifier
-  )
-
-  const proposal    = getProposal(action)
-  const missingInfo = proposal?.missingInfo ?? []
-  const [missingValues, setMissingValues] = useState<Record<string, string>>(
-    () => Object.fromEntries(missingInfo.map(f => [f.label, '']))
-  )
+  const [editOpen, setEditOpen]     = useState(false)
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [notes, setNotes]           = useState('')
+  const [loading, setLoading]       = useState<string | null>(null)
 
   const summary  = conversation.summary_json as ConversationSummary | null
-  const urgency  = getUrgency(action.priority_score)
   const days     = daysIgnored(action.created_at)
   const adjValue = action.dollar_value * (action.offer_multiplier ?? 1)
-  const hasMissing = missingInfo.length > 0 && missingInfo.some(f => !missingValues[f.label])
-  const canDoIt  = !hasMissing
-    && action.action_type === 'REPLY'
-    && (mode === 'edit' ? !!editBody : !!action.draft_body_text)
+  const intent   = getIntent(action)
 
-  // loading wrapper
   const run = (key: string, fn: () => Promise<void>) => async () => {
     setLoading(key)
     try { await fn() } finally { setLoading(null) }
@@ -105,348 +77,184 @@ export function ActionCard({
     <>
     <div className="card w-full max-w-2xl mx-auto">
 
-      {/* ─── 2.1 HEADER: Identity ──────────────────────────────────── */}
+      {/* ─── HEADER ────────────────────────────────────────────────── */}
       <div className="px-6 pt-5 pb-3">
-        {/* Action-type badge  +  Urgency badge */}
-        <div className="flex items-center justify-between mb-3">
-          <Badge variant={TYPE_VARIANT[action.action_type] || 'default'}>
-            {TYPE_LABEL[action.action_type] || action.action_type}
-          </Badge>
-          <span className={`inline-block text-xs font-bold tracking-widest px-2.5 py-0.5 rounded ${urgency.cls}`}>
-            {urgency.label}
-          </span>
-        </div>
+        <Badge variant={TYPE_VARIANT[action.action_type] || 'default'}>
+          {TYPE_LABEL[action.action_type] || action.action_type}
+        </Badge>
 
-        {/* CP name  ·  Role */}
-        <h2 className="text-lg font-semibold text-text">
+        <h2 className="text-lg font-semibold text-text mt-3">
           {cp.name || cp.primary_identifier}
-          {cp.role && (
-            <span className="text-sm font-normal text-text-muted ml-2">· {cp.role}</span>
-          )}
+          {cp.role && <span className="text-sm font-normal text-text-muted ml-2">· {cp.role}</span>}
         </h2>
 
-        {/* Deal type  ·  Topic */}
         <p className="text-sm text-text-muted mt-0.5">
-          {conversation.deal_type
-            ? <>{conversation.deal_type} · {conversation.topic}</>
-            : conversation.topic
-          }
+          {conversation.topic}
         </p>
       </div>
 
-      {/* ─── 2.2 PRIORITY BLOCK ────────────────────────────────────── */}
-      <div className="mx-6 mb-2 p-4 bg-primary-dark rounded-lg flex items-center gap-6">
-        {/* Large score */}
-        <div className="text-center flex-shrink-0">
-          <div className="text-4xl font-bold text-text leading-none">
-            {Math.round(action.priority_score)}
-          </div>
-          <div className="text-xs text-text-muted mt-1">Priority</div>
-        </div>
-
-        {/* Score breakdown */}
-        <div className="grid grid-cols-2 gap-x-5 gap-y-1 text-xs text-text-muted">
-          <span>Value: <span className="text-text font-medium">${adjValue.toLocaleString()}</span></span>
-          <span>Urgency: <span className="text-text font-medium">{action.urgency}/10</span></span>
-          <span>Pain: <span className="text-text font-medium">{action.pain_factor}/10</span></span>
-          <span>Days idle: <span className="text-text font-medium">{days}</span></span>
-          {action.weight != null && action.weight !== 0 && (
-            <span>Weight: <span className="text-text font-medium">{action.weight}</span></span>
-          )}
-        </div>
+      {/* ─── PRIORITY (large, dominant, centered) ───────────────────── */}
+      <div className="px-6 py-4 text-center">
+        <p className="text-xs font-bold text-text-muted uppercase tracking-widest">Priority</p>
+        <p className="text-5xl font-bold text-text leading-none mt-1">
+          {Math.round(action.priority_score)}
+        </p>
       </div>
 
-      {/* ─── 2.4 CONTEXT BLOCK ─────────────────────────────────────── */}
-      <div className="px-6 py-2 space-y-3">
-
-        {/* Why now (rationale) */}
-        <div className="p-3 bg-primary-dark rounded-md">
-          <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Why now</p>
-          <p className="text-sm text-text">{action.rationale}</p>
-        </div>
-
-        {/* Conversation snapshot */}
-        {summary && (
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide">Conversation snapshot</p>
-            <p className="text-sm">
-              <span className="text-text-muted">State:</span>{' '}
-              <span className="text-text">{summary.currentState}</span>
-            </p>
-            {summary.risks && summary.risks.length > 0 && (
-              <p className="text-sm">
-                <span className="text-accent-light">Risk:</span>{' '}
-                <span className="text-text">{summary.risks.join(' · ')}</span>
-              </p>
-            )}
-            {summary.nextSteps && summary.nextSteps.length > 0 && (
-              <p className="text-sm">
-                <span className="text-green-400">Next:</span>{' '}
-                <span className="text-text">{summary.nextSteps.join(' · ')}</span>
-              </p>
-            )}
-          </div>
-        )}
+      {/* ─── MILA'S INTENT (primary text — the heart of the card) ───── */}
+      <div className="px-6 pb-4">
+        <p className="text-sm text-text leading-relaxed">
+          {intent}
+        </p>
       </div>
 
-      {/* ─── 2.5 MILA'S PROPOSED RESPONSE ─────────────────────────── */}
-      {proposal?.proposedResponse && (
-        <div className="px-6 pb-2">
-          <div className="p-3 bg-primary-dark rounded-md border border-border">
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Mila's proposed response</p>
-            <p className="text-sm text-text">{proposal.proposedResponse}</p>
-          </div>
-        </div>
-      )}
+      {/* ─── DETAILS LINK ────────────────────────────────────────────── */}
+      <div className="px-6 pb-4">
+        <button
+          onClick={() => setDetailOpen(true)}
+          className="text-sm text-text-muted hover:text-text transition-colors flex items-center gap-1.5"
+        >
+          <span>▸</span> Details
+        </button>
+      </div>
 
-      {/* ─── 2.6 DRAFT / EDIT ──────────────────────────────────────── */}
-      {(action.action_type === 'REPLY' || action.action_type === 'SCHEDULE') && (
-        <div className="px-6 pt-3 pb-2 border-t border-border">
-          {mode === 'edit' ? (
-            /* Edit form — spec 3.2 */
-            <div className="space-y-3">
-              <p className="text-xs font-medium text-text-muted uppercase tracking-wide">Edit draft</p>
-
-              {/* Recipients — spec 3.2: "EDIT can modify: Recipients (which CPs)" */}
-              <div>
-                <label className="text-xs text-text-muted">To</label>
-                <input
-                  type="text"
-                  value={editTo}
-                  onChange={e => setEditTo(e.target.value)}
-                  className="input mt-1 w-full"
-                  placeholder="Recipient…"
-                />
-              </div>
-
-              {/* Missing-info form — spec 3.2 / wireframe 5.2 */}
-              {missingInfo.length > 0 && (
-                <div className="p-3 bg-primary-dark rounded-md space-y-2">
-                  <p className="text-xs font-medium text-text-muted uppercase tracking-wide">Information needed</p>
-                  {missingInfo.map(field => (
-                    <div key={field.label}>
-                      <label className="text-xs text-text-muted">{field.label}</label>
-                      <input
-                        type="text"
-                        value={missingValues[field.label] || ''}
-                        onChange={e => setMissingValues(prev => ({ ...prev, [field.label]: e.target.value }))}
-                        className="input mt-1 w-full"
-                        placeholder={field.placeholder}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Subject */}
-              <div>
-                <label className="text-xs text-text-muted">Subject</label>
-                <input
-                  type="text"
-                  value={editSubject}
-                  onChange={e => setEditSubject(e.target.value)}
-                  className="input mt-1 w-full"
-                  placeholder="Email subject…"
-                />
-              </div>
-
-              {/* Body */}
-              <div>
-                <label className="text-xs text-text-muted">Body</label>
-                <Textarea
-                  value={editBody}
-                  onChange={e => setEditBody(e.target.value)}
-                  className="mt-1"
-                  rows={6}
-                  placeholder="Email body…"
-                />
-              </div>
-            </div>
-          ) : (
-            /* Draft preview */
-            <div>
-              <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Draft</p>
-              {action.draft_subject && (
-                <p className="text-sm font-medium text-text">Subject: {action.draft_subject}</p>
-              )}
-              {action.draft_body_text ? (
-                <p className="text-sm text-text-muted whitespace-pre-wrap mt-1">
-                  {action.draft_body_text}
-                </p>
-              ) : (
-                <p className="text-sm text-text-muted italic">
-                  No draft yet — tap EDIT to compose.
-                </p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ─── 3. CTAs ───────────────────────────────────────────────── */}
-      <div className="px-6 py-4 border-t border-border flex flex-col gap-3 sm:flex-row sm:justify-between">
-        {mode === 'edit' ? (
-          /* Edit-mode CTAs: DO IT + TO DO  — spec 3.2 */
-          <div className="flex gap-2 w-full">
+      {/* ─── EDIT PANEL (notes / constraints only — no draft here) ──── */}
+      {editOpen && (
+        <div className="mx-6 mb-2 p-4 bg-primary-dark rounded-md border border-border">
+          <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">
+            Add notes or constraints
+          </p>
+          <Textarea
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            rows={3}
+            placeholder="e.g. Don't forget to mention the pool will be ready for his kids."
+          />
+          <div className="flex gap-2 mt-3">
             <Button
               variant="primary"
-              onClick={run('edit-doit', async () => {
-                await onEdit(editSubject, editBody, editTo)
-                await onDoIt()
+              size="sm"
+              onClick={run('edit-submit', async () => {
+                await onEdit(notes)
+                setEditOpen(false)
+                setNotes('')
               })}
-              loading={loading === 'edit-doit'}
-              disabled={!canDoIt}
-              className="flex-1 sm:flex-none"
+              loading={loading === 'edit-submit'}
+              disabled={!notes.trim()}
             >
-              DO IT
+              Submit
             </Button>
             <Button
-              variant="secondary"
-              onClick={run('edit-todo', async () => {
-                await onEdit(editSubject, editBody, editTo)
-                await onToDo()
-              })}
-              loading={loading === 'edit-todo'}
-              className="flex-1 sm:flex-none"
+              variant="ghost"
+              size="sm"
+              onClick={() => { setEditOpen(false); setNotes('') }}
             >
-              TO DO
+              Cancel
             </Button>
           </div>
-        ) : (
-          /* View-mode CTAs: DO IT + EDIT + I'LL DO IT + Detail  — spec 3.1–3.4, wireframe 5.1 */
-          <>
-            <div className="flex gap-2 w-full sm:w-auto">
-              <Button
-                variant="primary"
-                onClick={run('doit', onDoIt)}
-                loading={loading === 'doit'}
-                disabled={!canDoIt}
-                title={!canDoIt ? 'Draft required to execute' : undefined}
-                className="flex-1 sm:flex-none"
-              >
-                DO IT
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => setMode('edit')}
-                className="flex-1 sm:flex-none"
-              >
-                EDIT
-              </Button>
-              <Button
-                variant="outline"
-                onClick={run('illdoit', onIllDoIt)}
-                loading={loading === 'illdoit'}
-                className="flex-1 sm:flex-none"
-              >
-                I'LL DO IT
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => setDetailOpen(true)}
-                className="flex-1 sm:flex-none text-text-muted text-sm"
-              >
-                Detail
-              </Button>
-            </div>
+        </div>
+      )}
 
-            {onBlacklist && (
-              <Button
-                variant="ghost"
-                onClick={run('blacklist', async () => {
-                  if (confirm(`Blacklist ${cp.name || cp.primary_identifier}? No future cards for this contact.`)) {
-                    await onBlacklist()
-                  }
-                })}
-                loading={loading === 'blacklist'}
-                className="text-text-muted text-sm"
-              >
-                Blacklist
-              </Button>
-            )}
-          </>
+      {/* ─── ACTION CONTROLS (decision layer) ───────────────────────── */}
+      <div className="px-6 py-4 border-t border-border flex items-center justify-between">
+        <div className="flex gap-2">
+          <Button variant="primary"  onClick={run('doit', onDoIt)}      loading={loading === 'doit'}>
+            DO IT
+          </Button>
+          <Button variant="secondary" onClick={() => setEditOpen(!editOpen)}>
+            EDIT
+          </Button>
+          <Button variant="outline"  onClick={run('illdoit', onIllDoIt)} loading={loading === 'illdoit'}>
+            I'LL DO IT
+          </Button>
+        </div>
+
+        {onBlacklist && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={run('blacklist', async () => {
+              if (confirm(`Blacklist ${cp.name || cp.primary_identifier}? No future cards for this contact.`)) {
+                await onBlacklist()
+              }
+            })}
+            loading={loading === 'blacklist'}
+            className="text-text-muted"
+          >
+            Blacklist CP
+          </Button>
         )}
       </div>
     </div>
 
-    {/* ─── 4. DETAIL MODAL ───────────────────────────────────────── */}
+    {/* ─── DETAILS MODAL (desktop) / SLIDE-UP (mobile) ────────────── */}
     {detailOpen && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+        {/* Backdrop */}
         <div className="absolute inset-0 bg-black/60" onClick={() => setDetailOpen(false)} />
+
+        {/* Panel */}
         <div
-          className="card relative w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 space-y-5"
+          className="card relative w-full sm:max-w-lg max-h-[85vh] overflow-y-auto
+                     p-6 space-y-5
+                     rounded-t-2xl sm:rounded-lg
+                     animate-slide-up sm:animate-fade-in"
           onClick={e => e.stopPropagation()}
         >
-          {/* Header + close */}
+          {/* Title + close */}
           <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold text-text">Action Detail</h3>
+            <h3 className="text-base font-semibold text-text">Details</h3>
             <button
               onClick={() => setDetailOpen(false)}
               className="text-text-muted hover:text-text text-xl leading-none"
             >&times;</button>
           </div>
 
-          {/* Most recent message */}
-          {recentMessage && (
-            <div>
-              <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Most recent message</p>
-              <p className="text-sm text-text-muted whitespace-pre-wrap">{recentMessage}</p>
-            </div>
-          )}
-
-          {/* Full conversation context */}
-          {summary && (
-            <div>
-              <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Conversation context</p>
-              <p className="text-sm">
-                <span className="text-text-muted">State:</span>{' '}
-                <span className="text-text">{summary.currentState}</span>
-              </p>
-              {summary.risks && summary.risks.length > 0 && (
-                <p className="text-sm mt-1">
-                  <span className="text-accent-light">Risks:</span>{' '}
-                  <span className="text-text">{summary.risks.join(', ')}</span>
-                </p>
-              )}
-              {summary.nextSteps && summary.nextSteps.length > 0 && (
-                <p className="text-sm mt-1">
-                  <span className="text-green-400">Next steps:</span>{' '}
-                  <span className="text-text">{summary.nextSteps.join(', ')}</span>
-                </p>
-              )}
-              {summary.keyPoints && summary.keyPoints.length > 0 && (
-                <p className="text-sm mt-1">
-                  <span className="text-text-muted">Key points:</span>{' '}
-                  <span className="text-text">{summary.keyPoints.join(', ')}</span>
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* All CPs + roles — spec 4 */}
+          {/* Why now */}
           <div>
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Participants</p>
-            {(participants && participants.length > 0
-              ? participants
-              : [{ name: cp.name, role: cp.role, primary_identifier: cp.primary_identifier }]
-            ).map((p, i) => (
-              <p key={i} className="text-sm text-text">
-                {p.name || p.primary_identifier}
-                {p.role && <span className="text-text-muted ml-1">· {p.role}</span>}
-              </p>
-            ))}
-          </div>
-
-          {/* Mila's rationale */}
-          <div>
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1">Mila's rationale</p>
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1.5">Why now</p>
             <p className="text-sm text-text">{action.rationale}</p>
           </div>
 
-          {/* Full numeric breakdown — spec 4 */}
+          {/* Conversation snapshot */}
+          {summary && (
+            <div>
+              <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1.5">Conversation snapshot</p>
+              <div className="space-y-1 text-sm">
+                <p>
+                  <span className="text-text-muted">State:</span>{' '}
+                  <span className="text-text">{summary.currentState}</span>
+                </p>
+                {summary.risks?.length > 0 && (
+                  <p>
+                    <span className="text-accent-light">Risk:</span>{' '}
+                    <span className="text-text">{summary.risks.join(' · ')}</span>
+                  </p>
+                )}
+                {summary.nextSteps?.length > 0 && (
+                  <p>
+                    <span className="text-green-400">Next:</span>{' '}
+                    <span className="text-text">{summary.nextSteps.join(' · ')}</span>
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Last message from CP — full text, verbatim */}
+          {recentMessage && (
+            <div>
+              <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1.5">
+                Last message from {cp.name || cp.primary_identifier}
+              </p>
+              <p className="text-sm text-text whitespace-pre-wrap">{recentMessage}</p>
+            </div>
+          )}
+
+          {/* Scoring breakdown */}
           <div>
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">Priority breakdown</p>
-            <div className="grid grid-cols-3 gap-3 text-sm">
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">Scoring</p>
+            <div className="grid grid-cols-3 gap-x-4 gap-y-3 text-sm">
               <div>
                 <p className="text-text-muted">Value</p>
                 <p className="text-text font-medium">${adjValue.toLocaleString()}</p>
@@ -467,21 +275,8 @@ export function ActionCard({
                 <p className="text-text-muted">Weight</p>
                 <p className="text-text font-medium">{action.weight ?? 0}</p>
               </div>
-              <div>
-                <p className="text-text-muted">Final score</p>
-                <p className="text-text font-bold">{Math.round(action.priority_score)}</p>
-              </div>
             </div>
           </div>
-
-          {/* EDIT can be entered from here — spec 4 */}
-          <Button
-            variant="secondary"
-            onClick={() => { setDetailOpen(false); setMode('edit') }}
-            className="w-full"
-          >
-            EDIT
-          </Button>
         </div>
       </div>
     )}

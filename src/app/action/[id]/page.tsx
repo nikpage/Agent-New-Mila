@@ -72,11 +72,11 @@ function ActionContent() {
     })
   }
 
-  async function handleEdit(subject: string, body: string, to?: string) {
+  async function handleEdit(notes: string) {
     const response = await fetch(`/api/action/${actionId}/draft`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, subject, body, to }),
+      body: JSON.stringify({ token, notes }),
     })
 
     if (!response.ok) {
@@ -197,7 +197,6 @@ function ActionContent() {
           onDoIt={handleDoIt}
           onEdit={handleEdit}
           onIllDoIt={handleIllDoIt}
-          onToDo={handleToDo}
           onBlacklist={handleBlacklist}
         />
       </div>

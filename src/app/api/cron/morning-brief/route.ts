@@ -7,14 +7,11 @@ export const maxDuration = 300 // 5 minutes
 
 export async function GET(request: NextRequest) {
   try {
-    // Production: enforce Bearer token auth
-    // Dev: skip so you can curl without a token during local testing
-    if (process.env.NODE_ENV !== 'development') {
-      const authHeader = request.headers.get('authorization')
-      const token = authHeader?.replace('Bearer ', '')
-      if (!token || !validateCronToken(token)) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-      }
+    const authHeader = request.headers.get('authorization')
+    const token = authHeader?.replace('Bearer ', '')
+
+    if (!validateCronToken(token)) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     console.log('[Cron] Starting morning brief send')
@@ -31,13 +28,13 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('[Cron] Morning brief error:', error)
     return NextResponse.json(
-      { error: 'Morning brief failed', details: error instanceof Error ? error.message : 'Unknown error' },
+      { error: 'Morning brief failed' },
       { status: 500 }
     )
   }
 }
 
-// Also support POST for flexibility
 export async function POST(request: NextRequest) {
   return GET(request)
 }
+
