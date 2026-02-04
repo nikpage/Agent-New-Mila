@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getActionById, updateActionDraft } from '@/lib/db/actions'
+import { getActionById, updateActionDraft, updateAction } from '@/lib/db/actions'
 import { validateActionToken } from '@/lib/auth/tokens'
 
 export async function PUT(
@@ -9,7 +9,7 @@ export async function PUT(
   try {
     const { id: actionId } = await params
     const body = await request.json()
-    const { token, subject, body: draftBody } = body
+    const { token, subject, body: draftBody, to } = body
 
     if (!token) {
       return NextResponse.json({ error: 'Missing token' }, { status: 401 })
@@ -29,6 +29,14 @@ export async function PUT(
 
     // Update the draft
     await updateActionDraft(actionId, subject || '', draftBody || '')
+
+    // Persist edited recipient if provided
+    if (to) {
+      const currentPayload = (action.payload as Record<string, unknown>) || {}
+      await updateAction(actionId, {
+        payload: { ...currentPayload, editedTo: to },
+      })
+    }
 
     return NextResponse.json({ success: true })
 

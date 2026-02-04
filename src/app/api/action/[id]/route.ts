@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getActionById } from '@/lib/db/actions'
-import { getConversationById, getRecentMessages } from '@/lib/db/conversations'
+import { getConversationById, getRecentMessages, getParticipants } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
 import { validateActionToken } from '@/lib/auth/tokens'
 
@@ -29,21 +29,30 @@ export async function GET(
     }
 
     // Get related data
-    const [conversation, cp, recentMessages] = await Promise.all([
+    const [conversation, cp, recentMessages, threadParticipants] = await Promise.all([
       getConversationById(action.conversation_id),
       getCPById(action.cp_id),
       getRecentMessages(action.conversation_id, 1),
+      getParticipants(action.conversation_id),
     ])
 
     if (!conversation || !cp) {
       return NextResponse.json({ error: 'Data not found' }, { status: 404 })
     }
 
+    // Resolve all participant CP details
+    const participantCPs = await Promise.all(
+      threadParticipants.map(p => getCPById(p.cp_id))
+    )
+
     return NextResponse.json({
       action,
       conversation,
       cp,
       recentMessage: recentMessages[0] || null,
+      participants: participantCPs
+        .filter((p): p is NonNullable<typeof p> => p !== null)
+        .map(p => ({ name: p.name, role: p.role, primary_identifier: p.primary_identifier })),
     })
   } catch (error) {
     console.error('Error fetching action:', error)

@@ -80,6 +80,8 @@ export async function proposeAction(
 ): Promise<{
   actionType: ActionType
   rationale: string
+  proposedResponse?: string
+  missingInfo?: { label: string; placeholder: string }[]
   draftSubject?: string
   draftBody?: string
   urgency: number
@@ -107,6 +109,8 @@ Respond with ONLY valid JSON:
 {
   "actionType": "REPLY" | "SCHEDULE" | "WAIT" | "FILE",
   "rationale": "One sentence explaining why this action now",
+  "proposedResponse": "1-2 sentences: what the counterparty wants and what Mila will do. Include scheduling details if relevant. Written in human assistant language. null if actionType is WAIT or FILE.",
+  "missingInfo": [{"label": "field name", "placeholder": "unit or description"}],
   "draftSubject": "Subject line if actionType is REPLY",
   "draftBody": "Draft email body if actionType is REPLY (keep professional, concise)",
   "urgency": 1-10 (10 = needs immediate attention),
@@ -118,7 +122,9 @@ Rules:
 - REPLY: User needs to send a response
 - SCHEDULE: A meeting needs to be arranged
 - WAIT: Ball is in counterparty's court, nothing to do
-- FILE: Conversation is closed, archive it`
+- FILE: Conversation is closed, archive it
+- proposedResponse: Narrate what the CP wants and what action Mila proposes. Return null for WAIT/FILE.
+- missingInfo: List any information needed to execute the action that is NOT available in the conversation. Return empty array [] if all needed info is available.`
 
   const result = await model.generateContent(prompt)
   const text = result.response.text()

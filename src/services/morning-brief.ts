@@ -223,6 +223,7 @@ function generateBriefEmailHtml(
               ${actions.map(({ action, cpName, cpRole, topic, dealType, summary, actionUrl }) => {
                 const urgency = getUrgency(action.priority_score)
                 const adjValue = action.dollar_value * (action.offer_multiplier ?? 1)
+                const proposedResponse = (action.payload as { original_proposal?: { proposedResponse?: string } })?.original_proposal?.proposedResponse
                 return `
               <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #1a2744; border-radius: 8px; margin-bottom: 12px;">
                 <tr>
@@ -289,6 +290,18 @@ function generateBriefEmailHtml(
                     </table>
                     ` : ''}
 
+                    <!-- Mila's Proposed Response -->
+                    ${proposedResponse ? `
+                    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 10px;">
+                      <tr>
+                        <td style="padding: 10px 12px; background-color: #132540; border: 1px solid #2a3a54; border-radius: 6px;">
+                          <p style="margin: 0 0 4px; color: #6b7280; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;">Mila's proposed response</p>
+                          <p style="margin: 0; color: #e5e7eb; font-size: 13px; line-height: 1.5;">${proposedResponse}</p>
+                        </td>
+                      </tr>
+                    </table>
+                    ` : ''}
+
                     <!-- Draft preview (if available) -->
                     ${action.draft_body_text ? `
                     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 14px;">
@@ -345,11 +358,32 @@ function generateBriefEmailText(headline: string, actions: BriefAction[]): strin
   let text = `Good morning\n\n${headline}\n\n`
   text += `NEEDS YOUR ATTENTION\n${'='.repeat(40)}\n\n`
 
-  for (const { action, cpName, topic, actionUrl } of actions) {
-    text += `[${actionTypeLabels[action.action_type] || action.action_type}] ${cpName}\n`
-    text += `Topic: ${topic}\n`
+  for (const { action, cpName, cpRole, topic, dealType, summary, actionUrl } of actions) {
+    const urgency = getUrgency(action.priority_score)
+    const proposedResponse = (action.payload as { original_proposal?: { proposedResponse?: string } })?.original_proposal?.proposedResponse
+
+    text += `[${actionTypeLabels[action.action_type] || action.action_type}] ${cpName}${cpRole ? ` · ${cpRole}` : ''}  [${urgency.label}]\n`
+    text += dealType ? `Deal: ${dealType} · ${topic}\n` : `Topic: ${topic}\n`
     text += `Priority: ${Math.round(action.priority_score)}\n\n`
-    text += `${action.rationale}\n\n`
+    text += `Why now: ${action.rationale}\n\n`
+
+    if (summary) {
+      text += `State: ${summary.currentState}\n`
+      if (summary.risks && summary.risks.length > 0) text += `Risk: ${summary.risks.join(' · ')}\n`
+      if (summary.nextSteps && summary.nextSteps.length > 0) text += `Next: ${summary.nextSteps.join(' · ')}\n`
+      text += '\n'
+    }
+
+    if (proposedResponse) {
+      text += `Mila's proposed response:\n${proposedResponse}\n\n`
+    }
+
+    if (action.draft_body_text) {
+      text += `Draft:\n`
+      if (action.draft_subject) text += `Subject: ${action.draft_subject}\n`
+      text += `${action.draft_body_text.slice(0, 200)}${action.draft_body_text.length > 200 ? '…' : ''}\n\n`
+    }
+
     text += `View & Respond: ${actionUrl}\n`
     text += `${'-'.repeat(40)}\n\n`
   }

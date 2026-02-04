@@ -45,9 +45,12 @@ export async function POST(
         return NextResponse.json({ error: 'Counterparty not found' }, { status: 404 })
       }
 
+      // Use edited recipient if saved, otherwise fall back to CP
+      const sendTo = ((action.payload as Record<string, unknown>)?.editedTo as string) || cp.primary_identifier
+
       // Send the email
       await sendEmail(action.user_id, {
-        to: cp.primary_identifier,
+        to: sendTo,
         subject: action.draft_subject || 'Re: Your message',
         body: action.draft_body_text,
       })

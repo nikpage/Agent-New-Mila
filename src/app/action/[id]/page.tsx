@@ -11,6 +11,7 @@ interface ActionPageData {
   conversation: ConversationThread
   cp: CP
   recentMessage?: Message
+  participants?: { name: string | null; role: string | null; primary_identifier: string }[]
 }
 
 type SuccessState = {
@@ -71,11 +72,11 @@ function ActionContent() {
     })
   }
 
-  async function handleEdit(subject: string, body: string) {
+  async function handleEdit(subject: string, body: string, to?: string) {
     const response = await fetch(`/api/action/${actionId}/draft`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, subject, body }),
+      body: JSON.stringify({ token, subject, body, to }),
     })
 
     if (!response.ok) {
@@ -192,6 +193,7 @@ function ActionContent() {
           conversation={data.conversation}
           cp={data.cp}
           recentMessage={data.recentMessage?.cleaned_text ?? data.recentMessage?.raw_text ?? undefined}
+          participants={data.participants}
           onDoIt={handleDoIt}
           onEdit={handleEdit}
           onIllDoIt={handleIllDoIt}
