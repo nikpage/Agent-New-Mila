@@ -7,12 +7,14 @@ export const maxDuration = 300 // 5 minutes
 
 export async function GET(request: NextRequest) {
   try {
-    // Validate cron secret
-    const authHeader = request.headers.get('authorization')
-    const token = authHeader?.replace('Bearer ', '')
-
-    if (!token || !validateCronToken(token)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    // Production: enforce Bearer token auth
+    // Dev: skip so you can curl without a token during local testing
+    if (process.env.NODE_ENV !== 'development') {
+      const authHeader = request.headers.get('authorization')
+      const token = authHeader?.replace('Bearer ', '')
+      if (!token || !validateCronToken(token)) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      }
     }
 
     console.log('[Cron] Starting morning brief send')
