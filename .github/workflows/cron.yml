@@ -10,4 +10,4 @@ jobs:
     steps:
       - name: Trigger Morning Brief
         run: |
-           curl -H "Authorization: Bearer 2xuRyOk8QbeDkosQQOKDVTcaG+MHmuilSAWtuuFASkA=" http://localhost:3000/api/cron/morning-brief
+          curl -f -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" "${{ secrets.APP_BASE_URL }}/api/cron/morning-brief"

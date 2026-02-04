@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { sendAllMorningBriefs } from '@/services/morning-brief'
 import { validateCronToken } from '@/lib/auth/tokens'
 
+export const dynamic = 'force-dynamic'
 export const maxDuration = 300 // 5 minutes
 
 export async function GET(request: NextRequest) {
