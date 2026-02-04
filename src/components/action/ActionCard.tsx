@@ -79,11 +79,7 @@ export function ActionCard({
 
       {/* ─── HEADER ────────────────────────────────────────────────── */}
       <div className="px-6 pt-5 pb-3">
-        <Badge variant={TYPE_VARIANT[action.action_type] || 'default'}>
-          {TYPE_LABEL[action.action_type] || action.action_type}
-        </Badge>
-
-        <h2 className="text-lg font-semibold text-text mt-3">
+        <h2 className="text-lg font-semibold text-text">
           {cp.name || cp.primary_identifier}
           {cp.role && <span className="text-sm font-normal text-text-muted ml-2">· {cp.role}</span>}
         </h2>
@@ -91,6 +87,10 @@ export function ActionCard({
         <p className="text-sm text-text-muted mt-0.5">
           {conversation.topic}
         </p>
+
+        <Badge variant={TYPE_VARIANT[action.action_type] || 'default'} className="mt-2">
+          {TYPE_LABEL[action.action_type] || action.action_type}
+        </Badge>
       </div>
 
       {/* ─── PRIORITY (large, dominant, centered) ───────────────────── */}
@@ -103,7 +103,7 @@ export function ActionCard({
 
       {/* ─── MILA'S INTENT (primary text — the heart of the card) ───── */}
       <div className="px-6 pb-4">
-        <p className="text-sm text-text leading-relaxed">
+        <p className="text-base text-text leading-relaxed">
           {intent}
         </p>
       </div>
@@ -156,7 +156,7 @@ export function ActionCard({
       )}
 
       {/* ─── ACTION CONTROLS (decision layer) ───────────────────────── */}
-      <div className="px-6 py-4 border-t border-border flex items-center justify-between">
+      <div className="px-6 py-4 flex items-center justify-between">
         <div className="flex gap-2">
           <Button variant="primary"  onClick={run('doit', onDoIt)}      loading={loading === 'doit'}>
             DO IT

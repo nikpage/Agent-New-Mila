@@ -109,7 +109,7 @@ Respond with ONLY valid JSON:
 {
   "actionType": "REPLY" | "SCHEDULE" | "WAIT" | "FILE",
   "rationale": "One sentence explaining why this action now",
-  "proposedResponse": "1-2 sentences: what the counterparty wants and what Mila will do. Include scheduling details if relevant. Written in human assistant language. null if actionType is WAIT or FILE.",
+  "proposedResponse": "2-4 sentences written in first person as the user's AI assistant. This is a commitment summary, NOT a draft email. Example: 'I suggest scheduling a call this week to align on next steps. I've identified Thursday at 16:30 as a good option. The call would cover contract signing, deposit details, and parking.' null if actionType is WAIT or FILE.",
   "missingInfo": [{"label": "field name", "placeholder": "unit or description"}],
   "draftSubject": "Subject line if actionType is REPLY",
   "draftBody": "Draft email body if actionType is REPLY (keep professional, concise)",
@@ -123,7 +123,7 @@ Rules:
 - SCHEDULE: A meeting needs to be arranged
 - WAIT: Ball is in counterparty's court, nothing to do
 - FILE: Conversation is closed, archive it
-- proposedResponse: Narrate what the CP wants and what action Mila proposes. Return null for WAIT/FILE.
+- proposedResponse: First-person commitment summary ("I suggest...", "I will...", "I've identified..."). Explain what action will be taken. Return null for WAIT/FILE.
 - missingInfo: List any information needed to execute the action that is NOT available in the conversation. Return empty array [] if all needed info is available.`
 
   const result = await model.generateContent(prompt)
