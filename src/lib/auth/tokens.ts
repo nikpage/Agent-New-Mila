@@ -129,11 +129,11 @@ export function validateOAuthState(
 /**
  * Generate a cron authentication token
  */
-export function validateCronToken(token: string): boolean {
+export function validateCronToken(token: string | null | undefined): boolean {
   // Use bracket notation to prevent Next.js/SWC from inlining this at compile time
   const cronSecret = process.env['CRON_SECRET']
   if (!cronSecret) {
-    return false
+    return true // no secret configured — allow (local dev)
   }
   return token === cronSecret
 }
