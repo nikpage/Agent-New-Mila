@@ -1,9 +1,4 @@
-/**
- * Action Planning Service
- * Analyzes conversations and generates action proposals
- */
-
-import { proposeAction, generateDraftReply } from '@/lib/ai/gemini'
+import { proposeAction, generateFinalDraft } from '@/lib/ai/gemini'
 import {
   createAction,
   hasPendingAction,
@@ -18,59 +13,39 @@ import type {
 } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
-/**
- * Generate an action proposal for a conversation
- */
 export async function generateActionProposal(
   conversation: ConversationThread
 ): Promise<ActionProposal | null> {
-  // Check if there's already a pending action
   if (await hasPendingAction(conversation.id)) {
     return null
   }
 
-  // Get conversation summary
   const summary = conversation.summary_json as ConversationSummary | null
-  if (!summary) {
-    return null
-  }
+  if (!summary) return null
 
-  // Get recent messages
   const recentMessages = await getRecentMessages(conversation.id, 5)
-  if (recentMessages.length === 0) {
-    return null
-  }
+  if (recentMessages.length === 0) return null
 
-  // Get the primary CP (most recent message sender)
   const latestInbound = recentMessages
     .filter(m => m.direction === 'inbound' && m.cp_id)
     .pop()
 
-  if (!latestInbound?.cp_id) {
-    return null
-  }
+  if (!latestInbound?.cp_id) return null
 
   const cp = await getCPById(latestInbound.cp_id)
-  if (!cp || cp.is_blacklisted) {
-    return null
-  }
+  if (!cp || cp.is_blacklisted) return null
 
-  // Format messages for AI
   const formattedMessages = recentMessages.map(m => ({
     direction: m.direction || 'UNKNOWN',
     text: m.cleaned_text || m.raw_text || '',
   }))
 
   try {
-    // Get AI recommendation
+    // Get AI recommendation (Intent Only)
     const proposal = await proposeAction(summary, formattedMessages, cp.name)
 
-    // Skip if action is WAIT (nothing to do)
-    if (proposal.actionType === 'WAIT') {
-      return null
-    }
+    if (proposal.actionType === 'WAIT') return null
 
-    // Calculate days since last activity
     const lastUpdate = conversation.last_updated
       ? new Date(conversation.last_updated)
       : new Date()
@@ -78,7 +53,6 @@ export async function generateActionProposal(
       (Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24)
     )
 
-    // Calculate priority score
     const priorityScore = calculatePriorityScore({
       dollarValue: proposal.dollarValue,
       urgency: proposal.urgency,
@@ -86,21 +60,31 @@ export async function generateActionProposal(
       daysIgnored,
     })
 
-    // Create the action proposal
+    // Create the action proposal with CLEAN columns
     const action = await createAction({
       id: uuidv4(),
       user_id: conversation.user_id,
       conversation_id: conversation.id,
       cp_id: cp.id,
       action_type: proposal.actionType,
-      rationale: proposal.rationale,
-      draft_subject: proposal.draftSubject || null,
-      draft_body_text: proposal.draftBody || null,
+
+      // New Columns
+      intent_cs: proposal.intent_cs,
+      rationale_cs: proposal.rationale_cs,
+      missing_info: proposal.missingInfo, // Dynamic form definition
+
+      // Legacy/System columns
+      rationale: proposal.rationale_cs, // Keep for backward compat if needed, or use English if you prefer logs in EN
       priority_score: priorityScore,
       dollar_value: proposal.dollarValue,
       urgency: proposal.urgency,
       pain_factor: proposal.painFactor,
-      payload: { original_proposal: proposal },
+
+      // NO DRAFTS
+      draft_subject: null,
+      draft_body_text: null,
+
+      payload: {}, // Keep empty or store raw debug info only
       queued_for_brief: true,
     })
 
@@ -111,39 +95,22 @@ export async function generateActionProposal(
   }
 }
 
-/**
- * Process multiple conversations and generate action proposals
- */
 export async function generateActionsForConversations(
   conversationIds: string[]
 ): Promise<ActionProposal[]> {
   const actions: ActionProposal[] = []
-
   for (const convId of conversationIds) {
     const conversation = await getConversationById(convId)
     if (!conversation) continue
-
     const action = await generateActionProposal(conversation)
-    if (action) {
-      actions.push(action)
-    }
+    if (action) actions.push(action)
   }
-
   return actions
 }
 
-/**
- * Regenerate draft for an action with user feedback
- */
 export async function regenerateDraft(
   actionId: string,
   userIntent: string
 ): Promise<{ subject: string; body: string }> {
-  // This would get the action, conversation context, and regenerate
-  // For now, return a placeholder
-  return generateDraftReply(
-    'Conversation context here',
-    userIntent,
-    null
-  )
+  return { subject: '', body: '' }
 }
