@@ -84,7 +84,17 @@ export async function generateActionProposal(
       draft_subject: null,
       draft_body_text: null,
 
-      payload: {}, // Keep empty or store raw debug info only
+      payload: {
+        intent_cs: proposal.intent_cs,
+        execution_plan: proposal.rationale_cs,
+        required_inputs: proposal.missingInfo,
+        action_metadata: {
+          action_type: proposal.actionType,
+          urgency: proposal.urgency,
+          dollar_value: proposal.dollarValue,
+          pain_factor: proposal.painFactor,
+        }
+      },
       queued_for_brief: true,
     })
 

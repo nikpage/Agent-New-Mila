@@ -13,6 +13,8 @@ import { classifyEmail } from '@/lib/ai/gemini'
 import { findOrCreateCP } from '@/lib/db/counterparties'
 import { createMessage, messageExists } from '@/lib/db/messages'
 import { getUserById } from '@/lib/db/users'
+import { generateMessageEmbedding } from '@/lib/embeddings/generate'
+import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { v4 as uuidv4 } from 'uuid'
 
 /**
@@ -106,6 +108,14 @@ export async function ingestEmailsForUser(
         timestamp: email.date.toISOString(),
         occurred_at: email.date.toISOString(),
       })
+
+      // Generate and save message embedding
+      try {
+        const embedding = await generateMessageEmbedding(email.body)
+        await saveMessageEmbedding(messageId, embedding)
+      } catch (error) {
+        console.error(`Failed to generate embedding for message ${messageId}:`, error)
+      }
 
       ingestedMessages.push({
         id: messageId,

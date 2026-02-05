@@ -67,8 +67,8 @@ function ActionContent() {
 
     setSuccess({
       show: true,
-      message: 'Done!',
-      subMessage: 'Your email has been sent.',
+      message: 'Hotovo!',
+      subMessage: 'Váš e-mail byl odeslán.',
     })
   }
 
@@ -101,8 +101,8 @@ function ActionContent() {
 
     setSuccess({
       show: true,
-      message: 'Added to To-Do',
-      subMessage: 'This task is now tracked in your to-do list.',
+      message: 'Přidáno do úkolů',
+      subMessage: 'Tento úkol je nyní sledován ve vašem seznamu úkolů.',
     })
   }
 
@@ -120,8 +120,8 @@ function ActionContent() {
 
     setSuccess({
       show: true,
-      message: 'Saved to To-Do',
-      subMessage: 'This will resurface when the score demands it.',
+      message: 'Uloženo do úkolů',
+      subMessage: 'Toto se znovu objeví, až to bude skóre vyžadovat.',
     })
   }
 
@@ -139,8 +139,8 @@ function ActionContent() {
 
     setSuccess({
       show: true,
-      message: 'Contact Blacklisted',
-      subMessage: 'You won\'t receive cards for this contact anymore.',
+      message: 'Kontakt zablokován',
+      subMessage: 'Nebudete již dostávat karty pro tento kontakt.',
     })
   }
 
@@ -148,7 +148,7 @@ function ActionContent() {
     return (
       <div className="text-center">
         <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-text-muted">Loading action...</p>
+        <p className="text-text-muted">Načítání akce...</p>
       </div>
     )
   }
@@ -171,7 +171,7 @@ function ActionContent() {
             />
           </svg>
         </div>
-        <h2 className="text-xl font-semibold mb-2">Error</h2>
+        <h2 className="text-xl font-semibold mb-2">Chyba</h2>
         <p className="text-text-muted">{error}</p>
       </div>
     )
@@ -180,7 +180,7 @@ function ActionContent() {
   if (!data) {
     return (
       <div className="text-center">
-        <p className="text-text-muted">Action not found</p>
+        <p className="text-text-muted">Akce nenalezena</p>
       </div>
     )
   }
@@ -215,7 +215,7 @@ function LoadingFallback() {
   return (
     <div className="text-center">
       <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-      <p className="text-text-muted">Loading...</p>
+      <p className="text-text-muted">Načítání...</p>
     </div>
   )
 }

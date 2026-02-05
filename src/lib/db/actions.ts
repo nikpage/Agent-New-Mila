@@ -217,6 +217,8 @@ export async function markActionsNotified(actionIds: string[]): Promise<void> {
  *
  * Formula:
  * Total Priority Score = (V_adjusted × Urgency) + (Pain Factor × (Days Ignored + 1)²) + Weight
+ *
+ * Zero handling: Any multiplier = 0 → replace with 1 to prevent score nullification
  */
 export function calculatePriorityScore(params: {
   dollarValue: number
@@ -235,11 +237,16 @@ export function calculatePriorityScore(params: {
     offerMultiplier = 1,
   } = params
 
-  const adjustedValue = dollarValue * offerMultiplier
-  const valueComponent = adjustedValue * urgency
-  const painComponent = painFactor * Math.pow(daysIgnored + 1, 2)
+  const safeOfferMultiplier = offerMultiplier || 1
+  const safeUrgency = urgency || 1
+  const safePainFactor = painFactor || 1
+  const safeWeight = weight || 0
 
-  return valueComponent + painComponent + weight
+  const adjustedValue = dollarValue * safeOfferMultiplier
+  const valueComponent = adjustedValue * safeUrgency
+  const painComponent = safePainFactor * Math.pow(daysIgnored + 1, 2)
+
+  return valueComponent + painComponent + safeWeight
 }
 
 /**

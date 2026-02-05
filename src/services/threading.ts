@@ -15,6 +15,8 @@ import {
 import { updateMessage, getMessageById } from '@/lib/db/messages'
 import { getCPById } from '@/lib/db/counterparties'
 import { analyzeConversation, extractTopic } from '@/lib/ai/gemini'
+import { generateConversationEmbedding } from '@/lib/embeddings/generate'
+import { saveConversationEmbedding } from '@/lib/db/embeddings'
 import type { Message, ConversationThread } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -134,6 +136,15 @@ export async function rebuildConversationSummary(
       0.8, // confidence
       'AI analysis'
     )
+
+    // Generate and save conversation embedding
+    try {
+      const messageTexts = formattedMessages.map(m => m.text)
+      const embedding = await generateConversationEmbedding(messageTexts)
+      await saveConversationEmbedding(conversation.id, embedding)
+    } catch (embeddingError) {
+      console.error(`Failed to generate embedding for conversation ${conversation.id}:`, embeddingError)
+    }
   } catch (error) {
     console.error('Failed to rebuild conversation summary:', error)
   }

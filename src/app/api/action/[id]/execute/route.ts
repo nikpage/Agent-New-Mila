@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getActionById, completeAction } from '@/lib/db/actions'
+import { getActionById, completeAction, updateActionDraft } from '@/lib/db/actions'
 import { getConversationById } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
 import { validateActionToken } from '@/lib/auth/tokens'
 import { sendEmail } from '@/lib/google/gmail'
+import { generateFinalDraft } from '@/lib/ai/gemini'
 
 export async function POST(
   request: NextRequest,
@@ -32,17 +33,38 @@ export async function POST(
 
     // Check action type and required data
     if (action.action_type === 'REPLY') {
-      if (!action.draft_body_text) {
-        return NextResponse.json(
-          { error: 'No draft available to send' },
-          { status: 400 }
-        )
-      }
-
       // Get the CP to get the email address
       const cp = await getCPById(action.cp_id)
       if (!cp) {
         return NextResponse.json({ error: 'Counterparty not found' }, { status: 404 })
+      }
+
+      // Generate draft if it doesn't exist
+      let draftSubject = action.draft_subject
+      let draftBody = action.draft_body_text
+
+      if (!draftBody) {
+        const conversation = await getConversationById(action.conversation_id)
+        if (!conversation) {
+          return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
+        }
+
+        const userNotes = ((action.payload as Record<string, unknown>)?.userNotes as string) || undefined
+        const missingInfo = (action.missing_info as { label: string; placeholder: string; value: string | null }[] | null) || undefined
+
+        const draft = await generateFinalDraft(
+          conversation.summary_json,
+          action.intent_cs || action.rationale_cs || action.rationale,
+          userNotes,
+          missingInfo,
+          cp.name || cp.primary_identifier
+        )
+
+        draftSubject = draft.subject
+        draftBody = draft.body
+
+        // Save the generated draft
+        await updateActionDraft(actionId, draftSubject, draftBody)
       }
 
       // Use edited recipient if saved, otherwise fall back to CP
@@ -51,8 +73,8 @@ export async function POST(
       // Send the email
       await sendEmail(action.user_id, {
         to: sendTo,
-        subject: action.draft_subject || 'Re: Your message',
-        body: action.draft_body_text,
+        subject: draftSubject || 'Re: Your message',
+        body: draftBody,
       })
 
       // Mark action as completed

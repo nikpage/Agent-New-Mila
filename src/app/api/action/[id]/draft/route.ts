@@ -9,7 +9,7 @@ export async function PUT(
   try {
     const { id: actionId } = await params
     const body = await request.json()
-    const { token, subject, body: draftBody, to } = body
+    const { token, subject, body: draftBody, to, notes, dynamicFields } = body
 
     if (!token) {
       return NextResponse.json({ error: 'Missing token' }, { status: 401 })
@@ -27,14 +27,37 @@ export async function PUT(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
-    // Update the draft
-    await updateActionDraft(actionId, subject || '', draftBody || '')
+    // Update the draft if subject/body provided
+    if (subject || draftBody) {
+      await updateActionDraft(actionId, subject || '', draftBody || '')
+    }
+
+    // Update missing_info with dynamic field values
+    if (dynamicFields) {
+      const missingInfo = (action.missing_info as { label: string; placeholder: string; value: string | null }[] | null) || []
+      const updatedMissingInfo = missingInfo.map(field => ({
+        ...field,
+        value: dynamicFields[field.label] || field.value
+      }))
+
+      await updateAction(actionId, {
+        missing_info: updatedMissingInfo
+      })
+    }
 
     // Persist edited recipient if provided
     if (to) {
       const currentPayload = (action.payload as Record<string, unknown>) || {}
       await updateAction(actionId, {
         payload: { ...currentPayload, editedTo: to },
+      })
+    }
+
+    // Store notes in payload if provided
+    if (notes) {
+      const currentPayload = (action.payload as Record<string, unknown>) || {}
+      await updateAction(actionId, {
+        payload: { ...currentPayload, userNotes: notes },
       })
     }
 

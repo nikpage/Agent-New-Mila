@@ -23,6 +23,7 @@ interface BriefAction {
   dealType: string | null
   summary:  ConversationSummary | null
   actionUrl: string
+  editUrl: string
 }
 
 /**
@@ -54,6 +55,7 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
 
       const token = generateActionToken(action.id, userId)
       const actionUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}`
+      const editUrl = `${APP_BASE_URL}/action/${action.id}/edit?token=${token}`
 
       briefActions.push({
         action,
@@ -63,6 +65,7 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
         dealType: conversation.deal_type || null,
         summary:  conversation.summary_json as ConversationSummary | null,
         actionUrl,
+        editUrl,
       })
     }
 
@@ -157,11 +160,11 @@ function generateBriefEmailHtml(
 </head>
 <body>
   <div class="container">
-    <h1 style="font-size: 24px; margin-bottom: 8px;">Good morning</h1>
+    <h1 style="font-size: 24px; margin-bottom: 8px;">Dobré ráno</h1>
     <p style="color: #9ca3af; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
 
-    ${actions.map(({ action, cpName, cpRole, topic, actionUrl }) => {
-      const intent = (action.payload as any)?.original_proposal?.proposedResponse || action.rationale;
+    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl }) => {
+      const intent = action.intent_cs || action.rationale_cs || action.rationale;
       return `
       <div class="card">
         <div style="font-weight: 600; font-size: 18px;">${cpName}${cpRole ? ` <span style="font-weight: 400; color: #9ca3af; font-size: 14px;">· ${cpRole}</span>` : ''}</div>
@@ -169,17 +172,17 @@ function generateBriefEmailHtml(
 
         <div class="badge">${action.action_type}</div>
 
-        <div class="priority-label">Priority</div>
+        <div class="priority-label">Priorita</div>
         <div class="priority-value">${Math.round(action.priority_score)}</div>
 
         <div class="intent">${intent}</div>
 
-        <a href="${actionUrl}" class="details-link">▸ Details</a>
+        <a href="${actionUrl}" class="details-link">▸ Detaily</a>
 
         <div>
-          <a href="${actionUrl}" class="cta-btn">DO IT</a>
-          <a href="${actionUrl}" class="cta-btn" style="background-color: #243352;">EDIT</a>
-          <a href="${actionUrl}" class="cta-btn" style="background-color: transparent; border: 1px solid #2a3a54;">I'LL DO IT</a>
+          <a href="${actionUrl}" class="cta-btn">UDĚLAT</a>
+          <a href="${editUrl}" class="cta-btn" style="background-color: #243352;">UPRAVIT</a>
+          <a href="${actionUrl}" class="cta-btn" style="background-color: transparent; border: 1px solid #2a3a54;">UDĚLÁM SÁM</a>
         </div>
       </div>
       `
@@ -193,14 +196,14 @@ function generateBriefEmailHtml(
  * Generate plain text email content
  */
 function generateBriefEmailText(headline: string, actions: BriefAction[]): string {
-  let text = `Good morning\n\n${headline}\n\n`;
+  let text = `Dobré ráno\n\n${headline}\n\n`;
   for (const { action, cpName, cpRole, topic, actionUrl } of actions) {
-    const intent = (action.payload as any)?.original_proposal?.proposedResponse || action.rationale;
+    const intent = action.intent_cs || action.rationale_cs || action.rationale;
     text += `${cpName}${cpRole ? ` · ${cpRole}` : ''}\n`;
     text += `${topic}\n`;
-    text += `Priority: ${Math.round(action.priority_score)}\n\n`;
+    text += `Priorita: ${Math.round(action.priority_score)}\n\n`;
     text += `${intent}\n\n`;
-    text += `▸ Details / Actions: ${actionUrl}\n`;
+    text += `▸ Detaily / Akce: ${actionUrl}\n`;
     text += `------------------------------------------\n\n`;
   }
   return text;

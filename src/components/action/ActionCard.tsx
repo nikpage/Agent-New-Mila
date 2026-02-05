@@ -21,13 +21,11 @@ const TYPE_VARIANT: Record<string, 'accent' | 'warning' | 'success' | 'default'>
 }
 
 // ─── Intent extraction ────────────────────────────────────────────────────────
-// Primary source: payload.original_proposal.proposedResponse (Mila's commitment summary)
-// Fallback: rationale
+// Primary source: intent_cs (Mila's plan summary in Czech)
+// Fallback: rationale_cs, then rationale
 
 function getIntent(action: ActionProposal): string {
-  const proposal = (action.payload as { original_proposal?: { proposedResponse?: string | null } })?.original_proposal
-  if (proposal?.proposedResponse) return proposal.proposedResponse
-  return action.rationale
+  return action.intent_cs || action.rationale_cs || action.rationale
 }
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -67,6 +65,12 @@ export function ActionCard({
   const adjValue = action.dollar_value * (action.offer_multiplier ?? 1)
   const intent   = getIntent(action)
 
+  const getUrgencyLabel = (urgency: number): string => {
+    if (urgency >= 8) return 'TEĎ'
+    if (urgency >= 4) return 'Zítra'
+    return 'Později'
+  }
+
   const run = (key: string, fn: () => Promise<void>) => async () => {
     setLoading(key)
     try { await fn() } finally { setLoading(null) }
@@ -79,26 +83,25 @@ export function ActionCard({
 
       {/* ─── HEADER ────────────────────────────────────────────────── */}
       <div className="px-6 pt-5 pb-3">
-        <h2 className="text-lg font-semibold text-text">
-          {cp.name || cp.primary_identifier}
-          {cp.role && <span className="text-sm font-normal text-text-muted ml-2">· {cp.role}</span>}
-        </h2>
-
-        <p className="text-sm text-text-muted mt-0.5">
-          {conversation.topic}
-        </p>
-
-        <Badge variant={TYPE_VARIANT[action.action_type] || 'default'} className="mt-2">
-          {TYPE_LABEL[action.action_type] || action.action_type}
-        </Badge>
-      </div>
-
-      {/* ─── PRIORITY (large, dominant, centered) ───────────────────── */}
-      <div className="px-6 py-4 text-center">
-        <p className="text-xs font-bold text-text-muted uppercase tracking-widest">Priority</p>
-        <p className="text-5xl font-bold text-text leading-none mt-1">
-          {Math.round(action.priority_score)}
-        </p>
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-lg font-semibold text-text">
+              {cp.name || cp.primary_identifier}
+              {cp.role && <span className="text-sm font-normal text-text-muted ml-2">· {cp.role}</span>}
+            </h2>
+            <p className="text-sm text-text-muted mt-0.5">
+              {conversation.topic}
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <Badge variant={TYPE_VARIANT[action.action_type] || 'default'}>
+              {TYPE_LABEL[action.action_type] || action.action_type}
+            </Badge>
+            <Badge variant="accent">
+              {getUrgencyLabel(action.urgency)}
+            </Badge>
+          </div>
+        </div>
       </div>
 
       {/* ─── MILA'S INTENT (primary text — the heart of the card) ───── */}
@@ -114,7 +117,7 @@ export function ActionCard({
           onClick={() => setDetailOpen(true)}
           className="text-sm text-text-muted hover:text-text transition-colors flex items-center gap-1.5"
         >
-          <span>▸</span> Details
+          <span>▸</span> Detaily
         </button>
       </div>
 
@@ -122,13 +125,13 @@ export function ActionCard({
       {editOpen && (
         <div className="mx-6 mb-2 p-4 bg-primary-dark rounded-md border border-border">
           <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">
-            Add notes or constraints
+            Přidat poznámky nebo omezení
           </p>
           <Textarea
             value={notes}
             onChange={e => setNotes(e.target.value)}
             rows={3}
-            placeholder="e.g. Don't forget to mention the pool will be ready for his kids."
+            placeholder="např. Nezapomeň zmínit, že bazén bude připraven pro jeho děti."
           />
           <div className="flex gap-2 mt-3">
             <Button
@@ -142,14 +145,14 @@ export function ActionCard({
               loading={loading === 'edit-submit'}
               disabled={!notes.trim()}
             >
-              Submit
+              Odeslat
             </Button>
             <Button
               variant="ghost"
               size="sm"
               onClick={() => { setEditOpen(false); setNotes('') }}
             >
-              Cancel
+              Zrušit
             </Button>
           </div>
         </div>
@@ -159,13 +162,13 @@ export function ActionCard({
       <div className="px-6 py-4 flex items-center justify-between">
         <div className="flex gap-2">
           <Button variant="primary"  onClick={run('doit', onDoIt)}      loading={loading === 'doit'}>
-            DO IT
+            UDĚLAT
           </Button>
           <Button variant="secondary" onClick={() => setEditOpen(!editOpen)}>
-            EDIT
+            UPRAVIT
           </Button>
           <Button variant="outline"  onClick={run('illdoit', onIllDoIt)} loading={loading === 'illdoit'}>
-            I'LL DO IT
+            UDĚLÁM SÁM
           </Button>
         </div>
 
@@ -174,14 +177,14 @@ export function ActionCard({
             variant="ghost"
             size="sm"
             onClick={run('blacklist', async () => {
-              if (confirm(`Blacklist ${cp.name || cp.primary_identifier}? No future cards for this contact.`)) {
+              if (confirm(`Zablokovat ${cp.name || cp.primary_identifier}? Nebudete dostávat další karty pro tento kontakt.`)) {
                 await onBlacklist()
               }
             })}
             loading={loading === 'blacklist'}
             className="text-text-muted"
           >
-            Blacklist CP
+            Zablokovat CP
           </Button>
         )}
       </div>
@@ -203,7 +206,7 @@ export function ActionCard({
         >
           {/* Title + close */}
           <div className="flex items-center justify-between">
-            <h3 className="text-base font-semibold text-text">Details</h3>
+            <h3 className="text-base font-semibold text-text">Detaily</h3>
             <button
               onClick={() => setDetailOpen(false)}
               className="text-text-muted hover:text-text text-xl leading-none"
@@ -212,28 +215,28 @@ export function ActionCard({
 
           {/* Why now */}
           <div>
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1.5">Why now</p>
-            <p className="text-sm text-text">{action.rationale}</p>
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1.5">Proč teď</p>
+            <p className="text-sm text-text">{action.rationale_cs || action.rationale}</p>
           </div>
 
           {/* Conversation snapshot */}
           {summary && (
             <div>
-              <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1.5">Conversation snapshot</p>
+              <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1.5">Přehled konverzace</p>
               <div className="space-y-1 text-sm">
                 <p>
-                  <span className="text-text-muted">State:</span>{' '}
+                  <span className="text-text-muted">Stav:</span>{' '}
                   <span className="text-text">{summary.currentState}</span>
                 </p>
                 {summary.risks?.length > 0 && (
                   <p>
-                    <span className="text-accent-light">Risk:</span>{' '}
+                    <span className="text-accent-light">Riziko:</span>{' '}
                     <span className="text-text">{summary.risks.join(' · ')}</span>
                   </p>
                 )}
                 {summary.nextSteps?.length > 0 && (
                   <p>
-                    <span className="text-green-400">Next:</span>{' '}
+                    <span className="text-green-400">Další:</span>{' '}
                     <span className="text-text">{summary.nextSteps.join(' · ')}</span>
                   </p>
                 )}
@@ -245,7 +248,7 @@ export function ActionCard({
           {recentMessage && (
             <div>
               <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-1.5">
-                Last message from {cp.name || cp.primary_identifier}
+                Poslední zpráva od {cp.name || cp.primary_identifier}
               </p>
               <p className="text-sm text-text whitespace-pre-wrap">{recentMessage}</p>
             </div>
@@ -253,26 +256,26 @@ export function ActionCard({
 
           {/* Scoring breakdown */}
           <div>
-            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">Scoring</p>
+            <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">Hodnocení</p>
             <div className="grid grid-cols-3 gap-x-4 gap-y-3 text-sm">
               <div>
-                <p className="text-text-muted">Value</p>
-                <p className="text-text font-medium">${adjValue.toLocaleString()}</p>
+                <p className="text-text-muted">Hodnota</p>
+                <p className="text-text font-medium">{adjValue.toLocaleString()} Kč</p>
               </div>
               <div>
-                <p className="text-text-muted">Urgency</p>
+                <p className="text-text-muted">Naléhavost</p>
                 <p className="text-text font-medium">{action.urgency}/10</p>
               </div>
               <div>
-                <p className="text-text-muted">Pain</p>
+                <p className="text-text-muted">Bolest</p>
                 <p className="text-text font-medium">{action.pain_factor}/10</p>
               </div>
               <div>
-                <p className="text-text-muted">Days ignored</p>
+                <p className="text-text-muted">Dní ignorováno</p>
                 <p className="text-text font-medium">{days}</p>
               </div>
               <div>
-                <p className="text-text-muted">Weight</p>
+                <p className="text-text-muted">Váha</p>
                 <p className="text-text font-medium">{action.weight ?? 0}</p>
               </div>
             </div>
