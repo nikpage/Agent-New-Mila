@@ -278,6 +278,9 @@ export interface Database {
           cp_id: string
           action_type: string
           status: string
+          intent_cs: string | null
+          rationale_cs: string | null
+          missing_info: Json | null
           rationale: string
           payload: Json
           draft_subject: string | null
@@ -299,6 +302,9 @@ export interface Database {
           cp_id: string
           action_type: string
           status?: string
+          intent_cs?: string | null
+          rationale_cs?: string | null
+          missing_info?: Json | null
           rationale: string
           payload?: Json
           draft_subject?: string | null
@@ -320,6 +326,9 @@ export interface Database {
           cp_id?: string
           action_type?: string
           status?: string
+          intent_cs?: string | null
+          rationale_cs?: string | null
+          missing_info?: Json | null
           rationale?: string
           payload?: Json
           draft_subject?: string | null
