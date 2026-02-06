@@ -56,7 +56,7 @@ export async function proposeAction(
   actionType: ActionType
   rationale_cs: string
   intent_cs: string
-  missingInfo: { label: string; placeholder: string; value: null }[]
+  missingInfo: { label: string; value: null }[]
   urgency: number
   dollarValue: number
   painFactor: number
@@ -83,7 +83,7 @@ Respond with ONLY valid JSON:
   "actionType": "REPLY" | "SCHEDULE" | "WAIT" | "FILE",
   "rationale_cs": "One sentence explaining WHY this action is needed now (Trigger). Must be in CZECH.",
   "intent_cs": "The plan. 1-2 sentences written TO THE USER (first person 'Navrhuji...'). Explain what you will do. Must be in CZECH. Return null if actionType is WAIT/FILE.",
-  "missingInfo": [{"label": "Label in Czech (e.g. Plocha bytu)", "placeholder": "Example value (e.g. 75 m2)", "value": null}],
+  "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
   "urgency": 1-10 (10 = needs immediate attention),
   "dollarValue": estimated deal value in dollars (0 if unknown),
   "painFactor": 1-10 (how much pain from ignoring this)
@@ -92,7 +92,7 @@ Respond with ONLY valid JSON:
 Rules:
 - DO NOT write the email draft.
 - intent_cs must be a plan summary addressed to the user in Czech.
-- missingInfo: Analyze the incoming email. If the sender asked specific questions (e.g. "How big is the flat?", "When can we meet?"), create a form field for each missing piece of data so the user can fill it in.`
+- missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in Czech as it would be asked conversationally. Do NOT shorten questions to just key words. Examples: "Je tam sklep nebo komora?" not "Sklep/Komora". "Kdy se můžeme sejít?" not "Čas schůzky".`
 
   const result = await model.generateContent(prompt)
   const text = result.response.text()

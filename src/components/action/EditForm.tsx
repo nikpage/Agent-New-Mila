@@ -16,7 +16,7 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
   const [dynamicFields, setDynamicFields] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
 
-  const missingInfo = (action.missing_info as { label: string; placeholder: string; value: string | null }[] | null) || []
+  const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -44,7 +44,6 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
         <Input
           key={index}
           label={field.label}
-          placeholder={field.placeholder}
           value={dynamicFields[field.label] || ''}
           onChange={e => setDynamicFields({ ...dynamicFields, [field.label]: e.target.value })}
         />

@@ -6,6 +6,7 @@ import {
 } from '@/lib/db/actions'
 import { getConversationById, getRecentMessages } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
+import { findFreeSlots } from '@/lib/google/calendar'
 import type {
   ActionProposal,
   ConversationThread,
@@ -45,6 +46,56 @@ export async function generateActionProposal(
     const proposal = await proposeAction(summary, formattedMessages, cp.name)
 
     if (proposal.actionType === 'WAIT') return null
+
+    // Proactive Calendar: If SCHEDULE action, find free slots and offer them
+    if (proposal.actionType === 'SCHEDULE') {
+      try {
+        const tomorrow = new Date()
+        tomorrow.setDate(tomorrow.getDate() + 1)
+        const dayAfter = new Date()
+        dayAfter.setDate(dayAfter.getDate() + 2)
+
+        const [tomorrowSlots, dayAfterSlots] = await Promise.all([
+          findFreeSlots(conversation.user_id, tomorrow, 60), // 60 min meetings
+          findFreeSlots(conversation.user_id, dayAfter, 60)
+        ])
+
+        // Format slots as options
+        const formatTime = (date: Date) => {
+          return date.toLocaleTimeString('cs-CZ', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+          })
+        }
+
+        const formatDate = (date: Date) => {
+          return date.toLocaleDateString('cs-CZ', {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long'
+          })
+        }
+
+        const timeOptions: string[] = []
+        tomorrowSlots.slice(0, 3).forEach(slot => {
+          timeOptions.push(`${formatDate(slot.start)}, ${formatTime(slot.start)}`)
+        })
+        dayAfterSlots.slice(0, 2).forEach(slot => {
+          timeOptions.push(`${formatDate(slot.start)}, ${formatTime(slot.start)}`)
+        })
+
+        if (timeOptions.length > 0) {
+          proposal.missingInfo.push({
+            label: 'Kdy byste chtěl/a se sejít? (Vyberte jeden z volných termínů nebo napište vlastní)',
+            value: null
+          })
+        }
+      } catch (calendarError) {
+        console.error('Failed to fetch calendar slots:', calendarError)
+        // Continue without calendar - user can enter time manually
+      }
+    }
 
     const lastUpdate = conversation.last_updated
       ? new Date(conversation.last_updated)

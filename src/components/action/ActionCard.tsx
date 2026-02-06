@@ -13,11 +13,11 @@ function daysIgnored(createdAt: string): number {
 }
 
 const TYPE_LABEL: Record<string, string> = {
-  REPLY: 'REPLY', SCHEDULE: 'SCHEDULE', WAIT: 'WAIT', FILE: 'FILE', DELEGATE: 'DELEGATE',
+  REPLY: 'Odpověď', SCHEDULE: 'Schůzka', WAIT: 'Čekat', FILE: 'Úkol', DELEGATE: 'Delegovat', CALL: 'Hovor',
 }
 
 const TYPE_VARIANT: Record<string, 'accent' | 'warning' | 'success' | 'default'> = {
-  REPLY: 'accent', SCHEDULE: 'warning', WAIT: 'default', FILE: 'success', DELEGATE: 'warning',
+  REPLY: 'accent', SCHEDULE: 'warning', WAIT: 'default', FILE: 'success', DELEGATE: 'warning', CALL: 'accent',
 }
 
 // ─── Intent extraction ────────────────────────────────────────────────────────
