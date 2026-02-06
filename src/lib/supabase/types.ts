@@ -24,6 +24,8 @@ export interface Database {
           settings: Json | null
           google_oauth_tokens: Json | null
           encrypted_google_tokens: string | null
+          mila_name: string | null
+          public_name: string | null
           created_at: string
         }
         Insert: {
@@ -35,6 +37,8 @@ export interface Database {
           settings?: Json | null
           google_oauth_tokens?: Json | null
           encrypted_google_tokens?: string | null
+          mila_name?: string | null
+          public_name?: string | null
           created_at?: string
         }
         Update: {
@@ -46,6 +50,8 @@ export interface Database {
           settings?: Json | null
           google_oauth_tokens?: Json | null
           encrypted_google_tokens?: string | null
+          mila_name?: string | null
+          public_name?: string | null
           created_at?: string
         }
       }
@@ -504,10 +510,10 @@ export interface Database {
         Update: {
           id?: string
           user_id?: string | null
-          error_id?: string
-          agent_type?: string
-          message_user?: string
-          message_internal?: string
+          error_id: string
+          agent_type: string
+          message_user: string
+          message_internal: string
           created_at?: string | null
         }
       }
