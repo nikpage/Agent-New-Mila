@@ -1,8 +1,3 @@
-/**
- * Database types generated from Supabase schema
- * These match the exact structure of the database tables
- */
-
 export type Json =
   | string
   | number
@@ -518,19 +513,9 @@ export interface Database {
         }
       }
     }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      [_ in never]: never
-    }
-    Enums: {
-      [_ in never]: never
-    }
   }
 }
 
-// Convenience type aliases
 export type User = Database['public']['Tables']['users']['Row']
 export type CP = Database['public']['Tables']['cps']['Row']
 export type CPState = Database['public']['Tables']['cp_states']['Row']
@@ -544,7 +529,6 @@ export type Event = Database['public']['Tables']['events']['Row']
 export type Email = Database['public']['Tables']['emails']['Row']
 export type AgentError = Database['public']['Tables']['agent_errors']['Row']
 
-// Insert types
 export type UserInsert = Database['public']['Tables']['users']['Insert']
 export type CPInsert = Database['public']['Tables']['cps']['Insert']
 export type MessageInsert = Database['public']['Tables']['messages']['Insert']
@@ -553,11 +537,9 @@ export type ActionProposalInsert = Database['public']['Tables']['action_proposal
 export type TodoInsert = Database['public']['Tables']['todos']['Insert']
 export type EventInsert = Database['public']['Tables']['events']['Insert']
 
-// Action types
 export type ActionType = 'REPLY' | 'SCHEDULE' | 'WAIT' | 'FILE' | 'DELEGATE'
 export type ActionStatus = 'pending' | 'approved' | 'needs_revision' | 'completed' | 'dismissed'
 
-// Conversation summary JSON structure
 export interface ConversationSummary {
   currentState: string
   risks: string[]
