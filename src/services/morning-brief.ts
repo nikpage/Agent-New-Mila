@@ -32,12 +32,16 @@ interface BriefAction {
  */
 export async function sendMorningBrief(userId: string): Promise<boolean> {
   try {
+    console.log(`[MorningBrief] Starting for user ${userId}`)
+
     const user = await getUserById(userId)
     if (!user || !user.email_enabled || user.email_unsubscribed) {
+      console.log(`[MorningBrief] Skipping user ${userId}: not found or email disabled`)
       return false
     }
 
     const actions = await getPendingActionsForBrief(userId)
+    console.log(`[MorningBrief] Found ${actions.length} pending actions for user ${userId}`)
 
     if (actions.length === 0) {
       return true
@@ -70,21 +74,27 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
       })
     }
 
-    const headline = await generateBriefHeadline(
-      events.map(e => ({
-        title: e.title || 'Event',
-        time: new Date(e.start_time).toLocaleTimeString('en-US', {
-          hour: 'numeric',
-          minute: '2-digit',
-          timeZone: user.email_timezone,
-        }),
-      })),
-      briefActions.map(b => ({
-        type: b.action.action_type,
-        cpName: b.cpName,
-        urgency: b.action.urgency,
-      }))
-    )
+    let headline: string
+    try {
+      headline = await generateBriefHeadline(
+        events.map(e => ({
+          title: e.title || 'Event',
+          time: new Date(e.start_time).toLocaleTimeString('en-US', {
+            hour: 'numeric',
+            minute: '2-digit',
+            timeZone: user.email_timezone,
+          }),
+        })),
+        briefActions.map(b => ({
+          type: b.action.action_type,
+          cpName: b.cpName,
+          urgency: b.action.urgency,
+        }))
+      )
+    } catch (headlineError) {
+      console.error(`[MorningBrief] Headline generation failed for user ${userId}, using fallback:`, headlineError)
+      headline = `Máte ${briefActions.length} akčních návrhů ke zpracování.`
+    }
 
     const htmlContent = generateBriefEmailHtml(headline, briefActions, events.map(e => ({
       title: e.title || 'Event',
@@ -99,6 +109,8 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
     const textContent = generateBriefEmailText(headline, briefActions)
     const userEmail = await getUserEmail(userId)
 
+    console.log(`[MorningBrief] Sending email to ${userEmail} with ${briefActions.length} action cards`)
+
     await sendEmail(userId, {
       to: userEmail,
       subject: `Mila: ${briefActions.length} proposed actions`,
@@ -106,10 +118,12 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
       htmlBody: htmlContent,
     })
 
+    console.log(`[MorningBrief] Email sent successfully for user ${userId}`)
+
     await markActionsNotified(briefActions.map(b => b.action.id))
     return true
   } catch (error) {
-    console.error(`Failed to send morning brief for user ${userId}:`, error)
+    console.error(`[MorningBrief] FAILED for user ${userId}:`, error)
     return false
   }
 }
