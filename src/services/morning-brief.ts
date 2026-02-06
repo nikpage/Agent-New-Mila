@@ -53,5 +53,15 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
 
 export async function sendAllMorningBriefs() {
   const users = await getUsersWithEmailEnabled()
-  for (const user of users) await sendMorningBrief(user.id)
+  let sent = 0
+  let failed = 0
+  for (const user of users) {
+    const success = await sendMorningBrief(user.id)
+    if (success) {
+      sent++
+    } else {
+      failed++
+    }
+  }
+  return { sent, failed }
 }

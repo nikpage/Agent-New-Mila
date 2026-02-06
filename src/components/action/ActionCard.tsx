@@ -6,6 +6,12 @@ import { Badge } from '@/components/ui/Badge'
 import { Textarea } from '@/components/ui/Input'
 import type { ActionProposal, ConversationThread, CP, ConversationSummary } from '@/lib/supabase/types'
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function daysIgnored(createdAt: string): number {
+  return Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000))
+}
+
 const TYPE_LABEL: Record<string, string> = {
   REPLY: 'Odpověď', SCHEDULE: 'Schůzka', WAIT: 'Čekat', FILE: 'Úkol', DELEGATE: 'Delegovat', CALL: 'Hovor',
 }
@@ -82,6 +88,8 @@ export function ActionCard({ action, conversation, cp, recentMessage, participan
   const [loading, setLoading] = useState<string | null>(null)
 
   const summary = conversation.summary_json as ConversationSummary | null
+  const days = daysIgnored(action.created_at)
+  const adjValue = action.dollar_value * (action.offer_multiplier ?? 1)
   const intent = action.intent_cs || action.rationale_cs || action.rationale
   const urgencyLabel = action.urgency >= 8 ? 'TEĎ' : action.urgency >= 4 ? 'Zítra' : 'Později'
 
@@ -108,7 +116,8 @@ export function ActionCard({ action, conversation, cp, recentMessage, participan
 
           {editOpen && (
             <div className="mb-4 p-4 bg-background rounded-md border border-border">
-              <Textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Poznámky..." />
+              <p className="text-xs font-medium text-text-muted uppercase tracking-wide mb-2">Přidat poznámky nebo omezení</p>
+              <Textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="např. Nezapomeň zmínit, že bazén bude připraven pro jeho děti." />
               <div className="flex gap-2 mt-3">
                 <Button variant="primary" size="sm" onClick={run('edit-submit', () => onEdit(notes))} loading={loading === 'edit-submit'}>Odeslat</Button>
                 <Button variant="ghost" size="sm" onClick={() => setEditOpen(false)}>Zrušit</Button>
@@ -130,13 +139,48 @@ export function ActionCard({ action, conversation, cp, recentMessage, participan
       {detailOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-primary/20 backdrop-blur-sm" onClick={() => setDetailOpen(false)} />
-          <div className="card relative w-full max-w-lg p-6 space-y-5 animate-fade-in">
-            <div className="flex justify-between"><h3>Detaily</h3><button onClick={() => setDetailOpen(false)} className="text-2xl">&times;</button></div>
-            <div><p className="text-xs font-bold text-text-muted uppercase">Proč teď</p><p>{action.rationale_cs || action.rationale}</p></div>
+          <div className="card relative w-full max-w-lg p-6 space-y-5 animate-fade-in bg-surface">
+            <div className="flex justify-between items-center">
+              <h3 className="text-lg font-bold text-primary">Detaily</h3>
+              <button onClick={() => setDetailOpen(false)} className="text-text-muted hover:text-primary text-2xl leading-none">&times;</button>
+            </div>
+
+            <div>
+              <p className="text-xs font-bold text-text-muted uppercase tracking-wide mb-1.5">Proč teď</p>
+              <p className="text-sm text-primary">{action.rationale_cs || action.rationale}</p>
+            </div>
+
             {summary && (
-              <div><p className="text-xs font-bold text-text-muted uppercase">Přehled</p>
-                <p><span className="text-text-muted">Stav:</span> {summary.currentState}</p>
-                {summary.risks?.length > 0 && <p><span className="text-accent font-bold">Riziko:</span> {summary.risks.join(' · ')}</p>}
+              <div>
+                <p className="text-xs font-bold text-text-muted uppercase tracking-wide mb-1.5">Přehled konverzace</p>
+                <div className="space-y-1 text-sm">
+                  <p><span className="text-text-muted">Stav:</span> <span className="text-primary">{summary.currentState}</span></p>
+                  {summary.risks?.length > 0 && <p><span className="text-accent font-bold">Riziko:</span> <span className="text-primary">{summary.risks.join(' · ')}</span></p>}
+                  {summary.nextSteps?.length > 0 && <p><span className="text-green-600 font-bold">Další:</span> <span className="text-primary">{summary.nextSteps.join(' · ')}</span></p>}
+                </div>
               </div>
             )}
-            {recentMessage && <div><p className="text-xs font-bold text-text-muted uppercase">Poslední zpráva</p><p className="bg-background p-3 rounde
+
+            {recentMessage && (
+              <div>
+                <p className="text-xs font-bold text-text-muted uppercase tracking-wide mb-1.5">Poslední zpráva</p>
+                <p className="text-sm text-primary whitespace-pre-wrap bg-background p-3 rounded border border-border">{recentMessage}</p>
+              </div>
+            )}
+
+            <div>
+              <p className="text-xs font-bold text-text-muted uppercase tracking-wide mb-2">Hodnocení</p>
+              <div className="grid grid-cols-3 gap-x-4 gap-y-3 text-sm">
+                <div><p className="text-text-muted">Hodnota</p><p className="text-primary font-bold">{adjValue.toLocaleString()} Kč</p></div>
+                <div><p className="text-text-muted">Naléhavost</p><p className="text-primary font-bold">{action.urgency}/10</p></div>
+                <div><p className="text-text-muted">Bolest</p><p className="text-primary font-bold">{action.pain_factor}/10</p></div>
+                <div><p className="text-text-muted">Dní ignorováno</p><p className="text-primary font-bold">{days}</p></div>
+                <div><p className="text-text-muted">Váha</p><p className="text-primary font-bold">{action.weight ?? 0}</p></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
