@@ -11,6 +11,7 @@ import { getEventsForToday } from '@/lib/db/events'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefHeadline } from '@/lib/ai/gemini'
 import { generateActionToken } from '@/lib/auth/tokens'
+import { getActionCardEmailHtml } from '@/components/action/ActionCard'
 import type { ActionProposal, ConversationSummary } from '@/lib/supabase/types'
 
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:3000'
@@ -134,92 +135,36 @@ export async function sendAllMorningBriefs(): Promise<{ sent: number; failed: nu
 }
 
 /**
- * Generate HTML email content matching ActionCard.tsx structure
+ * Generate HTML email content — card rendering delegated to ActionCard.tsx
  */
 function generateBriefEmailHtml(
   headline: string,
   actions: BriefAction[],
   events: { title: string; time: string; location?: string }[]
 ): string {
-  const getUrgencyLabel = (urgency: number): string => {
-    if (urgency >= 8) return 'TEĎ'
-    if (urgency >= 4) return 'Zítra'
-    return 'Později'
-  }
-
-  const getActionTypeLabel = (type: string): string => {
-    const labels: Record<string, string> = {
-      REPLY: 'Odpověď',
-      SCHEDULE: 'Schůzka',
-      CALL: 'Hovor',
-      FILE: 'Úkol',
-      WAIT: 'Čekat',
-      DELEGATE: 'Delegovat'
-    }
-    return labels[type] || type
-  }
-
   return `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <style>
-    body { margin: 0; padding: 0; background-color: #0f1623; font-family: sans-serif; color: #e5e7eb; }
-    .container { max-width: 600px; margin: 0 auto; padding: 40px 20px; }
-    .card { background-color: #1a2744; border: 1px solid #2a3a54; border-radius: 8px; padding: 24px; margin-bottom: 24px; }
-    .card-header { display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px; }
-    .cp-info { flex: 1; }
-    .cp-name { font-size: 18px; font-weight: 600; color: #e5e7eb; }
-    .cp-role { font-size: 14px; font-weight: 400; color: #9ca3af; margin-left: 4px; }
-    .topic { font-size: 14px; color: #9ca3af; margin-top: 4px; }
-    .badges { display: flex; gap: 8px; }
-    .badge { display: inline-block; padding: 4px 10px; background-color: #2a3a54; color: #e5e7eb; font-size: 11px; font-weight: 600; border-radius: 4px; white-space: nowrap; }
-    .badge-urgency { background-color: #6b3d3d; }
-    .intent { font-size: 16px; line-height: 1.5; color: #e5e7eb; margin-bottom: 16px; }
-    .details-link { font-size: 14px; color: #9ca3af; text-decoration: none; display: block; margin-bottom: 24px; }
-    .cta-btn { display: inline-block; padding: 12px 24px; background-color: #6b3d3d; color: white; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 14px; margin-right: 8px; margin-bottom: 8px; }
-    .cta-btn-secondary { background-color: #243352; }
-    .cta-btn-outline { background-color: transparent; border: 1px solid #2a3a54; }
-  </style>
 </head>
-<body>
-  <div class="container">
+<body style="margin: 0; padding: 0; background-color: #0f1623; font-family: 'Inter', system-ui, sans-serif; color: #e5e7eb;">
+  <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
     <h1 style="font-size: 24px; margin-bottom: 8px;">Dobré ráno</h1>
     <p style="color: #9ca3af; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
 
-    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl }) => {
-      const intent = action.intent_cs || action.rationale_cs || action.rationale;
-      const actionTypeLabel = getActionTypeLabel(action.action_type);
-      const urgencyLabel = getUrgencyLabel(action.urgency);
-
-      return `
-      <div class="card">
-        <div class="card-header">
-          <div class="cp-info">
-            <div class="cp-name">
-              ${cpName}${cpRole ? `<span class="cp-role">· ${cpRole}</span>` : ''}
-            </div>
-            <div class="topic">${topic}</div>
-          </div>
-          <div class="badges">
-            <span class="badge">${actionTypeLabel}</span>
-            <span class="badge badge-urgency">${urgencyLabel}</span>
-          </div>
-        </div>
-
-        <div class="intent">${intent}</div>
-
-        <a href="${actionUrl}" class="details-link">▸ Detaily</a>
-
-        <div>
-          <a href="${actionUrl}" class="cta-btn">UDĚLAT</a>
-          <a href="${editUrl}" class="cta-btn cta-btn-secondary">UPRAVIT</a>
-          <a href="${actionUrl}" class="cta-btn cta-btn-outline">UDĚLÁM SÁM</a>
-        </div>
-      </div>
-      `
-    }).join('')}
+    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl }) =>
+      getActionCardEmailHtml({
+        cpName,
+        cpRole,
+        topic,
+        actionType: action.action_type,
+        urgency: action.urgency,
+        intent: action.intent_cs || action.rationale_cs || action.rationale,
+        actionUrl,
+        editUrl,
+      })
+    ).join('')}
   </div>
 </body>
 </html>`.trim()
