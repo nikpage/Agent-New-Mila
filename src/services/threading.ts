@@ -21,7 +21,7 @@ import type { Message, ConversationThread } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
 const MESSAGES_BEFORE_REBUILD = 5 // Rebuild summary after this many new messages
-const SIMILARITY_THRESHOLD = 0.85 // Cosine similarity threshold for conversation matching
+const SIMILARITY_THRESHOLD = 0.78 // Cosine similarity threshold for conversation matching
 
 /**
  * Compute cosine similarity between two embedding vectors.
@@ -82,21 +82,25 @@ export async function assignToConversation(
       const messageText = message.cleaned_text || message.raw_text || ''
       if (messageText.length > 0) {
         const messageEmbedding = await generateMessageEmbedding(messageText)
+        console.log(`[Threading] Step 2: Generated embedding for message ${message.id} (${messageEmbedding.length} dims)`)
+
         const candidates = await getConversationsWithEmbeddingsByCP(
           message.user_id,
           message.cp_id
         )
+        console.log(`[Threading] Step 2: Found ${candidates.length} candidate conversations for CP ${message.cp_id}`)
 
         let bestMatch: { id: string; similarity: number } | null = null
         for (const candidate of candidates) {
           const similarity = cosineSimilarity(messageEmbedding, candidate.embedding)
+          console.log(`[Threading] Step 2: Conversation ${candidate.id} similarity: ${similarity.toFixed(4)}`)
           if (similarity >= SIMILARITY_THRESHOLD && (!bestMatch || similarity > bestMatch.similarity)) {
             bestMatch = { id: candidate.id, similarity }
           }
         }
 
         if (bestMatch) {
-          console.log(`[Threading] Embedding match: conversation ${bestMatch.id} (similarity: ${bestMatch.similarity.toFixed(3)})`)
+          console.log(`[Threading] Step 2: MATCH — joining conversation ${bestMatch.id} (similarity: ${bestMatch.similarity.toFixed(3)})`)
           await updateMessage(message.id, { conversation_id: bestMatch.id })
           await incrementMessageCount(bestMatch.id)
 
@@ -110,10 +114,14 @@ export async function assignToConversation(
           }
 
           return (await getConversationById(bestMatch.id))!
+        } else {
+          console.log(`[Threading] Step 2: No match above threshold ${SIMILARITY_THRESHOLD} — creating new conversation`)
         }
+      } else {
+        console.log(`[Threading] Step 2: Skipped — message ${message.id} has no text content`)
       }
     } catch (error) {
-      console.error('[Threading] Embedding similarity check failed:', error)
+      console.error('[Threading] Step 2: Embedding similarity check failed:', error)
     }
   }
 
@@ -185,6 +193,18 @@ export async function rebuildConversationSummary(
     date: new Date(m.timestamp),
   }))
 
+  // Generate and save conversation embedding — independent of summary analysis
+  // so that embedding-based conversation matching works even if the AI summary fails.
+  try {
+    const messageTexts = formattedMessages.map(m => m.text)
+    const embedding = await generateConversationEmbedding(messageTexts)
+    await saveConversationEmbedding(conversation.id, embedding)
+    console.log(`[Threading] Saved embedding for conversation ${conversation.id} (${messageTexts.length} messages)`)
+  } catch (embeddingError) {
+    console.error(`[Threading] Failed to generate embedding for conversation ${conversation.id}:`, embeddingError)
+  }
+
+  // Generate AI summary — separate try/catch so embedding is not blocked by this
   try {
     const summary = await analyzeConversation(formattedMessages)
 
@@ -198,17 +218,8 @@ export async function rebuildConversationSummary(
       0.8, // confidence
       'AI analysis'
     )
-
-    // Generate and save conversation embedding
-    try {
-      const messageTexts = formattedMessages.map(m => m.text)
-      const embedding = await generateConversationEmbedding(messageTexts)
-      await saveConversationEmbedding(conversation.id, embedding)
-    } catch (embeddingError) {
-      console.error(`Failed to generate embedding for conversation ${conversation.id}:`, embeddingError)
-    }
   } catch (error) {
-    console.error('Failed to rebuild conversation summary:', error)
+    console.error('[Threading] Failed to rebuild conversation summary:', error)
   }
 }
 
