@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { ActionCard } from '@/components/action/ActionCard'
 import { SuccessOverlay } from '@/components/action/SuccessOverlay'
+import { theme } from '@/config/theme'
 import type { ActionProposal, ConversationThread, CP, Message } from '@/lib/supabase/types'
 
 interface ActionPageData {
@@ -106,25 +107,6 @@ function ActionContent() {
     })
   }
 
-  async function handleToDo() {
-    const response = await fetch(`/api/action/${actionId}/todo`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
-    })
-
-    if (!response.ok) {
-      const errorData = await response.json()
-      throw new Error(errorData.error || 'Failed to save to-do')
-    }
-
-    setSuccess({
-      show: true,
-      message: 'Uloženo do úkolů',
-      subMessage: 'Toto se znovu objeví, až to bude skóre vyžadovat.',
-    })
-  }
-
   async function handleBlacklist() {
     const response = await fetch(`/api/action/${actionId}/blacklist`, {
       method: 'POST',
@@ -146,19 +128,35 @@ function ActionContent() {
 
   if (loading) {
     return (
-      <div className="text-center">
-        <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-text-muted">Načítání akce...</p>
+      <div style={{ textAlign: 'center' }}>
+        <div className="animate-spin" style={{
+          width: '32px',
+          height: '32px',
+          border: `2px solid ${theme.colors.primary}`,
+          borderTopColor: 'transparent',
+          borderRadius: '50%',
+          margin: `0 auto ${theme.spacing.md} auto`
+        }} />
+        <p style={{ color: theme.colors.textMuted }}>Načítání akce...</p>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="text-center max-w-md">
-        <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+      <div style={{ textAlign: 'center', maxWidth: '448px' }}>
+        <div style={{
+          width: '64px',
+          height: '64px',
+          backgroundColor: theme.colors.errorBg,
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          margin: `0 auto ${theme.spacing.md} auto`
+        }}>
           <svg
-            className="w-8 h-8 text-red-400"
+            style={{ width: '32px', height: '32px', color: theme.colors.error }}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -171,23 +169,23 @@ function ActionContent() {
             />
           </svg>
         </div>
-        <h2 className="text-xl font-semibold mb-2">Chyba</h2>
-        <p className="text-text-muted">{error}</p>
+        <h2 style={{ fontSize: theme.typography.sizes.xl, fontWeight: theme.typography.weights.semibold, marginBottom: theme.spacing.sm, color: theme.colors.text }}>Chyba</h2>
+        <p style={{ color: theme.colors.textMuted }}>{error}</p>
       </div>
     )
   }
 
   if (!data) {
     return (
-      <div className="text-center">
-        <p className="text-text-muted">Akce nenalezena</p>
+      <div style={{ textAlign: 'center' }}>
+        <p style={{ color: theme.colors.textMuted }}>Akce nenalezena</p>
       </div>
     )
   }
 
   return (
     <>
-      <div className="w-full max-w-2xl animate-slide-up sm:animate-fade-in">
+      <div className="animate-slide-up" style={{ width: '100%', maxWidth: '672px' }}>
         <ActionCard
           action={data.action}
           conversation={data.conversation}
@@ -213,16 +211,23 @@ function ActionContent() {
 
 function LoadingFallback() {
   return (
-    <div className="text-center">
-      <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-      <p className="text-text-muted">Načítání...</p>
+    <div style={{ textAlign: 'center' }}>
+      <div className="animate-spin" style={{
+        width: '32px',
+        height: '32px',
+        border: `2px solid ${theme.colors.primary}`,
+        borderTopColor: 'transparent',
+        borderRadius: '50%',
+        margin: `0 auto ${theme.spacing.md} auto`
+      }} />
+      <p style={{ color: theme.colors.textMuted }}>Načítání...</p>
     </div>
   )
 }
 
 export default function ActionPage() {
   return (
-    <main className="min-h-screen flex items-center justify-center p-4">
+    <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: theme.spacing.md }}>
       <Suspense fallback={<LoadingFallback />}>
         <ActionContent />
       </Suspense>

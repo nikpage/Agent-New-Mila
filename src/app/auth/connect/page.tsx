@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Card, CardHeader, CardContent, CardFooter } from '@/components/ui/Card'
+import { theme } from '@/config/theme'
 
 export default function ConnectPage() {
   const [email, setEmail] = useState('')
@@ -43,16 +44,16 @@ export default function ConnectPage() {
   }
 
   return (
-    <main className="min-h-screen flex items-center justify-center p-4">
-      <Card className="max-w-md w-full">
+    <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: theme.spacing.md }}>
+      <Card style={{ maxWidth: '448px', width: '100%' }}>
         <CardHeader>
-          <h1 className="text-xl font-semibold">Connect Your Google Account</h1>
-          <p className="text-sm text-text-muted mt-1">
+          <h1 style={{ fontSize: theme.typography.sizes.xl, fontWeight: theme.typography.weights.semibold, color: theme.colors.text }}>Connect Your Google Account</h1>
+          <p style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, marginTop: theme.spacing.xs }}>
             Mila needs access to your Gmail and Calendar to manage your communications.
           </p>
         </CardHeader>
 
-        <CardContent className="space-y-4">
+        <CardContent style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
           <Input
             label="Email Address"
             type="email"
@@ -62,9 +63,9 @@ export default function ConnectPage() {
             error={error || undefined}
           />
 
-          <div className="text-sm text-text-muted space-y-2">
-            <p>Mila will be able to:</p>
-            <ul className="list-disc list-inside space-y-1 ml-2">
+          <div style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted }}>
+            <p style={{ marginBottom: theme.spacing.xs }}>Mila will be able to:</p>
+            <ul style={{ listStyleType: 'disc', listStylePosition: 'inside', paddingLeft: theme.spacing.sm }}>
               <li>Read your emails to understand conversations</li>
               <li>Send emails on your behalf (only when you approve)</li>
               <li>Read your calendar to check availability</li>
@@ -78,7 +79,7 @@ export default function ConnectPage() {
             variant="primary"
             onClick={handleConnect}
             loading={loading}
-            className="w-full"
+            style={{ width: '100%' }}
           >
             Connect with Google
           </Button>

@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Input, Textarea } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
+import { theme } from '@/config/theme'
 import type { ActionProposal } from '@/lib/supabase/types'
 
 export interface EditFormProps {
@@ -29,7 +30,7 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
       {/* Persistent field: General notes */}
       <Textarea
         label="Obecné poznámky nebo omezení"
@@ -49,7 +50,7 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
         />
       ))}
 
-      <div className="flex gap-2 pt-2">
+      <div style={{ display: 'flex', gap: theme.spacing.sm, paddingTop: theme.spacing.sm }}>
         <Button
           type="submit"
           variant="primary"

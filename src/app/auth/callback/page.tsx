@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { theme } from '@/config/theme'
 
 function CallbackContent() {
   const searchParams = useSearchParams()
@@ -52,20 +53,36 @@ function CallbackContent() {
   }
 
   return (
-    <Card className="max-w-md w-full">
-      <CardContent className="text-center py-8">
+    <Card style={{ maxWidth: '448px', width: '100%' }}>
+      <CardContent style={{ textAlign: 'center', padding: theme.spacing.xl }}>
         {status === 'loading' && (
           <>
-            <div className="w-12 h-12 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-            <p className="text-text-muted">Connecting your account...</p>
+            <div className="animate-spin" style={{
+              width: '48px',
+              height: '48px',
+              border: `2px solid ${theme.colors.primary}`,
+              borderTopColor: 'transparent',
+              borderRadius: '50%',
+              margin: `0 auto ${theme.spacing.md} auto`
+            }} />
+            <p style={{ color: theme.colors.textMuted }}>Connecting your account...</p>
           </>
         )}
 
         {status === 'success' && (
           <>
-            <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+            <div style={{
+              width: '64px',
+              height: '64px',
+              backgroundColor: theme.colors.successBg,
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: `0 auto ${theme.spacing.md} auto`
+            }}>
               <svg
-                className="w-8 h-8 text-green-400"
+                style={{ width: '32px', height: '32px', color: theme.colors.success }}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -78,9 +95,9 @@ function CallbackContent() {
                 />
               </svg>
             </div>
-            <h2 className="text-xl font-semibold mb-2">Connected!</h2>
-            <p className="text-text-muted mb-6">{message}</p>
-            <p className="text-sm text-text-muted">
+            <h2 style={{ fontSize: theme.typography.sizes.xl, fontWeight: theme.typography.weights.semibold, marginBottom: theme.spacing.sm, color: theme.colors.text }}>Connected!</h2>
+            <p style={{ color: theme.colors.textMuted, marginBottom: theme.spacing.lg }}>{message}</p>
+            <p style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted }}>
               Mila is now watching your inbox. You can close this window.
             </p>
           </>
@@ -88,9 +105,18 @@ function CallbackContent() {
 
         {status === 'error' && (
           <>
-            <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+            <div style={{
+              width: '64px',
+              height: '64px',
+              backgroundColor: theme.colors.errorBg,
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: `0 auto ${theme.spacing.md} auto`
+            }}>
               <svg
-                className="w-8 h-8 text-red-400"
+                style={{ width: '32px', height: '32px', color: theme.colors.error }}
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -103,8 +129,8 @@ function CallbackContent() {
                 />
               </svg>
             </div>
-            <h2 className="text-xl font-semibold mb-2">Connection Failed</h2>
-            <p className="text-text-muted mb-6">{message}</p>
+            <h2 style={{ fontSize: theme.typography.sizes.xl, fontWeight: theme.typography.weights.semibold, marginBottom: theme.spacing.sm, color: theme.colors.text }}>Connection Failed</h2>
+            <p style={{ color: theme.colors.textMuted, marginBottom: theme.spacing.lg }}>{message}</p>
             <Button variant="primary" onClick={() => window.location.href = '/auth/connect'}>
               Try Again
             </Button>
@@ -117,10 +143,17 @@ function CallbackContent() {
 
 function LoadingFallback() {
   return (
-    <Card className="max-w-md w-full">
-      <CardContent className="text-center py-8">
-        <div className="w-12 h-12 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-text-muted">Loading...</p>
+    <Card style={{ maxWidth: '448px', width: '100%' }}>
+      <CardContent style={{ textAlign: 'center', padding: theme.spacing.xl }}>
+        <div className="animate-spin" style={{
+          width: '48px',
+          height: '48px',
+          border: `2px solid ${theme.colors.primary}`,
+          borderTopColor: 'transparent',
+          borderRadius: '50%',
+          margin: `0 auto ${theme.spacing.md} auto`
+        }} />
+        <p style={{ color: theme.colors.textMuted }}>Loading...</p>
       </CardContent>
     </Card>
   )
@@ -128,7 +161,7 @@ function LoadingFallback() {
 
 export default function CallbackPage() {
   return (
-    <main className="min-h-screen flex items-center justify-center p-4">
+    <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: theme.spacing.md }}>
       <Suspense fallback={<LoadingFallback />}>
         <CallbackContent />
       </Suspense>

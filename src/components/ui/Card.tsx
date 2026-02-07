@@ -1,6 +1,7 @@
 'use client'
 
-import { forwardRef, HTMLAttributes, ReactNode } from 'react'
+import { forwardRef, HTMLAttributes, ReactNode, useState } from 'react'
+import { theme } from '@/config/theme'
 
 export interface CardProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode
@@ -8,11 +9,25 @@ export interface CardProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 export const Card = forwardRef<HTMLDivElement, CardProps>(
-  ({ children, hover = false, className = '', ...props }, ref) => {
+  ({ children, hover = false, style, ...props }, ref) => {
+    const [isHovered, setIsHovered] = useState(false)
+
+    const baseStyle = {
+      backgroundColor: theme.colors.surface,
+      borderRadius: theme.borderRadius.lg,
+      border: `1px solid ${theme.colors.border}`,
+      boxShadow: isHovered && hover ? theme.shadows.hover : theme.shadows.card,
+      transition: 'all 0.2s ease',
+      cursor: hover ? 'pointer' : 'default',
+      ...style,
+    }
+
     return (
       <div
         ref={ref}
-        className={`card ${hover ? 'card-hover cursor-pointer' : ''} ${className}`}
+        style={baseStyle}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
         {...props}
       >
         {children}
@@ -28,11 +43,15 @@ export interface CardHeaderProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 export const CardHeader = forwardRef<HTMLDivElement, CardHeaderProps>(
-  ({ children, className = '', ...props }, ref) => {
+  ({ children, style, ...props }, ref) => {
     return (
       <div
         ref={ref}
-        className={`px-6 py-4 border-b border-border ${className}`}
+        style={{
+          padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+          borderBottom: `1px solid ${theme.colors.border}`,
+          ...style
+        }}
         {...props}
       >
         {children}
@@ -48,9 +67,16 @@ export interface CardContentProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 export const CardContent = forwardRef<HTMLDivElement, CardContentProps>(
-  ({ children, className = '', ...props }, ref) => {
+  ({ children, style, ...props }, ref) => {
     return (
-      <div ref={ref} className={`px-6 py-4 ${className}`} {...props}>
+      <div
+        ref={ref}
+        style={{
+          padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+          ...style
+        }}
+        {...props}
+      >
         {children}
       </div>
     )
@@ -64,11 +90,15 @@ export interface CardFooterProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 export const CardFooter = forwardRef<HTMLDivElement, CardFooterProps>(
-  ({ children, className = '', ...props }, ref) => {
+  ({ children, style, ...props }, ref) => {
     return (
       <div
         ref={ref}
-        className={`px-6 py-4 border-t border-border ${className}`}
+        style={{
+          padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+          borderTop: `1px solid ${theme.colors.border}`,
+          ...style
+        }}
         {...props}
       >
         {children}

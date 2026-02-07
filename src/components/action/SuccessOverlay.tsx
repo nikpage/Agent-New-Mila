@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
+import { theme } from '@/config/theme'
 
 interface SuccessOverlayProps {
   message: string
@@ -32,11 +33,9 @@ export function SuccessOverlay({
   }, [countdown])
 
   const handleClose = () => {
-    // Try to close the window/tab
     try {
       window.close()
     } catch {
-      // If we can't close, redirect to a blank page or call onClose
       if (onClose) {
         onClose()
       }
@@ -44,12 +43,32 @@ export function SuccessOverlay({
   }
 
   return (
-    <div className="fixed inset-0 bg-background/95 flex items-center justify-center z-50 animate-fade-in">
-      <div className="text-center p-8 max-w-md">
+    <div
+      className="animate-fade-in"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: theme.colors.background,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 50
+      }}
+    >
+      <div style={{ textAlign: 'center', padding: theme.spacing.xl, maxWidth: '448px' }}>
         {/* Success icon */}
-        <div className="w-20 h-20 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-6">
+        <div style={{
+          width: '80px',
+          height: '80px',
+          backgroundColor: theme.colors.successBg,
+          borderRadius: theme.borderRadius.full,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          margin: `0 auto ${theme.spacing.lg} auto`
+        }}>
           <svg
-            className="w-10 h-10 text-green-400"
+            style={{ width: '40px', height: '40px', color: theme.colors.success }}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -63,13 +82,15 @@ export function SuccessOverlay({
           </svg>
         </div>
 
-        <h2 className="text-2xl font-semibold mb-2">{message}</h2>
+        <h2 style={{ fontSize: theme.typography.sizes.xxl, fontWeight: theme.typography.weights.semibold, marginBottom: theme.spacing.sm, color: theme.colors.text }}>
+          {message}
+        </h2>
 
         {subMessage && (
-          <p className="text-text-muted mb-6">{subMessage}</p>
+          <p style={{ color: theme.colors.textMuted, marginBottom: theme.spacing.lg }}>{subMessage}</p>
         )}
 
-        <p className="text-sm text-text-muted mb-4">
+        <p style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, marginBottom: theme.spacing.md }}>
           This window will close in {countdown} seconds
         </p>
 

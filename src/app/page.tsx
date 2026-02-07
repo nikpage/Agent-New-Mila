@@ -4,13 +4,25 @@
  * This page shows status and provides OAuth setup.
  */
 
+import { Card } from '@/components/ui/Card'
+import { theme } from '@/config/theme'
+
 export default function HomePage() {
   return (
-    <main className="min-h-screen flex items-center justify-center p-4">
-      <div className="card max-w-md w-full p-8 text-center">
-        <div className="w-16 h-16 bg-accent/20 rounded-full flex items-center justify-center mx-auto mb-6">
+    <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: theme.spacing.md }}>
+      <Card style={{ maxWidth: '448px', width: '100%', padding: theme.spacing.xl, textAlign: 'center' }}>
+        <div style={{
+          width: '64px',
+          height: '64px',
+          backgroundColor: '#dbeafe',
+          borderRadius: theme.borderRadius.full,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          margin: `0 auto ${theme.spacing.lg} auto`
+        }}>
           <svg
-            className="w-8 h-8 text-accent-light"
+            style={{ width: '32px', height: '32px', color: theme.colors.primary }}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -24,31 +36,54 @@ export default function HomePage() {
           </svg>
         </div>
 
-        <h1 className="text-2xl font-semibold mb-2">Mila</h1>
-        <p className="text-text-muted mb-8">
+        <h1 style={{ fontSize: theme.typography.sizes.xxl, fontWeight: theme.typography.weights.semibold, marginBottom: theme.spacing.sm, color: theme.colors.text }}>Mila</h1>
+        <p style={{ color: theme.colors.textMuted, marginBottom: theme.spacing.xl }}>
           Your AI-powered executive assistant
         </p>
 
-        <div className="space-y-4">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
           <a
             href="/auth/connect"
-            className="btn-primary w-full block"
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+              backgroundColor: theme.colors.primary,
+              color: theme.colors.textLight,
+              borderRadius: theme.borderRadius.md,
+              fontWeight: theme.typography.weights.medium,
+              textAlign: 'center',
+              textDecoration: 'none',
+              transition: 'background-color 0.2s'
+            }}
           >
             Connect Google Account
           </a>
 
           <a
             href="/api/health"
-            className="btn-outline w-full block"
+            style={{
+              display: 'block',
+              width: '100%',
+              padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.colors.border}`,
+              color: theme.colors.text,
+              borderRadius: theme.borderRadius.md,
+              fontWeight: theme.typography.weights.medium,
+              textAlign: 'center',
+              textDecoration: 'none',
+              transition: 'background-color 0.2s'
+            }}
           >
             Check System Status
           </a>
         </div>
 
-        <p className="text-text-muted text-sm mt-8">
+        <p style={{ color: theme.colors.textMuted, fontSize: theme.typography.sizes.sm, marginTop: theme.spacing.xl }}>
           Mila manages your decisions, not your emails.
         </p>
-      </div>
+      </Card>
     </main>
   )
 }

@@ -12,6 +12,7 @@ import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefHeadline } from '@/lib/ai/gemini'
 import { generateActionToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template';
+import { theme } from '@/config/theme'
 import type { ActionProposal, ConversationSummary } from '@/lib/supabase/types'
 
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:3000'
@@ -162,10 +163,10 @@ function generateBriefEmailHtml(
 <head>
   <meta charset="utf-8">
 </head>
-<body style="margin: 0; padding: 0; background-color: #0f1623; font-family: 'Inter', system-ui, sans-serif; color: #e5e7eb;">
+<body style="margin: 0; padding: 0; background-color: ${theme.colors.background}; font-family: 'Inter', system-ui, sans-serif; color: ${theme.colors.text};">
   <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-    <h1 style="font-size: 24px; margin-bottom: 8px;">Dobré ráno</h1>
-    <p style="color: #9ca3af; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
+    <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">Dobré ráno</h1>
+    <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
 
     ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl }) =>
       getActionCardEmailHtml({

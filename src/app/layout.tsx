@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
+import { theme } from '@/config/theme'
 
 export const metadata: Metadata = {
   title: 'Mila - Executive Assistant',
@@ -11,7 +12,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
-  themeColor: '#0f1623',
+  themeColor: theme.colors.background,
 }
 
 export default function RootLayout({

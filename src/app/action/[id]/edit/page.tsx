@@ -3,6 +3,8 @@
 import { Suspense, useEffect, useState } from 'react'
 import { useParams, useSearchParams, useRouter } from 'next/navigation'
 import { EditForm } from '@/components/action/EditForm'
+import { Card } from '@/components/ui/Card'
+import { theme } from '@/config/theme'
 import type { ActionProposal, ConversationThread, CP } from '@/lib/supabase/types'
 
 interface ActionPageData {
@@ -70,19 +72,35 @@ function EditContent() {
 
   if (loading) {
     return (
-      <div className="text-center">
-        <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-        <p className="text-text-muted">Načítání akce...</p>
+      <div style={{ textAlign: 'center' }}>
+        <div className="animate-spin" style={{
+          width: '32px',
+          height: '32px',
+          border: `2px solid ${theme.colors.primary}`,
+          borderTopColor: 'transparent',
+          borderRadius: '50%',
+          margin: `0 auto ${theme.spacing.md} auto`
+        }} />
+        <p style={{ color: theme.colors.textMuted }}>Načítání akce...</p>
       </div>
     )
   }
 
   if (error) {
     return (
-      <div className="text-center max-w-md">
-        <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
+      <div style={{ textAlign: 'center', maxWidth: '448px' }}>
+        <div style={{
+          width: '64px',
+          height: '64px',
+          backgroundColor: theme.colors.errorBg,
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          margin: `0 auto ${theme.spacing.md} auto`
+        }}>
           <svg
-            className="w-8 h-8 text-red-400"
+            style={{ width: '32px', height: '32px', color: theme.colors.error }}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -95,26 +113,26 @@ function EditContent() {
             />
           </svg>
         </div>
-        <h2 className="text-xl font-semibold mb-2">Chyba</h2>
-        <p className="text-text-muted">{error}</p>
+        <h2 style={{ fontSize: theme.typography.sizes.xl, fontWeight: theme.typography.weights.semibold, marginBottom: theme.spacing.sm, color: theme.colors.text }}>Chyba</h2>
+        <p style={{ color: theme.colors.textMuted }}>{error}</p>
       </div>
     )
   }
 
   if (!data) {
     return (
-      <div className="text-center">
-        <p className="text-text-muted">Akce nenalezena</p>
+      <div style={{ textAlign: 'center' }}>
+        <p style={{ color: theme.colors.textMuted }}>Akce nenalezena</p>
       </div>
     )
   }
 
   return (
-    <div className="card w-full max-w-2xl mx-auto p-6">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-text mb-2">Upravit akci</h1>
-        <div className="text-sm text-text-muted">
-          <p className="font-semibold">{data.cp.name || data.cp.primary_identifier}</p>
+    <Card style={{ width: '100%', maxWidth: '672px', margin: '0 auto', padding: theme.spacing.lg }}>
+      <div style={{ marginBottom: theme.spacing.lg }}>
+        <h1 style={{ fontSize: theme.typography.sizes.xxl, fontWeight: theme.typography.weights.bold, color: theme.colors.text, marginBottom: theme.spacing.xs }}>Upravit akci</h1>
+        <div style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted }}>
+          <p style={{ fontWeight: theme.typography.weights.semibold }}>{data.cp.name || data.cp.primary_identifier}</p>
           <p>{data.conversation.topic}</p>
         </div>
       </div>
@@ -124,22 +142,29 @@ function EditContent() {
         onSubmit={handleSubmit}
         onCancel={handleCancel}
       />
-    </div>
+    </Card>
   )
 }
 
 function LoadingFallback() {
   return (
-    <div className="text-center">
-      <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-      <p className="text-text-muted">Načítání...</p>
+    <div style={{ textAlign: 'center' }}>
+      <div className="animate-spin" style={{
+        width: '32px',
+        height: '32px',
+        border: `2px solid ${theme.colors.primary}`,
+        borderTopColor: 'transparent',
+        borderRadius: '50%',
+        margin: `0 auto ${theme.spacing.md} auto`
+      }} />
+      <p style={{ color: theme.colors.textMuted }}>Načítání...</p>
     </div>
   )
 }
 
 export default function EditPage() {
   return (
-    <main className="min-h-screen flex items-center justify-center p-4">
+    <main style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: theme.spacing.md }}>
       <Suspense fallback={<LoadingFallback />}>
         <EditContent />
       </Suspense>
