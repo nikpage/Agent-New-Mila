@@ -11,7 +11,7 @@ import { getEventsForToday } from '@/lib/db/events'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefHeadline } from '@/lib/ai/gemini'
 import { generateActionToken } from '@/lib/auth/tokens'
-import { getActionCardEmailHtml } from '@/components/action/action-card-template'
+import { getActionCardEmailHtml } from '../components/action/action-card-template';
 import type { ActionProposal, ConversationSummary } from '@/lib/supabase/types'
 
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:3000'
