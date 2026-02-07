@@ -14,14 +14,15 @@ import {
 } from '@/lib/db/conversations'
 import { updateMessage, getMessageById } from '@/lib/db/messages'
 import { getCPById } from '@/lib/db/counterparties'
-import { analyzeConversation, extractTopic } from '@/lib/ai/gemini'
+import { analyzeConversation, extractTopic, shouldJoinConversation } from '@/lib/ai/gemini'
 import { generateConversationEmbedding, generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveConversationEmbedding, getConversationsWithEmbeddingsByCP } from '@/lib/db/embeddings'
 import type { Message, ConversationThread } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
 const MESSAGES_BEFORE_REBUILD = 5 // Rebuild summary after this many new messages
-const SIMILARITY_THRESHOLD = 0.78 // Cosine similarity threshold for conversation matching
+const SIMILARITY_THRESHOLD = 0.78 // Cosine similarity — auto-join above this
+const TIEBREAKER_THRESHOLD = 0.55 // Cosine similarity — ask AI to decide between this and SIMILARITY_THRESHOLD
 
 /**
  * Compute cosine similarity between two embedding vectors.
@@ -90,32 +91,70 @@ export async function assignToConversation(
         )
         console.log(`[Threading] Step 2: Found ${candidates.length} candidate conversations for CP ${message.cp_id}`)
 
-        let bestMatch: { id: string; similarity: number } | null = null
+        // Find the single best candidate by similarity
+        let bestCandidate: { id: string; similarity: number } | null = null
         for (const candidate of candidates) {
           const similarity = cosineSimilarity(messageEmbedding, candidate.embedding)
           console.log(`[Threading] Step 2: Conversation ${candidate.id} similarity: ${similarity.toFixed(4)}`)
-          if (similarity >= SIMILARITY_THRESHOLD && (!bestMatch || similarity > bestMatch.similarity)) {
-            bestMatch = { id: candidate.id, similarity }
+          if (!bestCandidate || similarity > bestCandidate.similarity) {
+            bestCandidate = { id: candidate.id, similarity }
           }
         }
 
-        if (bestMatch) {
-          console.log(`[Threading] Step 2: MATCH — joining conversation ${bestMatch.id} (similarity: ${bestMatch.similarity.toFixed(3)})`)
-          await updateMessage(message.id, { conversation_id: bestMatch.id })
-          await incrementMessageCount(bestMatch.id)
+        // Two-tier decision: auto-join if high confidence, ask AI if uncertain
+        let shouldJoin = false
 
-          if (message.cp_id) {
-            await addParticipant(bestMatch.id, message.cp_id)
+        if (bestCandidate && bestCandidate.similarity >= SIMILARITY_THRESHOLD) {
+          // Tier 1: High confidence — auto-join
+          shouldJoin = true
+          console.log(`[Threading] Step 2: AUTO-JOIN — similarity ${bestCandidate.similarity.toFixed(3)} >= ${SIMILARITY_THRESHOLD}`)
+
+        } else if (bestCandidate && bestCandidate.similarity >= TIEBREAKER_THRESHOLD) {
+          // Tier 2: Uncertain range — ask shouldJoinConversation AI tiebreaker
+          console.log(`[Threading] Step 2: TIEBREAKER range (${bestCandidate.similarity.toFixed(3)}) — asking AI for conversation ${bestCandidate.id}`)
+          try {
+            const candidateConversation = await getConversationById(bestCandidate.id)
+            const cp = await getCPById(message.cp_id)
+            const cpName = cp?.name || cp?.primary_identifier || 'Unknown'
+
+            if (candidateConversation) {
+              shouldJoin = await shouldJoinConversation(
+                {
+                  subject: '',
+                  body: messageText,
+                  from: cpName,
+                },
+                {
+                  topic: candidateConversation.topic || '',
+                  summary: candidateConversation.summary_text || '',
+                  participants: [cpName],
+                }
+              )
+              console.log(`[Threading] Step 2: AI tiebreaker verdict: ${shouldJoin ? 'JOIN' : 'NEW CONVERSATION'}`)
+            }
+          } catch (tiebreakError) {
+            console.error('[Threading] Step 2: AI tiebreaker failed:', tiebreakError)
           }
 
-          const updatedConversation = await getConversationById(bestMatch.id)
+        } else {
+          console.log(`[Threading] Step 2: ${bestCandidate ? `Below tiebreaker threshold (${bestCandidate.similarity.toFixed(3)} < ${TIEBREAKER_THRESHOLD})` : 'No candidates'} — creating new conversation`)
+        }
+
+        if (shouldJoin && bestCandidate) {
+          console.log(`[Threading] Step 2: MATCH — joining conversation ${bestCandidate.id} (similarity: ${bestCandidate.similarity.toFixed(3)})`)
+          await updateMessage(message.id, { conversation_id: bestCandidate.id })
+          await incrementMessageCount(bestCandidate.id)
+
+          if (message.cp_id) {
+            await addParticipant(bestCandidate.id, message.cp_id)
+          }
+
+          const updatedConversation = await getConversationById(bestCandidate.id)
           if (updatedConversation && shouldRebuildSummary(updatedConversation)) {
             await rebuildConversationSummary(updatedConversation)
           }
 
-          return (await getConversationById(bestMatch.id))!
-        } else {
-          console.log(`[Threading] Step 2: No match above threshold ${SIMILARITY_THRESHOLD} — creating new conversation`)
+          return (await getConversationById(bestCandidate.id))!
         }
       } else {
         console.log(`[Threading] Step 2: Skipped — message ${message.id} has no text content`)
