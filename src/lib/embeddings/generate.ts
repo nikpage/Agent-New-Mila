@@ -11,31 +11,37 @@ function getEmbeddingClient(): GoogleGenerativeAI {
   return genAI
 }
 
-/**
- * Generate embedding for text
- * Model: text-embedding-004
- * Dimensions: 768
- * Purpose: semantic-search
- */
+export const embeddings = {
+  model: 'models/gemini-embedding-001',
+  dim: 768,
+  purpose: 'semantic-search',
+  language: 'multilingual',
+}
+
 export async function generateEmbedding(text: string): Promise<number[]> {
   const client = getEmbeddingClient()
-  const model = client.getGenerativeModel({ model: 'text-embedding-004' })
-
-  const result = await model.embedContent(text)
+  const model = client.getGenerativeModel({
+    model: embeddings.model,
+  })
+  const result = await model.embedContent({
+    content: {
+      role: "user",
+      parts: [{ text }],
+    },
+    outputDimensionality: embeddings.dim,
+  } as any)
   return result.embedding.values
 }
 
-/**
- * Generate embedding for a message
- */
-export async function generateMessageEmbedding(messageText: string): Promise<number[]> {
+export async function generateMessageEmbedding(
+  messageText: string
+): Promise<number[]> {
   return generateEmbedding(messageText)
 }
 
-/**
- * Generate embedding for a conversation
- */
-export async function generateConversationEmbedding(messages: string[]): Promise<number[]> {
+export async function generateConversationEmbedding(
+  messages: string[]
+): Promise<number[]> {
   const conversationText = messages.join('\n')
   return generateEmbedding(conversationText)
 }
