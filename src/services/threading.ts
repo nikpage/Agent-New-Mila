@@ -15,12 +15,31 @@ import {
 import { updateMessage, getMessageById } from '@/lib/db/messages'
 import { getCPById } from '@/lib/db/counterparties'
 import { analyzeConversation, extractTopic } from '@/lib/ai/gemini'
-import { generateConversationEmbedding } from '@/lib/embeddings/generate'
-import { saveConversationEmbedding } from '@/lib/db/embeddings'
+import { generateConversationEmbedding, generateMessageEmbedding } from '@/lib/embeddings/generate'
+import { saveConversationEmbedding, getConversationsWithEmbeddingsByCP } from '@/lib/db/embeddings'
 import type { Message, ConversationThread } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
 const MESSAGES_BEFORE_REBUILD = 5 // Rebuild summary after this many new messages
+const SIMILARITY_THRESHOLD = 0.85 // Cosine similarity threshold for conversation matching
+
+/**
+ * Compute cosine similarity between two embedding vectors.
+ * Returns a value between -1 and 1, where 1 = identical.
+ */
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length) return 0
+  let dotProduct = 0
+  let normA = 0
+  let normB = 0
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i]
+    normA += a[i] * a[i]
+    normB += b[i] * b[i]
+  }
+  if (normA === 0 || normB === 0) return 0
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB))
+}
 
 /**
  * Assign a message to a conversation (existing or new)
@@ -55,7 +74,50 @@ export async function assignToConversation(
     }
   }
 
-  // Create a new conversation
+  // Step 2: Try embedding similarity — only match conversations where the same CP
+  // is already a participant. A new CP with similar content gets a new conversation;
+  // new CPs join existing conversations only via Gmail thread ID (CC, reply-all).
+  if (message.cp_id) {
+    try {
+      const messageText = message.cleaned_text || message.raw_text || ''
+      if (messageText.length > 0) {
+        const messageEmbedding = await generateMessageEmbedding(messageText)
+        const candidates = await getConversationsWithEmbeddingsByCP(
+          message.user_id,
+          message.cp_id
+        )
+
+        let bestMatch: { id: string; similarity: number } | null = null
+        for (const candidate of candidates) {
+          const similarity = cosineSimilarity(messageEmbedding, candidate.embedding)
+          if (similarity >= SIMILARITY_THRESHOLD && (!bestMatch || similarity > bestMatch.similarity)) {
+            bestMatch = { id: candidate.id, similarity }
+          }
+        }
+
+        if (bestMatch) {
+          console.log(`[Threading] Embedding match: conversation ${bestMatch.id} (similarity: ${bestMatch.similarity.toFixed(3)})`)
+          await updateMessage(message.id, { conversation_id: bestMatch.id })
+          await incrementMessageCount(bestMatch.id)
+
+          if (message.cp_id) {
+            await addParticipant(bestMatch.id, message.cp_id)
+          }
+
+          const updatedConversation = await getConversationById(bestMatch.id)
+          if (updatedConversation && shouldRebuildSummary(updatedConversation)) {
+            await rebuildConversationSummary(updatedConversation)
+          }
+
+          return (await getConversationById(bestMatch.id))!
+        }
+      }
+    } catch (error) {
+      console.error('[Threading] Embedding similarity check failed:', error)
+    }
+  }
+
+  // Step 3: Create a new conversation — no external thread match, no embedding match
   const topic = await extractTopicFromMessage(message)
 
   const conversation = await createConversation({
