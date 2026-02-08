@@ -76,13 +76,13 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
                 {formatSlot(slot, i)}
               </p>
             ))}
-            {payload?.location && (
+            {typeof payload?.location === 'string' && payload.location && (
               <p style={{
                 fontSize: theme.typography.sizes.sm,
                 color: theme.colors.textMuted,
                 marginTop: theme.spacing.sm,
               }}>
-                Místo: {payload.location as string}
+                Místo: {payload.location}
               </p>
             )}
           </div>
