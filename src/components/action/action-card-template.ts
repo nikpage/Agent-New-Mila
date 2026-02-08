@@ -36,16 +36,22 @@ export interface ActionCardEmailParams {
   intent: string
   actionUrl: string
   editUrl: string
+  needsInput?: boolean
 }
 
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
-  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl } = params
+  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, needsInput } = params
 
   const typeLabel = TYPE_LABEL[actionType] || actionType
   const typeVariant = TYPE_VARIANT[actionType] || 'default'
   const typeBadge = BADGE_EMAIL_COLORS[typeVariant] || BADGE_EMAIL_COLORS.default
   const urgencyBadge = BADGE_EMAIL_COLORS.accent
   const urgencyLabel = urgency >= 8 ? 'TEĎ' : urgency >= 4 ? 'Zítra' : 'Později'
+
+  // UDĚLAT button: grayed out when user needs to fill in info first
+  const doItButton = needsInput
+    ? `<span style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.secondary}; color: ${theme.colors.textMuted}; border-radius: 6px; font-weight: 500; font-size: 14px; margin-right: 8px; opacity: 0.5; cursor: not-allowed;">UDĚLAT</span>`
+    : `<a href="${actionUrl}" style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.primary}; color: white; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none; margin-right: 8px;">UDĚLAT</a>`
 
   return `
     <div style="background-color: ${theme.colors.surface}; border: 1px solid ${theme.colors.border}; border-radius: 8px; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1); margin-bottom: 24px; font-family: 'Inter', system-ui, sans-serif;">
@@ -82,7 +88,7 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
         <table width="100%" cellpadding="0" cellspacing="0" border="0">
           <tr>
             <td>
-              <a href="${actionUrl}" style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.primary}; color: white; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none; margin-right: 8px;">UDĚLAT</a>
+              ${doItButton}
               <a href="${editUrl}" style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.secondary}; color: ${theme.colors.text}; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none; margin-right: 8px;">UPRAVIT</a>
               <a href="${actionUrl}" style="display: inline-block; padding: 7px 15px; background-color: transparent; border: 1px solid ${theme.colors.border}; color: ${theme.colors.text}; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none;">UDĚLÁM SÁM</a>
             </td>

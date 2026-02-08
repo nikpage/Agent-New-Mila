@@ -127,8 +127,26 @@ export async function POST(
         const formatTime = (date: Date) => date.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
         const formatDate = (date: Date) => date.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
 
-        // Format ALL blocked slots for the email to CP
-        const formattedSlots = blockedSlots.map((s, i) => {
+        // Filter slots based on user's slot selection (from UPRAVIT page)
+        const slotSelection = (payload?.slotSelection as string) || ''
+        let slotsToSend = blockedSlots
+
+        if (slotSelection && slotSelection.toLowerCase() !== 'vše' && slotSelection.toLowerCase() !== 'all') {
+          // Parse selected slot numbers (e.g., "1", "1,3", "2")
+          const selectedNumbers = slotSelection
+            .split(/[,\s]+/)
+            .map(s => parseInt(s.trim(), 10))
+            .filter(n => !isNaN(n) && n >= 1 && n <= blockedSlots.length)
+
+          if (selectedNumbers.length > 0) {
+            slotsToSend = selectedNumbers.map(n => blockedSlots[n - 1])
+          }
+          // If no valid numbers parsed, it might be a custom reschedule instruction
+          // In that case, include the instruction in userNotes and send all slots
+        }
+
+        // Format selected slots for the email to CP
+        const formattedSlots = slotsToSend.map((s, i) => {
           const start = new Date(s.start)
           const end = new Date(s.end)
           return `${i + 1}. ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}`
@@ -138,7 +156,7 @@ export async function POST(
         const slotsText = formattedSlots.join('\n')
         const userNotes = (payload?.userNotes as string) || ''
 
-        // Generate email to CP with ALL time options - CP picks one
+        // Generate email to CP with selected time options - CP picks one
         const conversation = await getConversationById(action.conversation_id)
         const draft = await generateFinalDraft(
           conversation?.summary_json,
@@ -148,7 +166,7 @@ export async function POST(
           cp.name || cp.primary_identifier
         )
 
-        // Send email to CP with all options - NO calendar invite to CP, NO slot confirmation yet
+        // Send email to CP with options - NO calendar invite to CP, NO slot confirmation yet
         await sendEmail(action.user_id, {
           to: cp.primary_identifier,
           subject: draft.subject || `Návrh schůzky`,

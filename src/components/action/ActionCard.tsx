@@ -56,6 +56,14 @@ export function ActionCard({
   const adjValue = action.dollar_value * (action.offer_multiplier ?? 1)
   const intent   = getIntent(action)
 
+  // Determine if UDĚLAT should be disabled:
+  // Disabled when there are unfilled missing_info fields, UNLESS action has pre-blocked slots ready
+  const missingInfoFields = (action.missing_info as { label: string; value: string | null }[] | null) || []
+  const hasUnfilledFields = missingInfoFields.length > 0 && missingInfoFields.some(f => f.value === null || f.value === '')
+  const actionPayload = action.payload as Record<string, unknown> | null
+  const hasBlockedSlots = !!(actionPayload?.blocked_slots && Array.isArray(actionPayload.blocked_slots) && (actionPayload.blocked_slots as unknown[]).length > 0)
+  const doItDisabled = hasUnfilledFields && !hasBlockedSlots
+
   const getUrgencyLabel = (urgency: number): string => {
     if (urgency >= 8) return 'TEĎ'
     if (urgency >= 4) return 'Zítra'
@@ -174,7 +182,13 @@ export function ActionCard({
         borderTop: `1px solid ${theme.colors.border}`
       }}>
         <div style={{ display: 'flex', gap: theme.spacing.sm }}>
-          <Button variant="primary"  onClick={run('doit', onDoIt)}      loading={loading === 'doit'}>
+          <Button
+            variant="primary"
+            onClick={run('doit', onDoIt)}
+            loading={loading === 'doit'}
+            disabled={doItDisabled}
+            title={doItDisabled ? 'Nejdříve vyplňte požadované údaje přes UPRAVIT' : undefined}
+          >
             UDĚLAT
           </Button>
           <Button variant="secondary" onClick={() => setEditOpen(!editOpen)}>

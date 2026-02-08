@@ -3,7 +3,7 @@
  * Orchestrates the full processing pipeline
  */
 
-import { ingestEmailsForUser } from './ingestion'
+import { ingestEmailsForUser, ingestOutboundEmails } from './ingestion'
 import { processMessagesForThreading } from './threading'
 import { generateActionsForConversations } from './planning'
 import { ingestCalendarEvents } from './calendar-ingestion'
@@ -52,10 +52,21 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       return result
     }
 
-    // Step 2: Ingest new emails
+    // Step 2: Ingest new emails (inbound)
     console.log(`[Agent] Ingesting emails for user ${userId}`)
     const ingestedMessages = await ingestEmailsForUser(userId)
     result.emailsIngested = ingestedMessages.length
+
+    // Step 2.1: Ingest outbound emails (detect user-initiated meeting proposals)
+    console.log(`[Agent] Ingesting outbound emails for user ${userId}`)
+    try {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000) // last 24 hours
+      const outboundCount = await ingestOutboundEmails(userId, since)
+      result.emailsIngested += outboundCount
+    } catch (outboundError) {
+      console.error('[Agent] Outbound email ingestion error:', outboundError)
+      result.errors.push(`Outbound ingestion: ${outboundError instanceof Error ? outboundError.message : 'Unknown error'}`)
+    }
 
     // Step 2.5: Ingest calendar events and detect invitations
     console.log(`[Agent] Ingesting calendar events for user ${userId}`)

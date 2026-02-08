@@ -112,9 +112,12 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
 
     console.log(`[MorningBrief] Sending email to ${userEmail} with ${briefActions.length} action cards`)
 
+    const subjectCount = briefActions.length
+    const subjectText = subjectCount === 1 ? 'navrhovaná akce' : subjectCount <= 4 ? 'navrhované akce' : 'navrhovaných akcí'
+
     await sendEmail(userId, {
       to: userEmail,
-      subject: `Mila: ${briefActions.length} proposed actions`,
+      subject: `Mila: ${subjectCount} ${subjectText}`,
       body: textContent,
       htmlBody: htmlContent,
     })
@@ -168,8 +171,13 @@ function generateBriefEmailHtml(
     <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">Dobré ráno</h1>
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
 
-    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl }) =>
-      getActionCardEmailHtml({
+    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl }) => {
+      const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
+      const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
+      const payload = action.payload as Record<string, unknown> | null
+      const hasSlots = !!(payload?.blocked_slots && Array.isArray(payload.blocked_slots) && (payload.blocked_slots as unknown[]).length > 0)
+      const needsInput = hasUnfilled && !hasSlots
+      return getActionCardEmailHtml({
         cpName,
         cpRole,
         topic,
@@ -178,8 +186,9 @@ function generateBriefEmailHtml(
         intent: action.intent_cs || action.rationale_cs || action.rationale,
         actionUrl,
         editUrl,
+        needsInput,
       })
-    ).join('')}
+    }).join('')}
   </div>
 </body>
 </html>`.trim()

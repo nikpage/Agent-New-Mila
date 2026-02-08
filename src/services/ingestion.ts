@@ -5,6 +5,7 @@
 
 import {
   fetchUnreadEmails,
+  fetchRecentEmails,
   extractEmailAddress,
   extractName,
   type EmailMessage,
@@ -134,7 +135,9 @@ export async function ingestEmailsForUser(
 }
 
 /**
- * Ingest outbound emails (for tracking user responses)
+ * Ingest outbound emails (for tracking user-initiated conversations)
+ * Detects when user sends emails mentioning meetings/scheduling
+ * so Mila can proactively check calendar and prepare slots.
  */
 export async function ingestOutboundEmails(
   userId: string,
@@ -145,7 +148,78 @@ export async function ingestOutboundEmails(
     return 0
   }
 
-  // This would fetch sent emails and track them
-  // For now, we rely on Gmail thread IDs to correlate responses
-  return 0
+  let ingested = 0
+
+  try {
+    // Fetch recently sent emails
+    const sentEmails = await fetchRecentEmails(userId, {
+      maxResults: 20,
+      labelIds: ['SENT'],
+      after: since,
+    })
+
+    for (const email of sentEmails) {
+      try {
+        // Skip if already processed
+        if (await messageExists(userId, email.id)) {
+          continue
+        }
+
+        // Sender is the user — extract recipients
+        const senderEmail = extractEmailAddress(email.from)
+        if (senderEmail !== user.email?.toLowerCase()) {
+          continue // Not from user, skip
+        }
+
+        // Get the first recipient as CP
+        if (!email.to || email.to.length === 0) continue
+        const recipientEmail = extractEmailAddress(email.to[0])
+        const recipientName = extractName(email.to[0])
+
+        // Skip if recipient is the user themselves
+        if (recipientEmail === user.email?.toLowerCase()) continue
+
+        // Skip blocked senders (in case user replies to automated)
+        if (BLOCKED_SENDERS.includes(recipientEmail)) continue
+
+        // Find or create CP for the recipient
+        const cp = await findOrCreateCP(userId, recipientEmail, recipientName || undefined)
+
+        // Create the message record as outbound
+        const messageId = uuidv4()
+        await createMessage({
+          id: messageId,
+          user_id: userId,
+          cp_id: cp.id,
+          external_id: email.id,
+          external_thread_id: email.threadId,
+          universal_message_id: email.id,
+          direction: 'outbound',
+          raw_text: email.body,
+          cleaned_text: email.body.slice(0, 5000),
+          tag_primary: 'outbound',
+          tag_secondary: null,
+          timestamp: email.date.toISOString(),
+          occurred_at: email.date.toISOString(),
+        })
+
+        // Generate and save message embedding
+        try {
+          const embedding = await generateMessageEmbedding(email.body)
+          await saveMessageEmbedding(messageId, embedding)
+        } catch (error) {
+          console.error(`Failed to generate embedding for outbound message ${messageId}:`, error)
+        }
+
+        ingested++
+        console.log(`[Ingest] Outbound email processed: to ${recipientEmail} (${email.id})`)
+      } catch (error) {
+        console.error(`Error processing outbound email ${email.id}:`, error)
+      }
+    }
+  } catch (error) {
+    console.error(`[Ingest] Failed to fetch sent emails for user ${userId}:`, error)
+  }
+
+  return ingested
 }

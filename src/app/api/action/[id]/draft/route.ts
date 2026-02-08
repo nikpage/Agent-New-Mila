@@ -61,6 +61,14 @@ export async function PUT(
       })
     }
 
+    // Handle slot selection for SCHEDULE actions
+    if (dynamicFields?.slotSelection) {
+      const currentPayload = (action.payload as Record<string, unknown>) || {}
+      await updateAction(actionId, {
+        payload: { ...currentPayload, slotSelection: dynamicFields.slotSelection },
+      })
+    }
+
     return NextResponse.json({ success: true })
 
   } catch (error) {

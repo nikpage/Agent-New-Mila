@@ -1,4 +1,5 @@
 import { getSupabaseAdmin } from '../supabase/client'
+import { getUserById } from './users'
 import type { CP, CPInsert, CPState } from '../supabase/types'
 
 /**
@@ -97,6 +98,14 @@ export async function findOrCreateCP(
   email: string,
   name?: string
 ): Promise<CP> {
+  // Guard: NEVER create a CP for the user's own email address
+  // User is one side of every conversation, not a counterparty
+  const user = await getUserById(userId)
+  if (user?.email && user.email.toLowerCase() === email.toLowerCase()) {
+    console.warn(`[CP] Blocked attempt to create CP for user's own email: ${email}`)
+    throw new Error('Cannot create counterparty for user\'s own email address')
+  }
+
   const existing = await getCPByIdentifier(userId, email)
   if (existing) {
     // Update name if provided and CP doesn't have one

@@ -28,13 +28,16 @@ export async function generateActionProposal(
   const recentMessages = await getRecentMessages(conversation.id, 5)
   if (recentMessages.length === 0) return null
 
-  const latestInbound = recentMessages
-    .filter(m => m.direction === 'inbound' && m.cp_id)
+  // Find CP from latest message — support both inbound AND outbound
+  // Outbound: user sent an email to CP (e.g., proposing a meeting)
+  // Inbound: CP sent an email to user
+  const latestWithCP = recentMessages
+    .filter(m => m.cp_id)
     .pop()
 
-  if (!latestInbound?.cp_id) return null
+  if (!latestWithCP?.cp_id) return null
 
-  const cp = await getCPById(latestInbound.cp_id)
+  const cp = await getCPById(latestWithCP.cp_id)
   if (!cp || cp.is_blacklisted) return null
 
   const formattedMessages = recentMessages.map(m => ({
@@ -71,12 +74,26 @@ export async function generateActionProposal(
           }
         }
 
+        // Extract preferred date if CP or user proposed a specific time
+        let preferredDate: Date | undefined
+        if (proposal.suggestedTime) {
+          try {
+            preferredDate = new Date(proposal.suggestedTime)
+            if (isNaN(preferredDate.getTime())) {
+              preferredDate = undefined
+            }
+          } catch {
+            preferredDate = undefined
+          }
+        }
+
         // Single call: find best slots, check conflicts, block them in user's calendar
         const schedulingResult = await proposeMeeting(
           conversation.user_id,
           cp.id,
           settings.default_meeting_duration,
-          meetingLocation
+          meetingLocation,
+          preferredDate
         )
 
         if (schedulingResult.success && schedulingResult.blockedSlots && schedulingResult.blockedSlots.length > 0) {

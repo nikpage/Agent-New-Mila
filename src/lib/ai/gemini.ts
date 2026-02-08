@@ -61,6 +61,7 @@ export async function proposeAction(
   dollarValue: number
   painFactor: number
   suggestedLocation?: string | null
+  suggestedTime?: string | null
 }> {
   const model = getModel()
 
@@ -69,7 +70,7 @@ export async function proposeAction(
     .map(m => `[${m.direction}]: ${m.text.slice(0, 500)}`)
     .join('\n\n')
 
-  const prompt = `Based on this conversation state, determine what action the user should take.
+  const prompt = `You are Mila, a proactive executive assistant. Based on this conversation, determine what action to take.
 
 CONVERSATION STATE:
 ${JSON.stringify(conversationSummary, null, 2)}
@@ -79,22 +80,43 @@ ${recentText}
 
 COUNTERPARTY: ${cpName || 'Unknown'}
 
+CRITICAL - ACTION TYPE RULES:
+1. Use SCHEDULE (NOT REPLY) whenever the conversation involves ANY of: meeting, schůzka, prohlídka, viewing, visit, setkání, oběd, lunch, návštěva, proposed time, confirmation of time, "sejít se", "potkat se", "zajít", appointment, termín, "přijít se podívat", "kdy se můžeme sejít", "přijedu", "uvidíme se".
+2. If the user (outbound message) proposed or suggested a meeting → use SCHEDULE.
+3. If the counterparty proposed a specific time → use SCHEDULE and fill suggestedTime.
+4. If the conversation implies any need for a physical meeting, even indirectly → use SCHEDULE.
+5. REPLY is ONLY for pure email responses with NO scheduling component whatsoever.
+
+CRITICAL - PROACTIVE INTENT RULES:
+intent_cs must describe what Mila HAS ALREADY DONE and what she WILL DO when user clicks UDĚLAT. Be maximally specific and concrete.
+
+GOOD examples:
+- "Zkontrolovala jsem kalendář a připravím odpověď ${cpName || 'protistraně'}: zodpovím otázku o parkování a nabídnu 3 termíny prohlídky. Klikněte UDĚLAT a odešlu email."
+- "Připravím potvrzení schůzky s ${cpName || 'protistranou'} na středu v 9:30 a zablokuji čas ve vašem kalendáři. Klikněte UDĚLAT."
+- "Připravím odpověď: zodpovím dotazy ohledně plochy bytu a stavu rekonstrukce, nabídnu termíny prohlídky příští týden. Klikněte UDĚLAT a odešlu email."
+
+BAD examples (NEVER write like this):
+- "Navrhuji odpovědět a buď potvrdit, nebo navrhnout jiný termín" (too vague)
+- "Navrhuji se zeptat na více podrobností" (vague, no concrete action)
+- "Navrhuji odpovědět na dotazy" (no specifics)
+
 Respond with ONLY valid JSON:
 {
   "actionType": "REPLY" | "SCHEDULE" | "WAIT" | "FILE",
-  "rationale_cs": "One sentence explaining WHY this action is needed now (Trigger). Must be in CZECH.",
-  "intent_cs": "The plan. 1-2 sentences written TO THE USER (first person 'Navrhuji...'). Explain what you will do. Must be in CZECH. Return null if actionType is WAIT/FILE.",
+  "rationale_cs": "One sentence in CZECH explaining WHY this action is needed now.",
+  "intent_cs": "PROACTIVE description in CZECH: what Mila HAS DONE + what she WILL DO on UDĚLAT. Include specific data points from conversation. Return null if WAIT/FILE.",
   "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
   "urgency": 1-10 (10 = needs immediate attention),
   "dollarValue": estimated deal value in dollars (0 if unknown),
   "painFactor": 1-10 (how much pain from ignoring this),
-  "suggestedLocation": "Physical meeting location if mentioned or clearly implied in the conversation (e.g. office address, restaurant name). null if not specified or if it is a virtual meeting."
+  "suggestedLocation": "Physical meeting location if mentioned or clearly implied. null if not specified.",
+  "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). null if no specific time mentioned."
 }
 
 Rules:
 - DO NOT write the email draft.
-- intent_cs must be a plan summary addressed to the user in Czech.
-- missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in Czech as it would be asked conversationally. Do NOT shorten questions to just key words. Examples: "Je tam sklep nebo komora?" not "Sklep/Komora". "Kdy se můžeme sejít?" not "Čas schůzky".`
+- For SCHEDULE: intent_cs should say Mila will check calendar and prepare time slots.
+- missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in Czech. Do NOT shorten to keywords. Examples: "Je tam sklep nebo komora?" not "Sklep/Komora".`
 
   const result = await model.generateContent(prompt)
   const text = result.response.text()
