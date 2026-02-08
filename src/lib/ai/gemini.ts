@@ -60,6 +60,7 @@ export async function proposeAction(
   urgency: number
   dollarValue: number
   painFactor: number
+  suggestedLocation?: string | null
 }> {
   const model = getModel()
 
@@ -86,7 +87,8 @@ Respond with ONLY valid JSON:
   "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
   "urgency": 1-10 (10 = needs immediate attention),
   "dollarValue": estimated deal value in dollars (0 if unknown),
-  "painFactor": 1-10 (how much pain from ignoring this)
+  "painFactor": 1-10 (how much pain from ignoring this),
+  "suggestedLocation": "Physical meeting location if mentioned or clearly implied in the conversation (e.g. office address, restaurant name). null if not specified or if it is a virtual meeting."
 }
 
 Rules:

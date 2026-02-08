@@ -5,7 +5,7 @@ import { getCPById } from '@/lib/db/counterparties'
 import { validateActionToken } from '@/lib/auth/tokens'
 import { sendEmail } from '@/lib/google/gmail'
 import { generateFinalDraft } from '@/lib/ai/gemini'
-import { confirmSlot, acceptInvitation, declineInvitation } from '@/services/scheduling'
+import { acceptInvitation, declineInvitation } from '@/services/scheduling'
 import { createCalendarEvent } from '@/lib/google/calendar'
 import { getUserSettings } from '@/lib/db/users'
 
@@ -116,70 +116,50 @@ export async function POST(
         return NextResponse.json({ success: true, message: 'Invitation response sent' })
       }
 
-      // Case 2: Pre-blocked slots - user selected one, confirm it
+      // Case 2: Pre-blocked slots - user approved, send EMAIL to CP with ALL options
+      // Calendar holds are USER-ONLY. CP receives options via email, picks one.
+      // Holds stay in user's calendar until CP confirms (cleanup happens then).
+      // DO NOT call confirmSlot here - that's for AFTER CP picks a slot.
       const preBlockGroupId = payload?.pre_block_group_id as string | undefined
-      const blockedSlots = payload?.blocked_slots as { id: string; start: string; end: string }[] | undefined
+      const blockedSlots = payload?.blocked_slots as { id: string; gcal_event_id?: string; start: string; end: string; location?: string }[] | undefined
 
       if (preBlockGroupId && blockedSlots && blockedSlots.length > 0) {
-        // Determine which slot user selected (from missing_info response)
-        const userChoice = (action.missing_info as { label: string; value: string | null }[] | null)
-          ?.[0]?.value
-
-        // Parse user's selection (1, 2, 3 or a custom time)
-        let selectedSlotId: string | undefined
-        const choiceNum = parseInt(userChoice || '1', 10)
-
-        if (!isNaN(choiceNum) && choiceNum >= 1 && choiceNum <= blockedSlots.length) {
-          selectedSlotId = blockedSlots[choiceNum - 1].id
-        } else {
-          // Default to first slot if user didn't pick or we can't parse
-          selectedSlotId = blockedSlots[0].id
-        }
-
-        // Confirm the selected slot and clean up others
-        const confirmResult = await confirmSlot(
-          action.user_id,
-          selectedSlotId,
-          preBlockGroupId,
-          cp.primary_identifier,
-          payload?.location as string | undefined
-        )
-
-        // Send email to CP with the confirmed time
-        const confirmedEvent = confirmResult.event
-        const startTime = new Date(confirmedEvent.start_time)
-        const endTime = new Date(confirmedEvent.end_time)
-
         const formatTime = (date: Date) => date.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
         const formatDate = (date: Date) => date.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
 
-        const timeStr = `${formatDate(startTime)}, ${formatTime(startTime)} - ${formatTime(endTime)}`
+        // Format ALL blocked slots for the email to CP
+        const formattedSlots = blockedSlots.map((s, i) => {
+          const start = new Date(s.start)
+          const end = new Date(s.end)
+          return `${i + 1}. ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}`
+        })
 
-        // Generate and send scheduling email to CP
+        const locationStr = (payload?.location as string) || ''
+        const slotsText = formattedSlots.join('\n')
+        const userNotes = (payload?.userNotes as string) || ''
+
+        // Generate email to CP with ALL time options - CP picks one
         const conversation = await getConversationById(action.conversation_id)
         const draft = await generateFinalDraft(
           conversation?.summary_json,
-          `Navrhuji schůzku na ${timeStr}${confirmedEvent.location ? `, místo: ${confirmedEvent.location}` : ''}`,
+          `Navrhuji schůzku. Nabízím tyto termíny:\n${slotsText}${locationStr ? `\nMísto: ${locationStr}` : ''}\nProsím dejte vědět, který termín vám vyhovuje.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
+          userNotes || undefined,
           undefined,
-          action.missing_info as { label: string; value: string | null }[] | undefined,
           cp.name || cp.primary_identifier
         )
 
+        // Send email to CP with all options - NO calendar invite to CP, NO slot confirmation yet
         await sendEmail(action.user_id, {
           to: cp.primary_identifier,
-          subject: draft.subject || `Schůzka - ${timeStr}`,
+          subject: draft.subject || `Návrh schůzky`,
           body: draft.body,
         })
 
         await completeAction(actionId)
         return NextResponse.json({
           success: true,
-          message: 'Meeting confirmed and invitation sent',
-          event: {
-            start: confirmedEvent.start_time,
-            end: confirmedEvent.end_time,
-            location: confirmedEvent.location,
-          },
+          message: 'Meeting options sent to CP via email',
+          slots: formattedSlots,
         })
       }
 

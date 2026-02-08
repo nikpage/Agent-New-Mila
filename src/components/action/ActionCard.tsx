@@ -97,7 +97,7 @@ export function ActionCard({
 
       {/* ─── MILA'S INTENT ─────────────────────────────────────────── */}
       <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>
-        <p style={{ fontSize: theme.typography.sizes.base, color: theme.colors.text, lineHeight: 1.6 }}>
+        <p style={{ fontSize: theme.typography.sizes.base, color: theme.colors.text, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
           {intent}
         </p>
       </div>

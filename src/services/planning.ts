@@ -6,10 +6,8 @@ import {
 } from '@/lib/db/actions'
 import { getConversationById, getRecentMessages } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
-import { findFreeSlots } from '@/lib/google/calendar'
 import { getUserSettings } from '@/lib/db/users'
-import { proposeMeeting, formatSlotsForDisplay, findBestSlots } from './scheduling'
-import { isWorkingDay } from '@/lib/holidays'
+import { proposeMeeting } from './scheduling'
 import type {
   ActionProposal,
   ConversationThread,
@@ -51,59 +49,81 @@ export async function generateActionProposal(
     if (proposal.actionType === 'WAIT') return null
 
     // Proactive Calendar: If SCHEDULE action, use full scheduling service
-    // Mila acts as a human assistant - finds best slots, blocks them, prepares everything
+    // Mila acts as a human assistant - finds best slots, blocks them IN USER'S CALENDAR ONLY,
+    // prepares everything for user to approve. User approves → Mila sends EMAIL to CP with options.
+    // Calendar blocks are USER-ONLY. CP gets options via email, never calendar holds.
     let schedulingPayload: Record<string, unknown> = {}
     if (proposal.actionType === 'SCHEDULE') {
       try {
         const settings = await getUserSettings(conversation.user_id)
+        const cpName = cp.name || cp.primary_identifier
 
-        // Find best slots considering working hours, holidays, travel
-        const slots = await findBestSlots(
+        // Extract meeting location from: AI suggestion, CP's known locations, or null
+        let meetingLocation: string | undefined
+        if (proposal.suggestedLocation) {
+          meetingLocation = proposal.suggestedLocation
+        } else if (cp.locations) {
+          const locations = cp.locations as unknown
+          if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
+            meetingLocation = locations[0]
+          } else if (typeof locations === 'string') {
+            meetingLocation = locations
+          }
+        }
+
+        // Single call: find best slots, check conflicts, block them in user's calendar
+        const schedulingResult = await proposeMeeting(
           conversation.user_id,
+          cp.id,
           settings.default_meeting_duration,
-          3 // Offer 3 options
+          meetingLocation
         )
 
-        if (slots.length > 0) {
-          // Block the slots in user's calendar (tentative holds)
-          const schedulingResult = await proposeMeeting(
-            conversation.user_id,
-            cp.id,
-            settings.default_meeting_duration
-          )
+        if (schedulingResult.success && schedulingResult.blockedSlots && schedulingResult.blockedSlots.length > 0) {
+          // Format blocked slots for proactive display to USER
+          const formattedSlots = schedulingResult.blockedSlots.map((s, i) => {
+            const start = new Date(s.start_time)
+            const end = new Date(s.end_time)
+            const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
+            const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+            const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+            return `${i + 1}. ${dateStr}, ${startStr} - ${endStr}`
+          })
 
-          if (schedulingResult.success) {
-            // Format slots for user display
-            const formattedSlots = formatSlotsForDisplay(slots)
+          // Proactive intent: tell user what Mila DID (blocked slots) and what she WILL DO (send email)
+          proposal.intent_cs = `Připravila jsem ${formattedSlots.length} termíny pro schůzku s ${cpName} a zablokovala je ve vašem kalendáři:\n${formattedSlots.join('\n')}${meetingLocation ? `\nMísto: ${meetingLocation}` : ''}\n\nKlikněte na UDĚLAT a já odešlu ${cpName} email s nabídkou těchto termínů.`
 
-            // Add the slot options to missingInfo for user to pick
-            proposal.missingInfo.push({
-              label: `Kdy byste chtěl/a se sejít? Volné termíny:\n${formattedSlots.join('\n')}\n(Vyberte číslo termínu nebo napište vlastní)`,
-              value: null,
-            })
+          // No missingInfo needed for approval - UDĚLAT button IS the approval
+          // User can add notes via UPRAVIT if needed
+          proposal.missingInfo = []
 
-            schedulingPayload = {
-              pre_block_group_id: schedulingResult.preBlockGroupId,
-              blocked_slots: schedulingResult.blockedSlots?.map(s => ({
-                id: s.id,
-                start: s.start_time,
-                end: s.end_time,
-              })),
-              conflicts: schedulingResult.conflicts?.map(c => ({
-                event_title: c.existingEvent.title,
-                recommendation: c.recommendation,
-              })),
-            }
-          } else {
-            // Scheduling failed, fall back to manual
-            proposal.missingInfo.push({
-              label: schedulingResult.error || 'Kdy byste chtěl/a se sejít? (Napište preferovaný čas)',
-              value: null,
-            })
+          // Conflict info for user (if any)
+          if (schedulingResult.conflicts && schedulingResult.conflicts.length > 0) {
+            const conflictNote = schedulingResult.conflicts.map(c =>
+              `${c.existingEvent.title}: ${c.recommendation === 'move_existing' ? 'navrhuji přesunout' : 'navrhuji alternativní čas'}`
+            ).join('; ')
+            proposal.intent_cs += `\n\nKonflikty: ${conflictNote}`
+          }
+
+          schedulingPayload = {
+            pre_block_group_id: schedulingResult.preBlockGroupId,
+            blocked_slots: schedulingResult.blockedSlots.map((s, i) => ({
+              id: s.id,
+              gcal_event_id: schedulingResult.gcalEventIds?.[i],
+              start: s.start_time,
+              end: s.end_time,
+              location: s.location,
+            })),
+            location: meetingLocation || null,
+            conflicts: schedulingResult.conflicts?.map(c => ({
+              event_title: c.existingEvent.title,
+              recommendation: c.recommendation,
+            })),
           }
         } else {
+          // Scheduling failed or no slots found - fall back to manual
           proposal.missingInfo.push({
-            label: 'Kdy byste chtěl/a se sejít? (V nejbližších 14 dnech nejsou volné termíny v pracovní době, napište vlastní čas)',
+            label: schedulingResult.error || 'V nejbližších 14 dnech nejsou volné termíny v pracovní době. Napište preferovaný čas.',
             value: null,
           })
         }
