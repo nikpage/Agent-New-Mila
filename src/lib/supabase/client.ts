@@ -16,10 +16,6 @@ export function getSupabaseAdmin(): AnySupabaseClient {
     const url = process.env.SUPABASE_URL
     const key = process.env.SUPABASE_SERVICE_KEY
 
-    console.log('[Supabase] Initializing admin client')
-    console.log('[Supabase] URL:', url ? `${url.substring(0, 30)}...` : 'NOT SET')
-    console.log('[Supabase] Key:', key ? `${key.substring(0, 10)}...` : 'NOT SET')
-
     if (!url || !key) {
       throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY')
     }

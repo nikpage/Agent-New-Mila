@@ -118,8 +118,16 @@ export function getNextWorkingDay(
   const next = new Date(date)
   next.setDate(next.getDate() + 1)
 
-  while (!isWorkingDay(next, workingDays)) {
+  const MAX_ITERATIONS = 366
+  let iterations = 0
+
+  while (!isWorkingDay(next, workingDays) && iterations < MAX_ITERATIONS) {
     next.setDate(next.getDate() + 1)
+    iterations++
+  }
+
+  if (iterations >= MAX_ITERATIONS) {
+    console.error('[getNextWorkingDay] Safety limit reached — no working day found within 366 days. Check working_days config.')
   }
 
   return next

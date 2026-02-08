@@ -14,7 +14,6 @@ export interface GoogleTokens {
  * Get a user by ID
  */
 export async function getUserById(userId: string): Promise<User | null> {
-  console.log('[getUserById] Looking up user:', userId)
   const supabase = getSupabaseAdmin()
   const { data, error } = await supabase
     .from('users')
@@ -22,17 +21,13 @@ export async function getUserById(userId: string): Promise<User | null> {
     .eq('id', userId)
     .single()
 
-  console.log('[getUserById] Query result - data:', !!data, 'error:', error?.code, error?.message)
-
   if (error) {
     if (error.code === 'PGRST116') {
-      console.log('[getUserById] User not found in database')
       return null
     }
     throw new Error(`Failed to get user: ${error.message}`)
   }
 
-  console.log('[getUserById] Found user:', data?.id, data?.email)
   return data
 }
 

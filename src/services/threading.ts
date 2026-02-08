@@ -83,19 +83,16 @@ export async function assignToConversation(
       const messageText = message.cleaned_text || message.raw_text || ''
       if (messageText.length > 0) {
         const messageEmbedding = await generateMessageEmbedding(messageText)
-        console.log(`[Threading] Step 2: Generated embedding for message ${message.id} (${messageEmbedding.length} dims)`)
 
         const candidates = await getConversationsWithEmbeddingsByCP(
           message.user_id,
           message.cp_id
         )
-        console.log(`[Threading] Step 2: Found ${candidates.length} candidate conversations for CP ${message.cp_id}`)
 
         // Find the single best candidate by similarity
         let bestCandidate: { id: string; similarity: number } | null = null
         for (const candidate of candidates) {
           const similarity = cosineSimilarity(messageEmbedding, candidate.embedding)
-          console.log(`[Threading] Step 2: Conversation ${candidate.id} similarity: ${similarity.toFixed(4)}`)
           if (!bestCandidate || similarity > bestCandidate.similarity) {
             bestCandidate = { id: candidate.id, similarity }
           }
@@ -107,11 +104,9 @@ export async function assignToConversation(
         if (bestCandidate && bestCandidate.similarity >= SIMILARITY_THRESHOLD) {
           // Tier 1: High confidence — auto-join
           shouldJoin = true
-          console.log(`[Threading] Step 2: AUTO-JOIN — similarity ${bestCandidate.similarity.toFixed(3)} >= ${SIMILARITY_THRESHOLD}`)
 
         } else if (bestCandidate && bestCandidate.similarity >= TIEBREAKER_THRESHOLD) {
           // Tier 2: Uncertain range — ask shouldJoinConversation AI tiebreaker
-          console.log(`[Threading] Step 2: TIEBREAKER range (${bestCandidate.similarity.toFixed(3)}) — asking AI for conversation ${bestCandidate.id}`)
           try {
             const candidateConversation = await getConversationById(bestCandidate.id)
             const cp = await getCPById(message.cp_id)
@@ -130,18 +125,14 @@ export async function assignToConversation(
                   participants: [cpName],
                 }
               )
-              console.log(`[Threading] Step 2: AI tiebreaker verdict: ${shouldJoin ? 'JOIN' : 'NEW CONVERSATION'}`)
             }
           } catch (tiebreakError) {
-            console.error('[Threading] Step 2: AI tiebreaker failed:', tiebreakError)
+            console.error('[Threading] AI tiebreaker failed:', tiebreakError)
           }
-
-        } else {
-          console.log(`[Threading] Step 2: ${bestCandidate ? `Below tiebreaker threshold (${bestCandidate.similarity.toFixed(3)} < ${TIEBREAKER_THRESHOLD})` : 'No candidates'} — creating new conversation`)
         }
 
         if (shouldJoin && bestCandidate) {
-          console.log(`[Threading] Step 2: MATCH — joining conversation ${bestCandidate.id} (similarity: ${bestCandidate.similarity.toFixed(3)})`)
+          console.log(`[Threading] Joined conversation ${bestCandidate.id} (similarity: ${bestCandidate.similarity.toFixed(3)})`)
           await updateMessage(message.id, { conversation_id: bestCandidate.id })
           await incrementMessageCount(bestCandidate.id)
 
@@ -156,11 +147,9 @@ export async function assignToConversation(
 
           return (await getConversationById(bestCandidate.id))!
         }
-      } else {
-        console.log(`[Threading] Step 2: Skipped — message ${message.id} has no text content`)
       }
     } catch (error) {
-      console.error('[Threading] Step 2: Embedding similarity check failed:', error)
+      console.error('[Threading] Embedding similarity check failed:', error)
     }
   }
 
@@ -238,7 +227,6 @@ export async function rebuildConversationSummary(
     const messageTexts = formattedMessages.map(m => m.text)
     const embedding = await generateConversationEmbedding(messageTexts)
     await saveConversationEmbedding(conversation.id, embedding)
-    console.log(`[Threading] Saved embedding for conversation ${conversation.id} (${messageTexts.length} messages)`)
   } catch (embeddingError) {
     console.error(`[Threading] Failed to generate embedding for conversation ${conversation.id}:`, embeddingError)
   }
