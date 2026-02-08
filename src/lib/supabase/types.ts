@@ -557,6 +557,33 @@ export type EventInsert = Database['public']['Tables']['events']['Insert']
 export type ActionType = 'REPLY' | 'SCHEDULE' | 'WAIT' | 'FILE' | 'DELEGATE'
 export type ActionStatus = 'pending' | 'approved' | 'needs_revision' | 'completed' | 'dismissed'
 
+// User settings structure (stored in users.settings JSON column)
+export interface UserSettings {
+  working_hours_start: number    // default 9
+  working_hours_end: number      // default 17
+  working_days: number[]         // default [1,2,3,4,5] (Mon-Fri)
+  timezone: string               // default "Europe/Prague"
+  default_meeting_duration: number // default 30 (minutes)
+  travel_mode: 'driving' | 'walking' | 'transit' | 'bicycling' // default "driving"
+  home_location: string
+  office_location: string
+  offer_multiplier_seller: number // default 1.5
+  offer_multiplier_buyer: number  // default 1.0
+}
+
+export const DEFAULT_USER_SETTINGS: UserSettings = {
+  working_hours_start: 9,
+  working_hours_end: 17,
+  working_days: [1, 2, 3, 4, 5],
+  timezone: 'Europe/Prague',
+  default_meeting_duration: 30,
+  travel_mode: 'driving',
+  home_location: '',
+  office_location: '',
+  offer_multiplier_seller: 1.5,
+  offer_multiplier_buyer: 1.0,
+}
+
 // Conversation summary JSON structure
 export interface ConversationSummary {
   currentState: string

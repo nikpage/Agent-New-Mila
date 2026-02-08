@@ -246,7 +246,7 @@ export function calculatePriorityScore(params: {
   const valueComponent = adjustedValue * safeUrgency
   const painComponent = safePainFactor * Math.pow(daysIgnored + 1, 2)
 
-  return valueComponent + painComponent + safeWeight
+  return Math.round(valueComponent + painComponent + safeWeight)
 }
 
 /**

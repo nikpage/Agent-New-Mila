@@ -7,6 +7,9 @@ import {
 import { getConversationById, getRecentMessages } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
 import { findFreeSlots } from '@/lib/google/calendar'
+import { getUserSettings } from '@/lib/db/users'
+import { proposeMeeting, formatSlotsForDisplay, findBestSlots } from './scheduling'
+import { isWorkingDay } from '@/lib/holidays'
 import type {
   ActionProposal,
   ConversationThread,
@@ -47,53 +50,70 @@ export async function generateActionProposal(
 
     if (proposal.actionType === 'WAIT') return null
 
-    // Proactive Calendar: If SCHEDULE action, find free slots and offer them
+    // Proactive Calendar: If SCHEDULE action, use full scheduling service
+    // Mila acts as a human assistant - finds best slots, blocks them, prepares everything
+    let schedulingPayload: Record<string, unknown> = {}
     if (proposal.actionType === 'SCHEDULE') {
       try {
-        const tomorrow = new Date()
-        tomorrow.setDate(tomorrow.getDate() + 1)
-        const dayAfter = new Date()
-        dayAfter.setDate(dayAfter.getDate() + 2)
+        const settings = await getUserSettings(conversation.user_id)
 
-        const [tomorrowSlots, dayAfterSlots] = await Promise.all([
-          findFreeSlots(conversation.user_id, tomorrow, 60), // 60 min meetings
-          findFreeSlots(conversation.user_id, dayAfter, 60)
-        ])
+        // Find best slots considering working hours, holidays, travel
+        const slots = await findBestSlots(
+          conversation.user_id,
+          settings.default_meeting_duration,
+          3 // Offer 3 options
+        )
 
-        // Format slots as options
-        const formatTime = (date: Date) => {
-          return date.toLocaleTimeString('cs-CZ', {
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: false
-          })
-        }
+        if (slots.length > 0) {
+          // Block the slots in user's calendar (tentative holds)
+          const schedulingResult = await proposeMeeting(
+            conversation.user_id,
+            cp.id,
+            settings.default_meeting_duration
+          )
 
-        const formatDate = (date: Date) => {
-          return date.toLocaleDateString('cs-CZ', {
-            weekday: 'long',
-            day: 'numeric',
-            month: 'long'
-          })
-        }
+          if (schedulingResult.success) {
+            // Format slots for user display
+            const formattedSlots = formatSlotsForDisplay(slots)
 
-        const timeOptions: string[] = []
-        tomorrowSlots.slice(0, 3).forEach(slot => {
-          timeOptions.push(`${formatDate(slot.start)}, ${formatTime(slot.start)}`)
-        })
-        dayAfterSlots.slice(0, 2).forEach(slot => {
-          timeOptions.push(`${formatDate(slot.start)}, ${formatTime(slot.start)}`)
-        })
+            // Add the slot options to missingInfo for user to pick
+            proposal.missingInfo.push({
+              label: `Kdy byste chtěl/a se sejít? Volné termíny:\n${formattedSlots.join('\n')}\n(Vyberte číslo termínu nebo napište vlastní)`,
+              value: null,
+            })
 
-        if (timeOptions.length > 0) {
+            schedulingPayload = {
+              pre_block_group_id: schedulingResult.preBlockGroupId,
+              blocked_slots: schedulingResult.blockedSlots?.map(s => ({
+                id: s.id,
+                start: s.start_time,
+                end: s.end_time,
+              })),
+              conflicts: schedulingResult.conflicts?.map(c => ({
+                event_title: c.existingEvent.title,
+                recommendation: c.recommendation,
+              })),
+            }
+          } else {
+            // Scheduling failed, fall back to manual
+            proposal.missingInfo.push({
+              label: schedulingResult.error || 'Kdy byste chtěl/a se sejít? (Napište preferovaný čas)',
+              value: null,
+            })
+          }
+        } else {
           proposal.missingInfo.push({
-            label: 'Kdy byste chtěl/a se sejít? (Vyberte jeden z volných termínů nebo napište vlastní)',
-            value: null
+            label: 'Kdy byste chtěl/a se sejít? (V nejbližších 14 dnech nejsou volné termíny v pracovní době, napište vlastní čas)',
+            value: null,
           })
         }
       } catch (calendarError) {
-        console.error('Failed to fetch calendar slots:', calendarError)
+        console.error('Failed to run scheduling service:', calendarError)
         // Continue without calendar - user can enter time manually
+        proposal.missingInfo.push({
+          label: 'Kdy byste chtěl/a se sejít? (Napište preferovaný čas)',
+          value: null,
+        })
       }
     }
 
@@ -144,7 +164,8 @@ export async function generateActionProposal(
           urgency: proposal.urgency,
           dollar_value: proposal.dollarValue,
           pain_factor: proposal.painFactor,
-        }
+        },
+        ...schedulingPayload,
       },
       queued_for_brief: true,
     })

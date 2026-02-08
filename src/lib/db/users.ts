@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from '../supabase/client'
-import type { User, UserInsert } from '../supabase/types'
+import type { User, UserInsert, UserSettings } from '../supabase/types'
+import { DEFAULT_USER_SETTINGS } from '../supabase/types'
 
 export interface GoogleTokens {
   access_token: string
@@ -115,6 +116,20 @@ export async function getUserGoogleTokens(userId: string): Promise<GoogleTokens 
   const user = await getUserById(userId)
   if (!user?.google_oauth_tokens) return null
   return user.google_oauth_tokens as unknown as GoogleTokens
+}
+
+/**
+ * Get user settings with defaults applied
+ */
+export async function getUserSettings(userId: string): Promise<UserSettings> {
+  const user = await getUserById(userId)
+  if (!user?.settings) return { ...DEFAULT_USER_SETTINGS }
+
+  const stored = user.settings as unknown as Partial<UserSettings>
+  return {
+    ...DEFAULT_USER_SETTINGS,
+    ...stored,
+  }
 }
 
 /**

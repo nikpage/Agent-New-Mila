@@ -6,6 +6,7 @@
 import { ingestEmailsForUser } from './ingestion'
 import { processMessagesForThreading } from './threading'
 import { generateActionsForConversations } from './planning'
+import { ingestCalendarEvents } from './calendar-ingestion'
 import { getUnprocessedMessages } from '@/lib/db/messages'
 import { getUserById } from '@/lib/db/users'
 import type { ActionProposal } from '@/lib/supabase/types'
@@ -13,6 +14,8 @@ import type { ActionProposal } from '@/lib/supabase/types'
 export interface AgentRunResult {
   success: boolean
   emailsIngested: number
+  calendarEventsSynced: number
+  calendarInvitationsDetected: number
   messagesProcessed: number
   conversationsUpdated: number
   actionsGenerated: number
@@ -27,6 +30,8 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
   const result: AgentRunResult = {
     success: false,
     emailsIngested: 0,
+    calendarEventsSynced: 0,
+    calendarInvitationsDetected: 0,
     messagesProcessed: 0,
     conversationsUpdated: 0,
     actionsGenerated: 0,
@@ -51,6 +56,21 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     console.log(`[Agent] Ingesting emails for user ${userId}`)
     const ingestedMessages = await ingestEmailsForUser(userId)
     result.emailsIngested = ingestedMessages.length
+
+    // Step 2.5: Ingest calendar events and detect invitations
+    console.log(`[Agent] Ingesting calendar events for user ${userId}`)
+    try {
+      const calendarResult = await ingestCalendarEvents(userId)
+      result.calendarEventsSynced = calendarResult.eventsSynced
+      result.calendarInvitationsDetected = calendarResult.invitationsDetected
+      result.actionsGenerated += calendarResult.actionsCreated
+      if (calendarResult.errors.length > 0) {
+        result.errors.push(...calendarResult.errors)
+      }
+    } catch (calendarError) {
+      console.error('[Agent] Calendar ingestion error:', calendarError)
+      result.errors.push(`Calendar ingestion: ${calendarError instanceof Error ? calendarError.message : 'Unknown error'}`)
+    }
 
     // Step 3: Get all unprocessed messages (including newly ingested)
     const unprocessedMessages = await getUnprocessedMessages(userId)

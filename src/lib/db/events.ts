@@ -1,5 +1,6 @@
 import { getSupabaseAdmin } from '../supabase/client'
 import type { Event, EventInsert } from '../supabase/types'
+import { calculatePriorityScore } from './actions'
 
 /**
  * Get an event by ID
@@ -254,4 +255,185 @@ export async function findAvailableSlots(
   }
 
   return slots
+}
+
+/**
+ * Get all events in a pre-block group
+ */
+export async function getEventsByBlockGroup(preBlockGroupId: string): Promise<Event[]> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('events')
+    .select('*')
+    .eq('pre_block_group_id', preBlockGroupId)
+    .order('start_time', { ascending: true })
+
+  if (error) {
+    throw new Error(`Failed to get events by block group: ${error.message}`)
+  }
+
+  return data || []
+}
+
+/**
+ * Clean up a pre-block group after one slot is confirmed.
+ * Deletes all tentative holds except the confirmed one.
+ */
+export async function cleanupBlockGroup(
+  preBlockGroupId: string,
+  confirmedEventId: string
+): Promise<string[]> {
+  const events = await getEventsByBlockGroup(preBlockGroupId)
+  const deletedIds: string[] = []
+
+  for (const event of events) {
+    if (event.id !== confirmedEventId && event.status === 'tentative') {
+      await deleteEvent(event.id)
+      deletedIds.push(event.id)
+    }
+  }
+
+  return deletedIds
+}
+
+/**
+ * Create a tentative HOLD event (pre-block for scheduling proposals)
+ */
+export async function createHoldEvent(params: {
+  userId: string
+  cpId: string
+  cpName: string
+  startTime: Date
+  endTime: Date
+  preBlockGroupId: string
+  location?: string
+}): Promise<Event> {
+  return createEvent({
+    user_id: params.userId,
+    cp_id: params.cpId,
+    title: `HOLD: Meeting with ${params.cpName}`,
+    description: `Tentative hold - awaiting confirmation from ${params.cpName}`,
+    location: params.location || null,
+    event_type: 'meeting',
+    status: 'tentative',
+    start_time: params.startTime.toISOString(),
+    end_time: params.endTime.toISOString(),
+    pre_block_group_id: params.preBlockGroupId,
+  })
+}
+
+/**
+ * Create a travel buffer event linked to a parent event
+ */
+export async function createTravelBuffer(params: {
+  userId: string
+  parentEventId: string
+  startTime: Date
+  endTime: Date
+  fromLocation: string
+  toLocation: string
+  travelDurationText: string
+}): Promise<Event> {
+  return createEvent({
+    user_id: params.userId,
+    parent_event_id: params.parentEventId,
+    title: `Travel: ${params.fromLocation} → ${params.toLocation}`,
+    description: `Travel buffer (${params.travelDurationText}). Auto-managed by Mila.`,
+    event_type: 'travel_buffer',
+    status: 'confirmed',
+    start_time: params.startTime.toISOString(),
+    end_time: params.endTime.toISOString(),
+  })
+}
+
+/**
+ * Clean up travel buffers linked to a parent event
+ */
+export async function cleanupTravelBuffers(parentEventId: string): Promise<void> {
+  const supabase = getSupabaseAdmin()
+  const { error } = await supabase
+    .from('events')
+    .delete()
+    .eq('parent_event_id', parentEventId)
+    .eq('event_type', 'travel_buffer')
+
+  if (error) {
+    throw new Error(`Failed to cleanup travel buffers: ${error.message}`)
+  }
+}
+
+/**
+ * Get travel buffers for a parent event
+ */
+export async function getTravelBuffers(parentEventId: string): Promise<Event[]> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('events')
+    .select('*')
+    .eq('parent_event_id', parentEventId)
+    .eq('event_type', 'travel_buffer')
+
+  if (error) {
+    throw new Error(`Failed to get travel buffers: ${error.message}`)
+  }
+
+  return data || []
+}
+
+/**
+ * Confirm a tentative event (change status from tentative to confirmed)
+ */
+export async function confirmEvent(eventId: string): Promise<Event> {
+  return updateEvent(eventId, { status: 'confirmed' })
+}
+
+/**
+ * Cancel an event and clean up its travel buffers
+ */
+export async function cancelEventWithCleanup(eventId: string): Promise<void> {
+  await updateEvent(eventId, { status: 'cancelled' })
+  await cleanupTravelBuffers(eventId)
+}
+
+/**
+ * Calculate priority score for a calendar event
+ * User-created events default weight = 100
+ * All events must have scores
+ */
+export function calculateEventScore(params: {
+  dollarValue?: number
+  urgency?: number
+  painFactor?: number
+  daysIgnored?: number
+  weight?: number
+  offerMultiplier?: number
+  isUserCreated?: boolean
+}): number {
+  const weight = params.weight ?? (params.isUserCreated ? 100 : 0)
+
+  return calculatePriorityScore({
+    dollarValue: params.dollarValue || 0,
+    urgency: params.urgency || 1,
+    painFactor: params.painFactor || 1,
+    daysIgnored: params.daysIgnored || 0,
+    weight,
+    offerMultiplier: params.offerMultiplier || 1,
+  })
+}
+
+/**
+ * Get all events that are children of a parent event (travel buffers, etc.)
+ */
+export async function getChildEvents(parentEventId: string): Promise<Event[]> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('events')
+    .select('*')
+    .eq('parent_event_id', parentEventId)
+
+  if (error) {
+    throw new Error(`Failed to get child events: ${error.message}`)
+  }
+
+  return data || []
 }
