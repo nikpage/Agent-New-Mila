@@ -38,7 +38,7 @@ export default function HomePage() {
 
         <h1 style={{ fontSize: theme.typography.sizes.xxl, fontWeight: theme.typography.weights.semibold, marginBottom: theme.spacing.sm, color: theme.colors.text }}>Mila</h1>
         <p style={{ color: theme.colors.textMuted, marginBottom: theme.spacing.xl }}>
-          Your AI-powered executive assistant
+          Vaše AI asistentka pro řízení
         </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
@@ -57,7 +57,7 @@ export default function HomePage() {
               transition: 'background-color 0.2s'
             }}
           >
-            Connect Google Account
+            Připojit Google účet
           </a>
 
           <a
@@ -76,12 +76,12 @@ export default function HomePage() {
               transition: 'background-color 0.2s'
             }}
           >
-            Check System Status
+            Stav systému
           </a>
         </div>
 
         <p style={{ color: theme.colors.textMuted, fontSize: theme.typography.sizes.sm, marginTop: theme.spacing.xl }}>
-          Mila manages your decisions, not your emails.
+          Mila řídí vaše rozhodnutí, ne vaše e-maily.
         </p>
       </Card>
     </main>

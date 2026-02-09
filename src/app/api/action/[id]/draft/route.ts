@@ -61,11 +61,54 @@ export async function PUT(
       })
     }
 
-    // Handle slot selection for SCHEDULE actions
+    // Handle slot selection for SCHEDULE actions — update intent_cs to reflect selection
     if (dynamicFields?.slotSelection) {
       const currentPayload = (action.payload as Record<string, unknown>) || {}
+      const blockedSlots = currentPayload?.blocked_slots as { id: string; start: string; end: string; location?: string }[] | undefined
+
+      let updatedIntentCs = action.intent_cs
+      if (blockedSlots && blockedSlots.length > 0) {
+        const selection = dynamicFields.slotSelection
+        const formatTime = (d: Date) => d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+        const formatDate = (d: Date) => d.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
+
+        if (selection.toLowerCase() === 'vše' || selection.toLowerCase() === 'all') {
+          // All slots selected
+          const formatted = blockedSlots.map((s, i) => {
+            const start = new Date(s.start)
+            const end = new Date(s.end)
+            return `${i + 1}. ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}`
+          })
+          updatedIntentCs = `Vybrány všechny termíny k odeslání:\n${formatted.join('\n')}${currentPayload?.location ? `\nMísto: ${currentPayload.location}` : ''}`
+        } else {
+          // Parse selected numbers
+          const selectedNumbers = selection.split(/[,\s]+/).map((s: string) => parseInt(s.trim(), 10)).filter((n: number) => !isNaN(n) && n >= 1 && n <= blockedSlots.length)
+          if (selectedNumbers.length > 0) {
+            const formatted = selectedNumbers.map((n: number) => {
+              const s = blockedSlots[n - 1]
+              const start = new Date(s.start)
+              const end = new Date(s.end)
+              return `${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}`
+            })
+            updatedIntentCs = `Vybrané termíny k odeslání:\n${formatted.map((f: string, i: number) => `${i + 1}. ${f}`).join('\n')}${currentPayload?.location ? `\nMísto: ${currentPayload.location}` : ''}`
+          } else {
+            // Custom instruction (e.g. "přeplánuj na středu v 16")
+            updatedIntentCs = `Vlastní pokyn: ${selection}${currentPayload?.location ? `\nMísto: ${currentPayload.location}` : ''}`
+          }
+        }
+      }
+
       await updateAction(actionId, {
+        intent_cs: updatedIntentCs,
         payload: { ...currentPayload, slotSelection: dynamicFields.slotSelection },
+      })
+    }
+
+    // If notes provided, also update intent_cs to append the notes
+    if (notes && !dynamicFields?.slotSelection) {
+      const currentIntentCs = action.intent_cs || action.rationale_cs || action.rationale
+      await updateAction(actionId, {
+        intent_cs: `${currentIntentCs}\n\nPoznámka: ${notes}`,
       })
     }
 

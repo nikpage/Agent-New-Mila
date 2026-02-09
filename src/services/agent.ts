@@ -53,12 +53,10 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     }
 
     // Step 2: Ingest new emails (inbound)
-    console.log(`[Agent] Ingesting emails for user ${userId}`)
     const ingestedMessages = await ingestEmailsForUser(userId)
     result.emailsIngested = ingestedMessages.length
 
     // Step 2.1: Ingest outbound emails (detect user-initiated meeting proposals)
-    console.log(`[Agent] Ingesting outbound emails for user ${userId}`)
     try {
       const since = new Date(Date.now() - 24 * 60 * 60 * 1000) // last 24 hours
       const outboundCount = await ingestOutboundEmails(userId, since)
@@ -69,7 +67,6 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     }
 
     // Step 2.5: Ingest calendar events and detect invitations
-    console.log(`[Agent] Ingesting calendar events for user ${userId}`)
     try {
       const calendarResult = await ingestCalendarEvents(userId)
       result.calendarEventsSynced = calendarResult.eventsSynced
@@ -89,14 +86,11 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
     // Step 4: Process messages into conversations
     if (unprocessedMessages.length > 0) {
-      console.log(`[Agent] Processing ${unprocessedMessages.length} messages into conversations`)
       const conversations = await processMessagesForThreading(unprocessedMessages)
       result.conversationsUpdated = conversations.size
 
       // Step 5: Generate action proposals for updated conversations
       const conversationIds = Array.from(conversations.keys())
-      console.log(`[Agent] Generating actions for ${conversationIds.length} conversations`)
-
       const actions = await generateActionsForConversations(conversationIds)
       result.actionsGenerated = actions.length
       result.actions = actions

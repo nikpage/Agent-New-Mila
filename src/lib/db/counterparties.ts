@@ -102,7 +102,6 @@ export async function findOrCreateCP(
   // User is one side of every conversation, not a counterparty
   const user = await getUserById(userId)
   if (user?.email && user.email.toLowerCase() === email.toLowerCase()) {
-    console.warn(`[CP] Blocked attempt to create CP for user's own email: ${email}`)
     throw new Error('Cannot create counterparty for user\'s own email address')
   }
 

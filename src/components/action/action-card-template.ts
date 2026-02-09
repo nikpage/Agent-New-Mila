@@ -39,6 +39,40 @@ export interface ActionCardEmailParams {
   needsInput?: boolean
 }
 
+/**
+ * Convert intent text to HTML with bulleted lists.
+ * Lines starting with "N." or "- " become <li> items.
+ */
+function formatIntentHtml(text: string): string {
+  const lines = text.split('\n')
+  let html = ''
+  let inList = false
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+
+    const isListItem = /^\d+\.\s/.test(trimmed) || trimmed.startsWith('- ')
+
+    if (isListItem) {
+      const cleaned = trimmed.replace(/^\d+\.\s*/, '').replace(/^-\s*/, '')
+      if (!inList) {
+        html += `<ul style="margin: 8px 0; padding-left: 20px;">`
+        inList = true
+      }
+      html += `<li style="margin-bottom: 4px;">${cleaned}</li>`
+    } else {
+      if (inList) {
+        html += `</ul>`
+        inList = false
+      }
+      html += `<p style="margin: 4px 0;">${trimmed}</p>`
+    }
+  }
+  if (inList) html += `</ul>`
+  return html
+}
+
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
   const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, needsInput } = params
 
@@ -74,8 +108,8 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
       </div>
 
       <!-- INTENT -->
-      <div style="padding: 0 24px 16px 24px;">
-        <p style="font-size: 16px; color: ${theme.colors.text}; line-height: 1.625; margin: 0;">${intent}</p>
+      <div style="padding: 0 24px 16px 24px; font-size: 16px; color: ${theme.colors.text}; line-height: 1.625;">
+        ${formatIntentHtml(intent)}
       </div>
 
       <!-- DETAILS LINK -->

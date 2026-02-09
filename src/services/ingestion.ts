@@ -72,7 +72,6 @@ export async function ingestEmailsForUser(
 
       // Hard-block known automated / no-reply senders before classification
       if (BLOCKED_SENDERS.includes(senderEmail)) {
-        console.log(`[Ingest] Blocked sender skipped: ${senderEmail} (${email.id})`)
         continue
       }
 
@@ -85,7 +84,6 @@ export async function ingestEmailsForUser(
 
       // Skip non-actionable emails entirely — no message stored without a CP
       if (!classification.isActionable) {
-        console.log(`[Ingest] Non-actionable email skipped: ${classification.category} from ${senderEmail} (${email.id})`)
         continue
       }
 
@@ -212,7 +210,6 @@ export async function ingestOutboundEmails(
         }
 
         ingested++
-        console.log(`[Ingest] Outbound email processed: to ${recipientEmail} (${email.id})`)
       } catch (error) {
         console.error(`Error processing outbound email ${email.id}:`, error)
       }

@@ -76,7 +76,7 @@ export async function POST(
       // Send the email
       await sendEmail(action.user_id, {
         to: sendTo,
-        subject: draftSubject || 'Re: Your message',
+        subject: draftSubject || 'Re:',
         body: draftBody,
       })
 
@@ -190,7 +190,7 @@ export async function POST(
       if (userTimeInput) {
         // Create a calendar event with the CP
         const gcalEvent = await createCalendarEvent(action.user_id, {
-          summary: `Meeting with ${cp.name || cp.primary_identifier}`,
+          summary: `Schůzka s ${cp.name || cp.primary_identifier}`,
           description: action.intent_cs || action.rationale || undefined,
           startTime: new Date(userTimeInput),
           endTime: new Date(new Date(userTimeInput).getTime() + settings.default_meeting_duration * 60 * 1000),

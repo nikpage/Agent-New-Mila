@@ -132,7 +132,6 @@ export async function assignToConversation(
         }
 
         if (shouldJoin && bestCandidate) {
-          console.log(`[Threading] Joined conversation ${bestCandidate.id} (similarity: ${bestCandidate.similarity.toFixed(3)})`)
           await updateMessage(message.id, { conversation_id: bestCandidate.id })
           await incrementMessageCount(bestCandidate.id)
 
@@ -183,14 +182,14 @@ async function extractTopicFromMessage(message: Message): Promise<string> {
   const text = message.cleaned_text || message.raw_text || ''
 
   if (text.length < 50) {
-    return text.slice(0, 100) || 'New conversation'
+    return text.slice(0, 100) || 'Nová konverzace'
   }
 
   try {
     return await extractTopic([{ text }])
   } catch (error) {
     console.error('Failed to extract topic:', error)
-    return text.slice(0, 100) || 'New conversation'
+    return text.slice(0, 100) || 'Nová konverzace'
   }
 }
 

@@ -19,6 +19,52 @@ function getIntent(action: ActionProposal): string {
   return action.intent_cs || action.rationale_cs || action.rationale
 }
 
+/**
+ * Render intent text with bulleted lists.
+ * Lines starting with "N." or "- " become <li> items; everything else is <p>.
+ */
+function renderIntent(text: string) {
+  const lines = text.split('\n')
+  const blocks: { type: 'text' | 'list'; lines: string[] }[] = []
+
+  for (const line of lines) {
+    const trimmed = line.trim()
+    const isListItem = /^\d+\.\s/.test(trimmed) || trimmed.startsWith('- ')
+    const cleaned = isListItem ? trimmed.replace(/^\d+\.\s*/, '').replace(/^-\s*/, '') : trimmed
+
+    if (isListItem) {
+      const last = blocks[blocks.length - 1]
+      if (last && last.type === 'list') {
+        last.lines.push(cleaned)
+      } else {
+        blocks.push({ type: 'list', lines: [cleaned] })
+      }
+    } else if (trimmed.length > 0) {
+      const last = blocks[blocks.length - 1]
+      if (last && last.type === 'text') {
+        last.lines.push(trimmed)
+      } else {
+        blocks.push({ type: 'text', lines: [trimmed] })
+      }
+    }
+  }
+
+  return blocks.map((block, i) => {
+    if (block.type === 'list') {
+      return (
+        <ul key={i} style={{ margin: '8px 0', paddingLeft: '20px', listStyleType: 'disc' }}>
+          {block.lines.map((item, j) => (
+            <li key={j} style={{ marginBottom: '4px' }}>{item}</li>
+          ))}
+        </ul>
+      )
+    }
+    return (
+      <p key={i} style={{ margin: '4px 0' }}>{block.lines.join(' ')}</p>
+    )
+  })
+}
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 export interface Participant {
@@ -104,10 +150,8 @@ export function ActionCard({
       </div>
 
       {/* ─── MILA'S INTENT ─────────────────────────────────────────── */}
-      <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>
-        <p style={{ fontSize: theme.typography.sizes.base, color: theme.colors.text, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-          {intent}
-        </p>
+      <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}`, fontSize: theme.typography.sizes.base, color: theme.colors.text, lineHeight: 1.6 }}>
+        {renderIntent(intent)}
       </div>
 
       {/* ─── DETAILS LINK ────────────────────────────────────────────── */}
