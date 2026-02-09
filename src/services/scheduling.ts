@@ -204,11 +204,14 @@ export async function blockSlotsForProposal(
   const blockedSlots: Event[] = []
   const gcalEventIds: string[] = []
 
+  // Localized title: "CP Name - REZERVACE"
+  const holdTitle = `${cpName} - REZERVACE`
+
   for (const slot of slots) {
     try {
       // Create tentative event in Google Calendar (no notifications)
       const gcalEvent = await createTentativeCalendarEvent(userId, {
-        summary: `HOLD: Meeting with ${cpName}`,
+        summary: holdTitle,
         description: `Tentative hold - awaiting confirmation from ${cpName}. Managed by Mila.`,
         location: location,
         startTime: slot.start,
@@ -571,7 +574,8 @@ export async function proposeMeetingMultipleCPs(
     }
   }
 
-  const holdTitle = `HOLD: Meeting with ${cpNames.join(', ')}`
+  // Localized title: "CP1, CP2 - REZERVACE"
+  const holdTitle = `${cpNames.join(', ')} - REZERVACE`
 
   try {
     await createTentativeCalendarEvent(userId, {

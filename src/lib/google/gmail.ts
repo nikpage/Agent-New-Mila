@@ -170,6 +170,16 @@ function parseGmailMessage(message: gmail_v1.Schema$Message): EmailMessage | nul
 }
 
 /**
+ * Encode subject header for RFC 2047 if it contains non-ASCII characters
+ */
+function encodeSubject(subject: string): string {
+  if (/[^\x00-\x7F]/.test(subject)) {
+    return `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
+  }
+  return subject
+}
+
+/**
  * Send an email (from user's own account to themselves or others)
  */
 export async function sendEmail(
@@ -193,7 +203,7 @@ export async function sendEmail(
     messageParts.push(`Bcc: ${params.bcc.join(', ')}`)
   }
 
-  messageParts.push(`Subject: ${params.subject}`)
+  messageParts.push(`Subject: ${encodeSubject(params.subject)}`)
 
   if (params.inReplyTo) {
     messageParts.push(`In-Reply-To: ${params.inReplyTo}`)

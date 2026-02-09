@@ -5,8 +5,8 @@ import { getCPById } from '@/lib/db/counterparties'
 import { validateActionToken } from '@/lib/auth/tokens'
 import { sendEmail } from '@/lib/google/gmail'
 import { generateFinalDraft } from '@/lib/ai/gemini'
-import { acceptInvitation, declineInvitation } from '@/services/scheduling'
-import { createCalendarEvent } from '@/lib/google/calendar'
+import { acceptInvitation, declineInvitation, confirmSlot } from '@/services/scheduling'
+import { createCalendarEvent, confirmCalendarEvent, deleteCalendarEvent } from '@/lib/google/calendar'
 import { getUserSettings } from '@/lib/db/users'
 
 export async function POST(
@@ -116,10 +116,7 @@ export async function POST(
         return NextResponse.json({ success: true, message: 'Invitation response sent' })
       }
 
-      // Case 2: Pre-blocked slots - user approved, send EMAIL to CP with ALL options
-      // Calendar holds are USER-ONLY. CP receives options via email, picks one.
-      // Holds stay in user's calendar until CP confirms (cleanup happens then).
-      // DO NOT call confirmSlot here - that's for AFTER CP picks a slot.
+      // Case 2: Pre-blocked slots - user approved
       const preBlockGroupId = payload?.pre_block_group_id as string | undefined
       const blockedSlots = payload?.blocked_slots as { id: string; gcal_event_id?: string; start: string; end: string; location?: string }[] | undefined
 
@@ -130,10 +127,11 @@ export async function POST(
         // Filter slots based on user's slot selection (from UPRAVIT page)
         const slotSelection = (payload?.slotSelection as string) || ''
         let slotsToSend = blockedSlots
+        let selectedNumbers: number[] = []
 
         if (slotSelection && slotSelection.toLowerCase() !== 'vše' && slotSelection.toLowerCase() !== 'all') {
           // Parse selected slot numbers (e.g., "1", "1,3", "2")
-          const selectedNumbers = slotSelection
+          selectedNumbers = slotSelection
             .split(/[,\s]+/)
             .map(s => parseInt(s.trim(), 10))
             .filter(n => !isNaN(n) && n >= 1 && n <= blockedSlots.length)
@@ -141,11 +139,63 @@ export async function POST(
           if (selectedNumbers.length > 0) {
             slotsToSend = selectedNumbers.map(n => blockedSlots[n - 1])
           }
-          // If no valid numbers parsed, it might be a custom reschedule instruction
-          // In that case, include the instruction in userNotes and send all slots
         }
 
-        // Format selected slots for the email to CP
+        const userNotes = (payload?.userNotes as string) || ''
+
+        // NEW LOGIC: Single slot selected -> Confirm & Invite
+        if (selectedNumbers.length === 1) {
+          const index = selectedNumbers[0] - 1
+          const selectedSlot = blockedSlots[index]
+          const unselectedSlots = blockedSlots.filter((_, i) => i !== index)
+
+          // 1. Confirm GCal Event (sends invite)
+          if (selectedSlot.gcal_event_id) {
+            await confirmCalendarEvent(action.user_id, selectedSlot.gcal_event_id, [cp.primary_identifier])
+          }
+
+          // 2. Delete Unselected GCal Events
+          for (const slot of unselectedSlots) {
+            if (slot.gcal_event_id) {
+              await deleteCalendarEvent(action.user_id, slot.gcal_event_id)
+            }
+          }
+
+          // 3. Confirm Local Event (updates DB, cleans up local siblings)
+          // Pass undefined for cpEmail to prevent confirmSlot from creating a DUPLICATE GCal event
+          await confirmSlot(
+            action.user_id,
+            selectedSlot.id,
+            preBlockGroupId,
+            undefined, // cpEmail
+            payload?.location as string | undefined
+          )
+
+          // 4. Send the drafted email (Context/Cover letter)
+          // We still send this because the draft might contain specific answers or context
+          const conversation = await getConversationById(action.conversation_id)
+          const draft = await generateFinalDraft(
+            conversation?.summary_json,
+            `Potvrzuji termín schůzky: ${formatDate(new Date(selectedSlot.start))}, ${formatTime(new Date(selectedSlot.start))} - ${formatTime(new Date(selectedSlot.end))}. Pozvánka v kalendáři byla odeslána.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
+            userNotes || undefined,
+            undefined,
+            cp.name || cp.primary_identifier
+          )
+
+          await sendEmail(action.user_id, {
+            to: cp.primary_identifier,
+            subject: draft.subject || `Potvrzení schůzky`,
+            body: draft.body,
+          })
+
+          await completeAction(actionId)
+          return NextResponse.json({
+            success: true,
+            message: 'Meeting confirmed and invitation sent',
+          })
+        }
+
+        // Default Logic: Multiple slots or "all" -> Send Options via Email
         const formattedSlots = slotsToSend.map((s, i) => {
           const start = new Date(s.start)
           const end = new Date(s.end)
@@ -154,7 +204,6 @@ export async function POST(
 
         const locationStr = (payload?.location as string) || ''
         const slotsText = formattedSlots.join('\n')
-        const userNotes = (payload?.userNotes as string) || ''
 
         // Generate email to CP with selected time options - CP picks one
         const conversation = await getConversationById(action.conversation_id)
