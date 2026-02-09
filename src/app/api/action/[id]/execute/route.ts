@@ -148,10 +148,26 @@ export async function POST(
           const index = selectedNumbers[0] - 1
           const selectedSlot = blockedSlots[index]
           const unselectedSlots = blockedSlots.filter((_, i) => i !== index)
+          const loc = payload?.location as string | undefined
+
+          // Determine Title: Location OR "HOVOR - CP Name"
+          let finalTitle = `HOVOR - ${cp.name || cp.primary_identifier}`
+          if (loc && loc.trim().length > 0) {
+             finalTitle = loc
+          }
 
           // 1. Confirm GCal Event (sends invite)
           if (selectedSlot.gcal_event_id) {
-            await confirmCalendarEvent(action.user_id, selectedSlot.gcal_event_id, [cp.primary_identifier])
+            await confirmCalendarEvent(
+              action.user_id,
+              selectedSlot.gcal_event_id,
+              [cp.primary_identifier],
+              {
+                summary: finalTitle,
+                location: loc,
+                description: `Schůzka s ${cp.name || cp.primary_identifier}`
+              }
+            )
           }
 
           // 2. Delete Unselected GCal Events
@@ -168,7 +184,8 @@ export async function POST(
             selectedSlot.id,
             preBlockGroupId,
             undefined, // cpEmail
-            payload?.location as string | undefined
+            loc,
+            finalTitle // New title for local DB
           )
 
           // 4. Send the drafted email (Context/Cover letter)

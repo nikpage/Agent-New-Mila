@@ -259,10 +259,16 @@ export async function confirmSlot(
   confirmedEventId: string,
   preBlockGroupId: string,
   cpEmail?: string,
-  location?: string
+  location?: string,
+  newTitle?: string
 ): Promise<{ event: Event; travelBuffer?: Event }> {
   // Confirm the selected event
-  const confirmedEvent = await confirmEvent(confirmedEventId)
+  let confirmedEvent = await confirmEvent(confirmedEventId)
+
+  // Update title if provided
+  if (newTitle) {
+    confirmedEvent = await updateEvent(confirmedEventId, { title: newTitle })
+  }
 
   // Clean up other tentative holds in the same group
   const deletedIds = await cleanupBlockGroup(preBlockGroupId, confirmedEventId)

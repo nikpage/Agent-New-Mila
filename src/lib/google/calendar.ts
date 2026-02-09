@@ -398,12 +398,18 @@ export async function createTentativeCalendarEvent(
 export async function confirmCalendarEvent(
   userId: string,
   eventId: string,
-  attendees?: string[]
+  attendees?: string[],
+  updates?: {
+    summary?: string
+    location?: string
+    description?: string
+  }
 ): Promise<CalendarEvent> {
   const calendar = await getCalendarClient(userId)
 
   const requestBody: calendar_v3.Schema$Event = {
     status: 'confirmed',
+    ...updates,
   }
 
   if (attendees && attendees.length > 0) {

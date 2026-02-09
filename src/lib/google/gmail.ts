@@ -172,11 +172,11 @@ function parseGmailMessage(message: gmail_v1.Schema$Message): EmailMessage | nul
 /**
  * Encode subject header for RFC 2047 if it contains non-ASCII characters
  */
-function encodeSubject(subject: string): string {
-  if (/[^\x00-\x7F]/.test(subject)) {
-    return `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`
+function encodeHeader(value: string): string {
+  if (/[^\x00-\x7F]/.test(value)) {
+    return `=?utf-8?B?${Buffer.from(value).toString('base64')}?=`
   }
-  return subject
+  return value
 }
 
 /**
@@ -190,10 +190,10 @@ export async function sendEmail(
   const userEmail = await getUserEmail(userId)
 
   // Build RFC 2822 message
-  const messageParts = [
-    `From: ${userEmail}`,
-    `To: ${params.to}`,
-  ]
+  const messageParts: string[] = []
+
+  messageParts.push(`From: ${userEmail}`)
+  messageParts.push(`To: ${params.to}`)
 
   if (params.cc?.length) {
     messageParts.push(`Cc: ${params.cc.join(', ')}`)
@@ -203,7 +203,7 @@ export async function sendEmail(
     messageParts.push(`Bcc: ${params.bcc.join(', ')}`)
   }
 
-  messageParts.push(`Subject: ${encodeSubject(params.subject)}`)
+  messageParts.push(`Subject: ${encodeHeader(params.subject)}`)
 
   if (params.inReplyTo) {
     messageParts.push(`In-Reply-To: ${params.inReplyTo}`)
@@ -212,23 +212,31 @@ export async function sendEmail(
 
   messageParts.push('MIME-Version: 1.0')
 
+  // Helper to create a base64 encoded body part
+  const createBase64Part = (contentType: string, content: string) => {
+    const encodedContent = Buffer.from(content).toString('base64').match(/.{1,76}/g)?.join('\r\n') || ''
+    return [
+      `Content-Type: ${contentType}; charset="UTF-8"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      encodedContent
+    ].join('\r\n')
+  }
+
   if (params.htmlBody) {
     const boundary = `----=_Part_${Date.now()}`
     messageParts.push(`Content-Type: multipart/alternative; boundary="${boundary}"`)
     messageParts.push('')
+
     messageParts.push(`--${boundary}`)
-    messageParts.push('Content-Type: text/plain; charset="UTF-8"')
-    messageParts.push('')
-    messageParts.push(params.body)
+    messageParts.push(createBase64Part('text/plain', params.body))
+
     messageParts.push(`--${boundary}`)
-    messageParts.push('Content-Type: text/html; charset="UTF-8"')
-    messageParts.push('')
-    messageParts.push(params.htmlBody)
+    messageParts.push(createBase64Part('text/html', params.htmlBody))
+
     messageParts.push(`--${boundary}--`)
   } else {
-    messageParts.push('Content-Type: text/plain; charset="UTF-8"')
-    messageParts.push('')
-    messageParts.push(params.body)
+    messageParts.push(createBase64Part('text/plain', params.body))
   }
 
   const rawMessage = messageParts.join('\r\n')
