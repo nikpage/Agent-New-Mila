@@ -8,12 +8,13 @@ import {
   fetchRecentEmails,
   extractEmailAddress,
   extractName,
+  getUserEmail,
   type EmailMessage,
 } from '@/lib/google/gmail'
 import { classifyEmail } from '@/lib/ai/gemini'
 import { findOrCreateCP } from '@/lib/db/counterparties'
 import { createMessage, messageExists } from '@/lib/db/messages'
-import { getUserById } from '@/lib/db/users'
+import { getUserById, upsertUser } from '@/lib/db/users'
 import { generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { v4 as uuidv4 } from 'uuid'
@@ -27,6 +28,7 @@ const BLOCKED_SENDERS = [
   'no-reply@accounts.google.com',
   'noreply@google.com',
   'info@x.com',
+  'calendar-notification@google.com',
 ]
 
 export interface IngestedMessage {
@@ -39,16 +41,42 @@ export interface IngestedMessage {
 }
 
 /**
+ * Helper: Ensure user email is known and normalized
+ */
+async function getNormalizedUserEmail(userId: string): Promise<string> {
+  let user = await getUserById(userId)
+  if (!user) throw new Error(`User not found: ${userId}`)
+
+  // If email is missing in DB, fetch from Gmail and update DB
+  if (!user.email) {
+    try {
+      const emailFromGmail = await getUserEmail(userId)
+      if (emailFromGmail) {
+        user = await upsertUser({
+          ...user,
+          email: emailFromGmail,
+        })
+      }
+    } catch (error) {
+      console.error(`[Ingest] Failed to fetch user email from Gmail:`, error)
+    }
+  }
+
+  if (!user.email) {
+    throw new Error(`User ${userId} has no email address configured`)
+  }
+
+  return user.email.toLowerCase()
+}
+
+/**
  * Ingest emails for a user
  */
 export async function ingestEmailsForUser(
   userId: string,
   maxEmails: number = 50
 ): Promise<IngestedMessage[]> {
-  const user = await getUserById(userId)
-  if (!user) {
-    throw new Error(`User not found: ${userId}`)
-  }
+  const userEmail = await getNormalizedUserEmail(userId)
 
   // Fetch unread emails
   const emails = await fetchUnreadEmails(userId, maxEmails)
@@ -66,7 +94,7 @@ export async function ingestEmailsForUser(
       const senderName = extractName(email.from)
 
       // Skip if sender is the user (outbound)
-      if (senderEmail === user.email?.toLowerCase()) {
+      if (senderEmail === userEmail) {
         continue
       }
 
@@ -88,6 +116,7 @@ export async function ingestEmailsForUser(
       }
 
       // Find or create the counterparty
+      // This will throw if we try to create a CP for the user themselves
       const cp = await findOrCreateCP(userId, senderEmail, senderName || undefined)
 
       // Create the message record
@@ -141,11 +170,7 @@ export async function ingestOutboundEmails(
   userId: string,
   since: Date
 ): Promise<number> {
-  const user = await getUserById(userId)
-  if (!user || !user.email) {
-    return 0
-  }
-
+  const userEmail = await getNormalizedUserEmail(userId)
   let ingested = 0
 
   try {
@@ -165,7 +190,7 @@ export async function ingestOutboundEmails(
 
         // Sender is the user — extract recipients
         const senderEmail = extractEmailAddress(email.from)
-        if (senderEmail !== user.email?.toLowerCase()) {
+        if (senderEmail !== userEmail) {
           continue // Not from user, skip
         }
 
@@ -175,7 +200,7 @@ export async function ingestOutboundEmails(
         const recipientName = extractName(email.to[0])
 
         // Skip if recipient is the user themselves
-        if (recipientEmail === user.email?.toLowerCase()) continue
+        if (recipientEmail === userEmail) continue
 
         // Skip blocked senders (in case user replies to automated)
         if (BLOCKED_SENDERS.includes(recipientEmail)) continue

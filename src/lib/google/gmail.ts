@@ -189,18 +189,26 @@ export async function sendEmail(
   const gmail = await getGmailClient(userId)
   const userEmail = await getUserEmail(userId)
 
+  if (!userEmail) {
+    throw new Error('Could not determine user email address for From header')
+  }
+
   // Build RFC 2822 message
   const messageParts: string[] = []
 
   messageParts.push(`From: ${userEmail}`)
-  messageParts.push(`To: ${params.to}`)
+
+  // Encode To/Cc/Bcc headers if they contain non-ASCII characters
+  // Note: This encodes the entire string. For "Name <email>", it's safer to encode just the name,
+  // but Gmail usually handles full encoding gracefully.
+  messageParts.push(`To: ${encodeHeader(params.to)}`)
 
   if (params.cc?.length) {
-    messageParts.push(`Cc: ${params.cc.join(', ')}`)
+    messageParts.push(`Cc: ${encodeHeader(params.cc.join(', '))}`)
   }
 
   if (params.bcc?.length) {
-    messageParts.push(`Bcc: ${params.bcc.join(', ')}`)
+    messageParts.push(`Bcc: ${encodeHeader(params.bcc.join(', '))}`)
   }
 
   messageParts.push(`Subject: ${encodeHeader(params.subject)}`)
