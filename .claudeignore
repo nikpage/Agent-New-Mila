@@ -1,16 +1,14 @@
+# Build artifacts
 next-env.d.ts
 tsconfig.tsbuildinfo
-
-
-
-# Dependencies
-node_modules/
-
-# Next.js build output
 .next/
 out/
 
-# Environment files
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment / secrets
 .env
 .env*.local
 *.local
@@ -23,3 +21,9 @@ yarn-error.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Git
+.git/
+
+# Vercel
+.vercel/
