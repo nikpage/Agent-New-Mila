@@ -1,4 +1,5 @@
-import 'dotenv/config'
+import { config } from 'dotenv'
+config({ path: '.env.local' })
 import { createInterface } from 'readline'
 import { upsertUser } from '../src/lib/db/users'
 import { getAuthorizationUrl } from '../src/lib/google/auth'
