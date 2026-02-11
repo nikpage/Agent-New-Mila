@@ -1,3 +1,5 @@
+
+
 /**
  * Database types generated from Supabase schema
  * These match the exact structure of the database tables
@@ -559,29 +561,71 @@ export type ActionStatus = 'pending' | 'approved' | 'needs_revision' | 'complete
 
 // User settings structure (stored in users.settings JSON column)
 export interface UserSettings {
+  // Working Hours & Timezone
   working_hours_start: number    // default 9
   working_hours_end: number      // default 17
   working_days: number[]         // default [1,2,3,4,5] (Mon-Fri)
   timezone: string               // default "Europe/Prague"
+  morning_brief_time: string     // default "08:00"
+
+  // Meeting Preferences
   default_meeting_duration: number // default 30 (minutes)
+  default_meeting_type: 'online' | 'phone' | 'office' | 'walking' // default "online"
+  meeting_buffer_minutes: number   // default 15
+
+  // Travel Settings
   travel_mode: 'driving' | 'walking' | 'transit' | 'bicycling' // default "driving"
   home_location: string
   office_location: string
+
+  // Prioritization & Logic
   offer_multiplier_seller: number // default 1.5
   offer_multiplier_buyer: number  // default 1.0
+  priority_multiplier_vip: number // default 2.0
+  kc_factor: number               // default 13 (Fibonacci)
+  default_delegate_email: string | null
+
+  // Todo Settings
+  todo_auto_due_days: number      // default 1 (due tomorrow)
+
+  // AI Persona & Tone
+  ai_tone_user: string            // default "professional and concise"
+  ai_tone_cp: string              // default "polite and formal"
+  user_alias: string              // default "User" (what Mila calls the user)
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
+  // Working Hours & Timezone
   working_hours_start: 9,
   working_hours_end: 17,
   working_days: [1, 2, 3, 4, 5],
   timezone: 'Europe/Prague',
+  morning_brief_time: '08:00',
+
+  // Meeting Preferences
   default_meeting_duration: 30,
+  default_meeting_type: 'online',
+  meeting_buffer_minutes: 15,
+
+  // Travel Settings
   travel_mode: 'driving',
   home_location: '',
   office_location: '',
+
+  // Prioritization & Logic
   offer_multiplier_seller: 1.5,
   offer_multiplier_buyer: 1.0,
+  priority_multiplier_vip: 2.0,
+  kc_factor: 13,
+  default_delegate_email: null,
+
+  // Todo Settings
+  todo_auto_due_days: 1,
+
+  // AI Persona & Tone
+  ai_tone_user: 'professional and concise',
+  ai_tone_cp: 'polite and formal',
+  user_alias: 'User',
 }
 
 // Conversation summary JSON structure
