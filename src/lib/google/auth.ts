@@ -16,6 +16,10 @@ function getOAuth2Config() {
   const clientId = process.env.GOOGLE_CLIENT_ID
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET
   const redirectUri = process.env.GOOGLE_REDIRECT_URI
+  console.log('DEBUG: OAuth Config:', {
+    clientId: clientId ? '...exists' : 'MISSING',
+    redirectUri: `'${redirectUri}'`
+  })
 
   if (!clientId || !clientSecret || !redirectUri) {
     throw new Error('Missing Google OAuth configuration')
