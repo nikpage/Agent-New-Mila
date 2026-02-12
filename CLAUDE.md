@@ -96,6 +96,19 @@ All db files follow the same pattern: import `getSupabaseAdmin` from `../supabas
 
 ## Database Tables (so you don't need to read types.ts)
 
+## User Settings (JSONB)
+Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
+
+| Category | Fields | Defaults |
+|----------|--------|----------|
+| **Work Hours** | `working_hours_start`, `working_hours_end`, `working_days`, `timezone` | 9-17, Mon-Fri, Europe/Prague |
+| **Meetings** | `default_meeting_duration`, `default_meeting_type`, `meeting_buffer_minutes` | 30m, online, 15m |
+| **Travel** | `travel_mode`, `home_location`, `office_location` | driving |
+| **Priorities** | `offer_multiplier_seller`, `offer_multiplier_buyer`, `priority_multiplier_vip`, `kc_factor` | 1.5, 1.0, 2.0, 13 |
+| **AI Persona** | `ai_tone_user`, `ai_tone_cp`, `user_alias` | Professional, Polite, "User" |
+| **Misc** | `morning_brief_time`, `default_delegate_email`, `todo_auto_due_days` | 08:00, null, 1 |
+
+
 | Table | Key columns |
 |-------|------------|
 | `users` | id, email, name, google_tokens, settings (jsonb), timezone |
@@ -114,3 +127,9 @@ All db files follow the same pattern: import `getSupabaseAdmin` from `../supabas
 - Components use Tailwind CSS classes (no CSS modules)
 - Type imports use `import type { ... }` syntax
 - No test framework is configured — verify changes with `npm run build`
+
+
+## Superadmin
+- Dashboard at `/superadmin`
+- Protected by `SUPERADMIN_KEY` env var (passed via `?key=` or header)
+- Shows system health, user stats, and error logs

@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useState, useEffect, Suspense } from 'react'
+import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 
 interface DashboardStats {
   totalUsers: number
@@ -24,9 +24,10 @@ interface DashboardStats {
   }>
 }
 
-export default function SuperAdminDashboard() {
+function DashboardContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
+  const pathname = usePathname()
   const [key, setKey] = useState<string>('')
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
@@ -41,14 +42,14 @@ export default function SuperAdminDashboard() {
       setKey(activeKey)
       if (urlKey) {
         localStorage.setItem('superadmin_key', urlKey)
-        // Clean URL
-        router.replace('/superadmin')
+        // Clean URL visually without triggering navigation/reload
+        window.history.replaceState(null, '', pathname || '/superadmin')
       }
       fetchStats(activeKey)
     } else {
       setLoading(false)
     }
-  }, [searchParams, router])
+  }, [searchParams, pathname])
 
   const fetchStats = async (apiKey: string) => {
     setLoading(true)
@@ -204,5 +205,13 @@ export default function SuperAdminDashboard() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function SuperAdminDashboard() {
+  return (
+    <Suspense fallback={<div className="p-8">Loading...</div>}>
+      <DashboardContent />
+    </Suspense>
   )
 }

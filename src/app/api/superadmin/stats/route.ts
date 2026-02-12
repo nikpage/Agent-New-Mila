@@ -33,7 +33,7 @@ export async function GET(request: Request) {
     // 2. Fetch Users & Stats
     const { data: users, error: usersError } = await supabase
       .from('users')
-      .select('id, email, email_enabled, created_at, settings, updated_at')
+      .select('id, email, email_enabled, created_at, settings')
       .order('created_at', { ascending: false })
 
     if (usersError) throw usersError
@@ -73,7 +73,7 @@ export async function GET(request: Request) {
         email: u.email,
         enabled: u.email_enabled,
         joined: u.created_at,
-        lastActive: u.updated_at,
+        lastActive: null,
         // safely access settings if it exists
         timezone: (u.settings as any)?.timezone || 'N/A',
         mode: (u.settings as any)?.travel_mode || 'N/A'
