@@ -3,295 +3,200 @@
 This document outlines the security architecture, known risks, and mitigation strategies for Mila.
 
 **Last Updated:** 2026-02-13
-**Status:** MVP Security Baseline Implemented
+**Architecture:** Event-driven email automation agent (NOT interactive SaaS)
 
 ---
 
-## 🏗️ Security Architecture
+## 🏗️ System Architecture
 
-### Authentication Model
+### What Mila Actually Is
 
-**Primary Authentication:** Email Ownership via Google OAuth
-- Users authenticate by connecting their Google account
-- Ownership of the Gmail/Calendar proves identity
-- OAuth tokens stored in Supabase (see risks below)
+**Mila is an automated email assistant, not a web application:**
+- Cron job processes user emails daily → generates action proposals
+- Actions are sent to users via email with magic links
+- Users click links to approve/execute actions
+- Minimal web UI only for OAuth setup
+
+**User Interaction Model:**
+```
+Gmail → Cron ingests → Agent processes → Creates actions → Emails user
+User clicks email link → Verifies token → Executes action → Done
+```
+
+**NOT a traditional SaaS:**
+- ❌ No user dashboard with buttons to click
+- ❌ No user-initiated API calls
+- ❌ No session-based login
+- ❌ No interactive web UI (beyond OAuth setup)
 
 ### Multi-Customer Deployment Model
 
 **Shared Database:** All customers use ONE Supabase instance
 - RLS (Row Level Security) policies enforce data isolation
 - Each customer has unique `user_id` UUID
-- API key per deployment prevents cross-customer access
-
-**Deployment Architecture:**
-```
-Customer A → Vercel Deployment A → API Key A → Shared Supabase
-Customer B → Vercel Deployment B → API Key B → Shared Supabase
-Customer C → Vercel Deployment C → API Key C → Shared Supabase
-```
+- Cron jobs process all users sequentially
 
 ---
 
 ## 🔐 Current Security Controls
 
-### ✅ IMPLEMENTED (MVP Baseline)
+### ✅ IMPLEMENTED
 
-#### 1. API Key Authentication
+#### 1. Cron Job Protection
+**File:** `src/lib/auth/tokens.ts:132-143`
+
+- All cron endpoints require `CRON_SECRET` in Authorization header
+- Rejects requests if secret not configured (secure by default)
+- Protects automated email processing from unauthorized triggers
+
+**Protected endpoints:**
+- `/api/cron/morning-brief` (daily 8am brief)
+
+#### 2. Action Token Authentication
+**File:** `src/lib/auth/tokens.ts:7-60`
+
+- Email action links contain HMAC-signed tokens
+- Token proves: "User X owns action Y"
+- 7-day expiry window
+- One-time use (action marked completed after execution)
+
+**Protected flows:**
+- User clicks email → `/api/action/[id]/execute?token=xyz`
+- Token validates `actionId` + `userId` + `timestamp`
+
+#### 3. API Key Protection (NEW)
 **File:** `src/lib/auth/api.ts`
 
-- Each customer deployment has unique `CUSTOMER_API_KEY`
-- All API endpoints protected except:
-  - `/api/auth/*` (OAuth flow, public by necessity)
-  - `/api/health` (monitoring, no sensitive data)
-  - `/api/cron/*` (protected by `CRON_SECRET`)
-  - `/api/action/[id]/*` (protected by action tokens)
+- Manual triggers require `CUSTOMER_API_KEY` in `x-api-key` header
+- Each deployment has unique key
+- Protects `/api/agent/run` and `/api/ingest` from unauthorized access
 
-**Limitations:**
-- Not session-based (all users in deployment share same key)
-- Does not verify email ownership per request
-- If deployment key leaks → entire deployment compromised
+**Use case:** Admin manually triggers processing for specific user
 
-**Mitigation:**
-- Generate unique key per deployment
-- Rotate keys if compromise suspected
-- Monitor Sentry for repeated auth failures
-
-#### 2. Row Level Security (RLS)
+#### 4. Row Level Security (RLS)
 **Location:** Supabase Database
 
-- All tables have `user_id` column
-- RLS policies ensure users only access their own data
-- Service key bypasses RLS (used by API routes)
+- All tables have `user_id` column with RLS policies
+- API routes use service key (bypasses RLS) → MUST manually filter by `user_id`
+- Prevents cross-customer data access
 
-**Critical Dependency:**
-- API routes MUST validate user ownership before querying with service key
-- If API route trusts `userId` from request without validation → RLS bypassed
+**Critical for shared database architecture**
 
-**Verification Needed:**
-Review each API route in `src/app/api/` to ensure:
-1. User authenticated (API key or token)
-2. User owns the resource being accessed
+#### 5. OAuth Token Storage
+**Current state:** Plaintext in `users.google_tokens` JSONB column
 
-#### 3. Token-Based Action Authorization
-**File:** `src/lib/auth/tokens.ts`
+**Risk:** If `SUPABASE_SERVICE_KEY` leaks → all Gmail access compromised
 
-- Action links include HMAC-signed tokens
-- Tokens expire after 7 days
-- Validates `actionId` + `userId` + `timestamp`
+**Accepted for now:** Strong service key + Vercel env encryption + limited customer count (<20)
 
-**Good:** Prevents unauthorized action execution from email links
-**Limitation:** Email interception within 7 days = compromise
-
-#### 4. Cron Job Protection
-**File:** `src/lib/auth/tokens.ts:132`
-
-- Cron endpoints require `CRON_SECRET` header
-- Rejects requests if secret not configured (secure by default)
-- Dev mode now ALSO requires secret (fixed vulnerability)
-
-#### 5. Environment Configuration Validation
-**File:** `src/config/env.ts`
-
-- Validates all required env vars at startup
-- Application fails fast if misconfigured
-- Prevents partial deployments
-
-#### 6. Health Endpoint Hardening
+#### 6. Health Endpoint Hardening (NEW)
 **File:** `src/app/api/health/route.ts`
 
-- No longer leaks missing environment variable names
-- Returns generic "Configuration incomplete" error
+- Returns generic "Configuration incomplete" instead of leaking env var names
+- Prevents reconnaissance attacks
 
-#### 7. Error Monitoring (Sentry)
-**Files:** `sentry.*.config.ts`
-
-- Server-side error tracking
-- Client-side error tracking with session replay
-- Alerts on new errors
+#### 7. Error Monitoring (NEW)
+**Sentry:** Client + server + edge runtime tracking
 
 ---
 
 ## ⚠️ KNOWN RISKS & MITIGATIONS
 
-### 🔴 HIGH RISK: OAuth Tokens Stored in Plaintext
+### 🔴 HIGH RISK: OAuth Tokens in Plaintext
 
 **Current State:**
-- Google OAuth tokens (Gmail, Calendar access) stored in `users.google_tokens` JSONB column
-- No encryption at rest
-- If Supabase service key leaks → attacker gets ALL customers' Gmail access
+- Gmail/Calendar access tokens stored unencrypted
+- Refresh tokens valid until revoked (persistent access)
 
-**Impact:** CATASTROPHIC
-- Attacker can read all emails
-- Attacker can send emails as users
-- Attacker can access calendars
-- Attacker can persist access (refresh tokens valid until revoked)
-
-**Current Mitigation (Pragmatic for MVP):**
-1. Strong `SUPABASE_SERVICE_KEY` (64+ char random)
-2. Service key stored in Vercel environment variables (encrypted at rest)
-3. Vercel has SOC 2 compliance
-4. RLS policies limit exposure (but service key bypasses)
-5. Limited customer count (<20) reduces blast radius
-
-**RECOMMENDED: Migrate to Supabase Vault**
-- Supabase Vault encrypts secrets at rest
-- Transparent to application code
-- Requires Supabase Pro plan ($25/month)
-- **Action:** Implement when customer count reaches 10
-
-**Alternative: Application-Level Encryption**
-```typescript
-// Pseudo-code for future implementation
-import { encrypt, decrypt } from '@/lib/encryption'
-
-// On token save:
-const encryptedTokens = encrypt(JSON.stringify(tokens), NEXTAUTH_SECRET)
-await updateUser(userId, { encrypted_google_tokens: encryptedTokens })
-
-// On token read:
-const tokens = JSON.parse(decrypt(user.encrypted_google_tokens, NEXTAUTH_SECRET))
-```
-
-**Timeline:**
-- **MVP (now):** Accept risk, document, monitor
-- **10 customers:** Implement Supabase Vault or app-level encryption
-- **20+ customers:** Consider separate Supabase per customer
-
----
-
-### 🟡 MEDIUM RISK: Shared Database Instance
-
-**Current State:**
-- All customers share ONE Supabase instance
-- RLS policies + application logic enforces isolation
-
-**Risks:**
-1. **RLS Bypass:** Bug in API route could expose cross-customer data
-2. **Performance:** One customer's load affects others
-3. **Blast Radius:** Supabase outage = all customers down
-
-**Mitigation:**
-1. **Code Review:** Ensure all DB queries filter by `user_id`
-2. **Testing:** Add integration tests for data isolation
-3. **Monitoring:** Sentry alerts on unusual DB access patterns
-4. **Rate Limiting:** Add per-customer rate limits (TODO)
-
-**Future:**
-- Separate Supabase per enterprise customer (>100 users)
-- Consider RDS Multi-Tenant with better isolation
-
----
-
-### 🟡 MEDIUM RISK: No Session-Based Auth
-
-**Current State:**
-- API key shared across all users in deployment
-- No per-request email ownership verification
-
-**Risks:**
-1. User A can pass User B's `userId` in API request
-2. API key leak = entire deployment compromised
-3. No audit trail per user
+**Impact if compromised:** CATASTROPHIC
+- Read all customer emails
+- Send emails as customers
+- Access calendars
+- Persist access indefinitely
 
 **Current Mitigation:**
-- Custom deployment per customer (1-5 users per deployment)
-- Trusted users (employees of same company)
+1. Strong 64+ char `SUPABASE_SERVICE_KEY`
+2. Vercel environment variables (encrypted at rest, SOC 2)
+3. RLS policies (but service key bypasses)
+4. Limited blast radius (<20 customers)
 
-**RECOMMENDED: Implement NextAuth.js Session Auth**
+**REQUIRED: Encrypt before 10 customers**
 
-Timeline:
-- **MVP:** Accept risk (custom deployments = trusted users)
-- **Multi-Tenant SaaS:** MUST implement before launch
-
-Example implementation:
-```typescript
-// Future: src/lib/auth/session.ts
-import { getServerSession } from 'next-auth'
-
-export async function requireAuth(req: NextRequest) {
-  const session = await getServerSession()
-  if (!session?.user?.email) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-  return session.user
-}
-
-// Usage in API routes:
-const user = await requireAuth(request)
-const userId = user.id // Verified from session, not request body
-```
+**Options:**
+1. **Supabase Vault** (recommended) - Built-in encryption, transparent to code
+2. **Application-level encryption** - Encrypt with `NEXTAUTH_SECRET` before storing
 
 ---
 
-### 🟡 MEDIUM RISK: No Rate Limiting
+### 🟡 MEDIUM RISK: Shared Supabase Instance
 
 **Current State:**
-- No rate limiting on API endpoints
-- Attacker with valid API key can exhaust:
-  - Gemini API quota
-  - Gmail API quota
-  - Supabase resources
+- All customers share ONE database
+- RLS + API filtering enforces isolation
+
+**Risks:**
+1. **Code bug** → API route forgets `user_id` filter → cross-customer leak
+2. **Performance** → One customer's load affects others
+3. **Blast radius** → Supabase outage = all customers down
 
 **Mitigation:**
-- Gemini has built-in rate limits (10 req/min)
-- Gmail has quotas per user (10k req/day)
-- Vercel has DDoS protection
+- Code review: Verify all queries filter by `user_id`
+- Monitoring: Sentry alerts on DB errors
+- Testing: Integration tests for data isolation
 
-**RECOMMENDED: Add Application-Level Rate Limiting**
+**Future:** Separate Supabase for enterprise customers (>100 users)
 
-Use Upstash Redis + Vercel Edge Config:
-```typescript
-// Future: src/lib/rate-limit.ts
-import { Ratelimit } from '@upstash/ratelimit'
+---
 
-const ratelimit = new Ratelimit({
-  redis: Redis.fromEnv(),
-  limiter: Ratelimit.slidingWindow(10, '1 m'), // 10 requests per minute
-})
+### 🟡 MEDIUM RISK: Cron Token in Environment
 
-export async function checkRateLimit(identifier: string) {
-  const { success } = await ratelimit.limit(identifier)
-  return success
-}
-```
+**Current State:**
+- `CRON_SECRET` stored in Vercel env vars
+- Vercel Cron automatically includes correct token
 
-**Timeline:** Implement before 5th customer
+**Risk:** If Vercel account compromised → attacker can trigger cron jobs
+
+**Impact:** Medium (can process emails, but can't read results without DB access)
+
+**Mitigation:**
+- Strong Vercel account password + 2FA
+- Limit Vercel team members
+- Monitor Sentry for unexpected cron runs
 
 ---
 
 ### 🟢 LOW RISK: Action Token Interception
 
 **Current State:**
-- Action links emailed to users contain 7-day tokens
-- Email interception = attacker can execute action
+- 7-day expiry on email action links
+- Tokens are HMAC-signed (can't forge)
 
-**Likelihood:** Low (requires email compromise + 7-day window)
-**Impact:** Medium (attacker can reply/schedule on behalf of user)
+**Risk:** Email compromise within 7 days = attacker can execute action
+
+**Impact:** Low-Medium (attacker can reply/schedule as user, but only once per action)
 
 **Mitigation:**
 - 7-day expiry limits window
-- Tokens are HMAC-signed (can't be forged)
-- One-time use (action marked completed after execution)
+- One-time use (action completes after execution)
+- Email security is user's responsibility
 
-**Enhancement (Optional):**
-- Reduce expiry to 24 hours
-- Add IP-based anomaly detection
+**Enhancement (optional):** Reduce expiry to 24 hours
 
 ---
 
-### 🟢 LOW RISK: No Database Backups
+### 🟢 LOW RISK: API Key for Manual Triggers
 
-**Current State (Fixed):**
-- `DEPLOYMENT.md` documents backup process
-- Manual weekly backups required for Free/Hobby plan
-- Automated backups available on Pro plan ($25/month)
+**Current State:**
+- `/api/agent/run` accepts `userId` in request body with API key
+- Trusts caller to provide correct `userId`
 
-**Impact if No Backups:** Data loss = unrecoverable
+**Risk:** Malicious admin/script could process wrong user's emails
+
+**Impact:** Low (assumes single trusted admin per deployment)
 
 **Mitigation:**
-- Set calendar reminder for weekly exports
-- Store backups off-site (S3, Dropbox)
-- Test restore process quarterly
+- Single-customer deployments (1-5 trusted users)
+- Map API keys to specific `userId` if needed
 
 ---
 
@@ -299,182 +204,156 @@ export async function checkRateLimit(identifier: string) {
 
 ### For Developers
 
-1. **Never Log Secrets**
+1. **Always filter by user_id**
    ```typescript
-   // ❌ BAD
-   console.log('Token:', user.google_tokens)
-
-   // ✅ GOOD
-   console.log('User authenticated:', user.email)
-   ```
-
-2. **Always Filter by user_id**
-   ```typescript
-   // ❌ BAD
-   const actions = await supabase.from('action_proposals').select('*')
-
    // ✅ GOOD
    const actions = await supabase
      .from('action_proposals')
      .select('*')
      .eq('user_id', userId)
+
+   // ❌ BAD (exposes all users' data)
+   const actions = await supabase
+     .from('action_proposals')
+     .select('*')
    ```
 
-3. **Validate User Ownership**
+2. **Never log secrets**
    ```typescript
    // ❌ BAD
-   const { actionId, userId } = await request.json()
-   const action = await getActionById(actionId)
+   console.log('OAuth tokens:', user.google_oauth_tokens)
 
    // ✅ GOOD
-   const { actionId, userId } = await request.json()
+   console.log('User authenticated:', user.email)
+   ```
+
+3. **Validate user ownership**
+   ```typescript
    const action = await getActionById(actionId)
    if (action.user_id !== userId) {
      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
    }
    ```
 
-4. **Use Environment Variables**
-   ```typescript
-   // ❌ BAD
-   const apiKey = 'sk-hardcoded-key-123'
-
-   // ✅ GOOD
-   const apiKey = process.env.GEMINI_API_KEY
-   if (!apiKey) throw new Error('GEMINI_API_KEY not configured')
-   ```
-
 ### For Operators
 
-1. **Rotate Secrets Quarterly**
-   - Generate new `CUSTOMER_API_KEY` every 3 months
-   - Update Vercel environment variables
-   - No downtime (keys can overlap during rotation)
+1. **Rotate secrets quarterly**
+   - `CUSTOMER_API_KEY` every 3 months
+   - `CRON_SECRET` every 6 months
+   - Update Vercel env vars
 
-2. **Monitor Sentry Daily**
+2. **Monitor Sentry daily**
    - Review errors from last 24 hours
    - Set up Slack alerts for critical errors
 
-3. **Review Access Logs Weekly**
-   - Check Vercel logs for unusual patterns
-   - Watch for repeated 401/403 errors (attack attempts)
+3. **Review Vercel logs weekly**
+   - Check for unusual patterns
+   - Watch for repeated 401/403 errors
 
-4. **Test Backups Quarterly**
-   - Download latest backup
-   - Restore to test Supabase instance
-   - Verify data integrity
+4. **Backup database weekly**
+   - Manual export if Free tier
+   - Automated if Pro tier ($25/month)
 
 ---
 
-## 🚨 Incident Response Playbook
+## 🚨 Incident Response
 
-### Suspected API Key Leak
+### OAuth Token Leak
 
-1. **Immediate:**
-   - Generate new `CUSTOMER_API_KEY`
+**If SUPABASE_SERVICE_KEY compromised:**
+
+1. **Immediate (within 15 minutes):**
+   - Rotate `SUPABASE_SERVICE_KEY` in Supabase dashboard
    - Update Vercel environment variables
-   - Redeploy (triggers immediate key rotation)
+   - Redeploy application
 
-2. **Within 1 Hour:**
-   - Review Vercel logs for unauthorized requests
-   - Check Sentry for unusual errors
-   - Audit Supabase for unexpected data changes
-
-3. **Within 24 Hours:**
-   - Identify leak source (git history, logs, screenshot)
-   - Document incident
-   - Update security procedures
-
-### Suspected Database Compromise
-
-1. **Immediate:**
-   - Rotate `SUPABASE_SERVICE_KEY` (in Supabase dashboard)
-   - Update Vercel environment variables
-   - Revoke all user OAuth tokens (force re-auth)
-
-2. **Within 1 Hour:**
+2. **Within 1 hour:**
    - Review Supabase logs for unauthorized access
-   - Identify compromised data
-   - Notify affected users if PII accessed
+   - Revoke all user OAuth tokens via Google Admin Console
+   - Force users to re-authenticate
 
-3. **Within 24 Hours:**
-   - Restore from latest backup if data modified
-   - Implement additional monitoring
-   - Consider migrating to separate Supabase instance
+3. **Within 24 hours:**
+   - Notify affected customers
+   - Document incident
+   - Implement OAuth token encryption
 
-### Data Loss Event
+### Unauthorized Cron Execution
+
+**If CRON_SECRET leaked:**
+
+1. **Immediate:**
+   - Generate new `CRON_SECRET`
+   - Update Vercel environment variables
+   - Update Vercel cron configuration
+
+2. **Within 1 hour:**
+   - Review logs for unauthorized cron runs
+   - Check for unexpected actions created
+   - Audit Sentry for anomalies
+
+### Data Loss
+
+**If database corrupted/deleted:**
 
 1. **Immediate:**
    - Identify scope (which users, which data, time range)
    - Download latest backup
 
-2. **Within 2 Hours:**
-   - Restore from backup (see `DEPLOYMENT.md`)
+2. **Within 2 hours:**
+   - Restore from backup
    - Verify data integrity
-   - Notify affected users
+   - Test critical flows (OAuth, cron, actions)
 
-3. **Post-Mortem:**
-   - Identify root cause
+3. **Post-mortem:**
+   - Document root cause
    - Implement prevention (more frequent backups, checksums)
-   - Update runbooks
 
 ---
 
 ## 📋 Security Checklist for New Deployments
 
-Before deploying for a new customer:
-
 - [ ] Generate unique `CUSTOMER_API_KEY` (never reuse)
 - [ ] Generate unique `CRON_SECRET` (never reuse)
 - [ ] Set strong `NEXTAUTH_SECRET` (32+ bytes)
-- [ ] Configure Sentry project (isolate customer errors)
+- [ ] Configure Sentry DSN (separate project per customer)
 - [ ] Create separate Google Cloud project (isolate OAuth)
 - [ ] Enable Supabase RLS on all tables
-- [ ] Test unauthorized API access (should fail)
+- [ ] Test unauthorized API access (should fail with 401)
 - [ ] Test OAuth flow end-to-end
 - [ ] Set up backup automation or calendar reminder
-- [ ] Document deployment in internal wiki
+- [ ] Verify cron job runs successfully
 
 ---
 
-## 🔄 Roadmap: Security Enhancements
+## 🔄 Security Roadmap
 
-### Before 5th Customer
-- [ ] Add rate limiting (Upstash Redis)
-- [ ] Add request logging middleware
-- [ ] Implement automated backup verification
-
-### Before 10th Customer
-- [ ] **CRITICAL:** Encrypt OAuth tokens (Vault or app-level)
-- [ ] Implement session-based auth (NextAuth.js)
-- [ ] Add per-user audit logs
-- [ ] Set up security alerting (Slack/PagerDuty)
+### Before 10th Customer (CRITICAL)
+- [ ] **Encrypt OAuth tokens** (Supabase Vault or app-level) - 3 hours
+  - **Why:** Plaintext tokens = catastrophic if leaked
+  - **How:** Supabase Vault or AES encryption with `NEXTAUTH_SECRET`
 
 ### Before 20th Customer
-- [ ] Consider separate Supabase per customer
-- [ ] Implement IP allowlisting for admin endpoints
-- [ ] Add anomaly detection (unusual activity patterns)
-- [ ] Security audit by third party
+- [ ] **Per-user audit logs** - 2 hours
+  - **Why:** Forensics for security incidents, compliance (GDPR)
+  - **What:** Log `user_id`, `action`, `timestamp`, `ip_address`
 
-### Production SaaS Launch
-- [ ] **REQUIRED:** Session-based authentication
-- [ ] **REQUIRED:** OAuth token encryption
-- [ ] SOC 2 compliance
-- [ ] Penetration testing
-- [ ] Bug bounty program
+- [ ] **Separate Supabase for high-value customers** - 4 hours
+  - **Why:** Isolate blast radius, better performance
+  - **When:** Enterprise customers with >100 users
+
+### If Adding WhatsApp Bot
+- [ ] **Rate limiting per phone number** (Upstash Redis) - 2 hours
+- [ ] **WhatsApp webhook signature verification** - 1 hour
+- [ ] **Message encryption** for sensitive data - 2 hours
 
 ---
 
 ## 📞 Security Contacts
 
 **For Security Issues:**
-- **Critical (data breach, active attack):** Immediately notify team lead
-- **High (vulnerability discovered):** Create private GitHub issue, tag @security
-- **Medium/Low:** Create issue in regular tracker
-
-**External Reporting:**
-- Email: security@your-company.com (replace with actual contact)
-- PGP Key: [Link to public key if applicable]
+- **Critical:** Immediately notify team lead
+- **High:** Create private GitHub issue
+- **Medium/Low:** Regular issue tracker
 
 ---
 
@@ -482,11 +361,12 @@ Before deploying for a new customer:
 
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
 - [Supabase RLS Best Practices](https://supabase.com/docs/guides/auth/row-level-security)
-- [Vercel Security](https://vercel.com/docs/concepts/secure)
-- [Google OAuth Best Practices](https://developers.google.com/identity/protocols/oauth2/web-server)
+- [Vercel Security](https://vercel.com/docs/security)
+- [DEPLOYMENT.md](./DEPLOYMENT.md) - Deployment guide
+- [CLAUDE.md](./CLAUDE.md) - Code architecture
 
 ---
 
-**Document Version:** 1.0
+**Document Version:** 2.0 (Architecture-corrected)
 **Last Review:** 2026-02-13
 **Next Review:** 2026-05-13 (quarterly)
