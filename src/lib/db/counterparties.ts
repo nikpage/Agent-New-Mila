@@ -75,11 +75,12 @@ export async function upsertCP(cp: CPInsert): Promise<CP> {
     primary_identifier: cp.primary_identifier.toLowerCase(),
   }
 
-  // DOUBLE CHECK: Ensure we are not creating a CP for the user themselves
-  // This requires fetching the user, which adds overhead, but safety is priority.
-  // We only do this check if we are inserting (no ID) or if we want to be extra safe.
-  // Since upsertCP is low-level, we rely on findOrCreateCP for the logic,
-  // but we can add a basic check if the user_id is available to look up.
+  // HARD GUARD: Never create a CP for the user's own email.
+  // This is the lowest-level chokepoint — every CP creation goes through here.
+  const user = await getUserById(cp.user_id)
+  if (user?.email && user.email.toLowerCase() === normalizedCP.primary_identifier) {
+    throw new Error(`[upsertCP] Refusing to create CP for user's own email: ${normalizedCP.primary_identifier}`)
+  }
 
   const { data, error } = await supabase
     .from('cps')
@@ -106,17 +107,16 @@ export async function findOrCreateCP(
 ): Promise<CP> {
   const normalizedEmail = email.toLowerCase().trim()
 
-  // Guard: NEVER create a CP for the user's own email address
+  // Guard: NEVER create a CP for the user's own email address.
+  // FAIL CLOSED: if user has no email in DB, refuse rather than risk creating a self-CP.
   const user = await getUserById(userId)
 
   if (user?.email) {
     if (user.email.toLowerCase() === normalizedEmail) {
-      throw new Error(`Cannot create counterparty for user's own email address: ${normalizedEmail}`)
+      throw new Error(`[findOrCreateCP] Refusing to create CP for user's own email: ${normalizedEmail}`)
     }
   } else {
-    // If user has no email in DB, this is a critical data integrity issue.
-    // We should probably fail or warn, but to be safe, we proceed with caution.
-    console.warn(`[findOrCreateCP] User ${userId} has no email in DB. Cannot verify self-reference.`)
+    throw new Error(`[findOrCreateCP] User ${userId} has no email in DB — cannot safely verify this is not a self-reference. Aborting CP creation for: ${normalizedEmail}`)
   }
 
   const existing = await getCPByIdentifier(userId, normalizedEmail)

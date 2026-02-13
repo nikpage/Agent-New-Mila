@@ -133,15 +133,21 @@ async function syncGoogleEventToLocal(
   if (gcalEvent.attendees && gcalEvent.attendees.length > 0) {
     // Find the first non-user attendee
     const user = await getUserById(userId)
-    const otherAttendees = gcalEvent.attendees.filter(
-      a => a.email?.toLowerCase() !== user?.email?.toLowerCase()
-    )
+    const userEmailLower = user?.email?.toLowerCase()
 
-    if (otherAttendees.length > 0) {
-      const firstAttendee = otherAttendees[0]
-      if (firstAttendee.email) {
-        const cp = await findOrCreateCP(userId, firstAttendee.email, firstAttendee.name || undefined)
-        cpId = cp.id
+    // Only filter if we actually know the user's email — otherwise skip CP
+    // creation entirely to avoid accidentally adding the user as their own CP.
+    if (userEmailLower) {
+      const otherAttendees = gcalEvent.attendees.filter(
+        a => a.email && a.email.toLowerCase() !== userEmailLower
+      )
+
+      if (otherAttendees.length > 0) {
+        const firstAttendee = otherAttendees[0]
+        if (firstAttendee.email) {
+          const cp = await findOrCreateCP(userId, firstAttendee.email, firstAttendee.name || undefined)
+          cpId = cp.id
+        }
       }
     }
   }
@@ -177,6 +183,18 @@ async function processInvitation(
   invitation: CalendarEvent
 ): Promise<boolean> {
   if (!invitation.organizer?.email) return false
+
+  // Guard: skip if organizer is the user (self-organized events can appear as
+  // pending invitations due to Google Calendar quirks with shared calendars,
+  // resource rooms, etc.)
+  if (invitation.organizer.email.toLowerCase() === userEmail.toLowerCase()) {
+    return false
+  }
+
+  // Double-check with the full isIncomingInvitation check
+  if (!isIncomingInvitation(invitation, userEmail)) {
+    return false
+  }
 
   // Find or create CP for the organizer
   const cp = await findOrCreateCP(
