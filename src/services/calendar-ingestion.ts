@@ -178,6 +178,11 @@ async function processInvitation(
 ): Promise<boolean> {
   if (!invitation.organizer?.email) return false
 
+  // Skip if the organizer is the user themselves (user-created event)
+  if (invitation.organizer.email.toLowerCase() === userEmail.toLowerCase()) {
+    return false
+  }
+
   // Find or create CP for the organizer
   const cp = await findOrCreateCP(
     userId,
