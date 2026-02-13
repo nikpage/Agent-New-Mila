@@ -129,30 +129,23 @@ export async function upsertCP(cp: CPInsert): Promise<CP> {
 }
 
 /**
- * Find or create a counterparty by email
+ * Find or create a counterparty by email.
+ * Returns null if the email belongs to the user — the user is NOT a CP.
  */
 export async function findOrCreateCP(
   userId: string,
   email: string,
   name?: string
-): Promise<CP> {
+): Promise<CP | null> {
   const normalizedEmail = email.toLowerCase().trim()
 
-  // Guard: NEVER create a CP for the user's own email address.
-  // FAIL CLOSED: if user has no email in DB, refuse rather than risk creating a self-CP.
+  // The user is not a CP. Silent return, no throw, no noise.
   const user = await getUserById(userId)
-
-  if (user?.email) {
-    if (user.email.toLowerCase() === normalizedEmail) {
-      throw new Error(`[findOrCreateCP] Refusing to create CP for user's own email: ${normalizedEmail}`)
-    }
-  } else {
-    throw new Error(`[findOrCreateCP] User ${userId} has no email in DB — cannot safely verify this is not a self-reference. Aborting CP creation for: ${normalizedEmail}`)
-  }
+  if (!user?.email) return null
+  if (user.email.toLowerCase() === normalizedEmail) return null
 
   const existing = await getCPByIdentifier(userId, normalizedEmail)
   if (existing) {
-    // Update name if provided and CP doesn't have one
     if (name && !existing.name) {
       return updateCP(existing.id, { name })
     }

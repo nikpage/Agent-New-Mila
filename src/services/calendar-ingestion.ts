@@ -146,7 +146,7 @@ async function syncGoogleEventToLocal(
         const firstAttendee = otherAttendees[0]
         if (firstAttendee.email) {
           const cp = await findOrCreateCP(userId, firstAttendee.email, firstAttendee.name || undefined)
-          cpId = cp.id
+          if (cp) cpId = cp.id
         }
       }
     }
@@ -196,12 +196,13 @@ async function processInvitation(
     return false
   }
 
-  // Find or create CP for the organizer
+  // Find or create CP for the organizer (null = user's own email, skip)
   const cp = await findOrCreateCP(
     userId,
     invitation.organizer.email,
     invitation.organizer.name || undefined
   )
+  if (!cp) return false
 
   // Check if we already have a pending action for this invitation
   // Use a synthetic conversation ID based on the calendar event

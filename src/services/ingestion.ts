@@ -115,9 +115,9 @@ export async function ingestEmailsForUser(
         continue
       }
 
-      // Find or create the counterparty
-      // This will throw if we try to create a CP for the user themselves
+      // Find or create the counterparty (null = user's own email, skip)
       const cp = await findOrCreateCP(userId, senderEmail, senderName || undefined)
+      if (!cp) continue
 
       // Create the message record
       const messageId = uuidv4()
@@ -205,8 +205,9 @@ export async function ingestOutboundEmails(
         // Skip blocked senders (in case user replies to automated)
         if (BLOCKED_SENDERS.includes(recipientEmail)) continue
 
-        // Find or create CP for the recipient
+        // Find or create CP for the recipient (null = user's own email, skip)
         const cp = await findOrCreateCP(userId, recipientEmail, recipientName || undefined)
+        if (!cp) continue
 
         // Create the message record as outbound
         const messageId = uuidv4()
