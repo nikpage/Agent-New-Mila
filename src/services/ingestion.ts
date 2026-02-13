@@ -12,7 +12,7 @@ import {
   type EmailMessage,
 } from '@/lib/google/gmail'
 import { classifyEmail } from '@/lib/ai/gemini'
-import { findOrCreateCP } from '@/lib/db/counterparties'
+import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists } from '@/lib/db/messages'
 import { getUserById, upsertUser } from '@/lib/db/users'
 import { generateMessageEmbedding } from '@/lib/embeddings/generate'
@@ -21,15 +21,94 @@ import { v4 as uuidv4 } from 'uuid'
 
 /**
  * Senders that are always skipped — no message or CP is created for these.
- * These are automated / no-reply addresses that the AI classifier
- * occasionally lets through as actionable.
+ * Hard-coded list checked BEFORE the AI classifier runs so we don't waste
+ * tokens on obvious automated / no-reply / transactional mail.
+ *
+ * Rules:
+ *  - Exact email matches go in BLOCKED_SENDERS.
+ *  - Prefix patterns go in BLOCKED_SENDER_PREFIXES (matched against the local
+ *    part before the @).
+ *  - Domain patterns go in BLOCKED_SENDER_DOMAINS (matched against the domain
+ *    part after the @).
  */
 const BLOCKED_SENDERS = [
+  // Google
   'no-reply@accounts.google.com',
   'noreply@google.com',
-  'info@x.com',
   'calendar-notification@google.com',
+  'notifications@google.com',
+  'drive-shares-dm-noreply@google.com',
+  // X / Twitter
+  'info@x.com',
+  'verify@x.com',
+  'noreply@x.com',
+  // Supabase
+  'noreply@supabase.io',
+  'noreply@supabase.com',
+  'noreply@mail.supabase.com',
+  'noreply@notifications.supabase.com',
+  // GitHub
+  'noreply@github.com',
+  'notifications@github.com',
+  // Vercel
+  'noreply@vercel.com',
+  'ship@vercel.com',
+  // Stripe
+  'noreply@stripe.com',
+  'receipts@stripe.com',
+  // LinkedIn
+  'messages-noreply@linkedin.com',
+  'invitations@linkedin.com',
+  // Common transactional
+  'mailer-daemon@googlemail.com',
+  'postmaster@googlemail.com',
 ]
+
+/** Local-part prefixes that indicate automated mail (before the @). */
+const BLOCKED_SENDER_PREFIXES = [
+  'noreply',
+  'no-reply',
+  'no_reply',
+  'donotreply',
+  'do-not-reply',
+  'do_not_reply',
+  'mailer-daemon',
+  'postmaster',
+  'notifications',
+  'notification',
+  'automated',
+  'auto-confirm',
+  'bounce',
+]
+
+/** Domains that only send automated / transactional mail. */
+const BLOCKED_SENDER_DOMAINS = [
+  'amazonses.com',
+  'sendgrid.net',
+  'mailgun.org',
+  'mandrillapp.com',
+  'postmarkapp.com',
+  'email.shopify.com',
+  'notify.bugsnag.com',
+  'mailer.hetzner.com',
+]
+
+/** Returns true if the sender should be blocked before AI classification. */
+function isBlockedSender(email: string): boolean {
+  const lower = email.toLowerCase()
+  if (BLOCKED_SENDERS.includes(lower)) return true
+
+  const atIndex = lower.indexOf('@')
+  if (atIndex === -1) return false
+
+  const local = lower.slice(0, atIndex)
+  const domain = lower.slice(atIndex + 1)
+
+  if (BLOCKED_SENDER_PREFIXES.some(p => local === p || local.startsWith(p + '+'))) return true
+  if (BLOCKED_SENDER_DOMAINS.includes(domain)) return true
+
+  return false
+}
 
 export interface IngestedMessage {
   id: string
@@ -93,13 +172,13 @@ export async function ingestEmailsForUser(
       const senderEmail = extractEmailAddress(email.from)
       const senderName = extractName(email.from)
 
-      // Skip if sender is the user (outbound)
-      if (senderEmail === userEmail) {
+      // Skip if sender is the user (outbound) — Gmail dot-insensitive
+      if (isSameGmailAddress(senderEmail, userEmail)) {
         continue
       }
 
       // Hard-block known automated / no-reply senders before classification
-      if (BLOCKED_SENDERS.includes(senderEmail)) {
+      if (isBlockedSender(senderEmail)) {
         continue
       }
 
@@ -190,7 +269,7 @@ export async function ingestOutboundEmails(
 
         // Sender is the user — extract recipients
         const senderEmail = extractEmailAddress(email.from)
-        if (senderEmail !== userEmail) {
+        if (!isSameGmailAddress(senderEmail, userEmail)) {
           continue // Not from user, skip
         }
 
@@ -200,10 +279,10 @@ export async function ingestOutboundEmails(
         const recipientName = extractName(email.to[0])
 
         // Skip if recipient is the user themselves
-        if (recipientEmail === userEmail) continue
+        if (isSameGmailAddress(recipientEmail, userEmail)) continue
 
         // Skip blocked senders (in case user replies to automated)
-        if (BLOCKED_SENDERS.includes(recipientEmail)) continue
+        if (isBlockedSender(recipientEmail)) continue
 
         // Find or create CP for the recipient (null = user's own email, skip)
         const cp = await findOrCreateCP(userId, recipientEmail, recipientName || undefined)

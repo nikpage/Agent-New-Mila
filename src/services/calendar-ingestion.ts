@@ -19,7 +19,7 @@ import {
 import { calculateEventScore } from '@/lib/db/events'
 import { getUserById } from '@/lib/db/users'
 import { getUserSettings } from '@/lib/db/users'
-import { getCPByIdentifier, findOrCreateCP } from '@/lib/db/counterparties'
+import { getCPByIdentifier, findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createAction, hasPendingAction, calculatePriorityScore } from '@/lib/db/actions'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import { v4 as uuidv4 } from 'uuid'
@@ -139,7 +139,7 @@ async function syncGoogleEventToLocal(
     // creation entirely to avoid accidentally adding the user as their own CP.
     if (userEmailLower) {
       const otherAttendees = gcalEvent.attendees.filter(
-        a => a.email && a.email.toLowerCase() !== userEmailLower
+        a => a.email && !isSameGmailAddress(a.email, user!.email!)
       )
 
       if (otherAttendees.length > 0) {
@@ -187,7 +187,7 @@ async function processInvitation(
   // Guard: skip if organizer is the user (self-organized events can appear as
   // pending invitations due to Google Calendar quirks with shared calendars,
   // resource rooms, etc.)
-  if (invitation.organizer.email.toLowerCase() === userEmail.toLowerCase()) {
+  if (isSameGmailAddress(invitation.organizer.email, userEmail)) {
     return false
   }
 
