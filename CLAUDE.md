@@ -6,6 +6,7 @@
 - **Stack**: Next.js 14 (App Router) / TypeScript 5.7 (strict) / Supabase / Tailwind CSS 3
 - **AI**: Google Generative AI (Gemini) via `@google/generative-ai`
 - **Deployment**: Vercel with cron jobs
+- **Monitoring**: Sentry error tracking (client + server + edge)
 - **Path alias**: `@/*` → `src/*`
 
 ## Commands
@@ -45,7 +46,9 @@ src/
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
 │   ├── supabase/               # Client + types (types.ts = 593 lines)
 │   ├── ai/gemini.ts            # Gemini AI calls (228 lines)
-│   ├── auth/tokens.ts          # OAuth token management
+│   ├── auth/
+│   │   ├── tokens.ts           # OAuth state, action tokens, cron validation
+│   │   └── api.ts              # API key verification middleware
 │   └── holidays.ts             # Holiday calendar
 │
 ├── components/                 # React components
@@ -94,6 +97,15 @@ Instead of reading these files, use this index:
 
 All db files follow the same pattern: import `getSupabaseAdmin` from `../supabase/client`, import types from `../supabase/types`, export async CRUD functions.
 
+**⚠️ SECURITY:** When adding new queries, always filter by `user_id` unless specifically needed:
+```typescript
+// ✅ GOOD
+const actions = await supabase.from('action_proposals').select('*').eq('user_id', userId)
+
+// ❌ BAD (exposes all users' data)
+const actions = await supabase.from('action_proposals').select('*')
+```
+
 ## Database Tables (so you don't need to read types.ts)
 
 ## User Settings (JSONB)
@@ -128,6 +140,49 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 - Type imports use `import type { ... }` syntax
 - No test framework is configured — verify changes with `npm run build`
 
+## Security & Authentication
+
+### Authentication Model
+**Email Ownership via Google OAuth** — Users authenticate by connecting their Google account. Ownership of Gmail/Calendar proves identity.
+
+### API Protection
+All API endpoints are protected by one of:
+1. **API Key** (`CUSTOMER_API_KEY`) — For `/api/agent/run`, `/api/ingest`
+2. **Cron Secret** (`CRON_SECRET`) — For `/api/cron/*`
+3. **Action Token** (HMAC-signed) — For `/api/action/[id]/*` (email links)
+4. **Superadmin Key** — For `/api/superadmin/*`
+
+**Implementation:** `src/lib/auth/api.ts` exports `verifyApiKey(request)` middleware.
+
+### Row Level Security (RLS)
+- All Supabase tables have `user_id` column
+- RLS policies ensure data isolation between customers
+- API routes use service key (bypasses RLS) — MUST manually validate `user_id`
+
+### Critical Environment Variables
+```bash
+CUSTOMER_API_KEY     # Unique per deployment (API protection)
+CRON_SECRET          # Protects cron endpoints
+NEXTAUTH_SECRET      # Token signing secret
+SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)
+```
+
+**⚠️ SECURITY WARNING:** OAuth tokens stored in plaintext in `users.google_tokens`. See `SECURITY.md` for mitigation roadmap.
+
+## Error Monitoring (Sentry)
+- **Client-side:** Session replay + error tracking
+- **Server-side:** API route errors, database issues
+- **Edge runtime:** Middleware errors
+- **Config:** `instrumentation.ts`, `instrumentation-client.ts`, `sentry.*.config.ts`
+- **Global handler:** `src/app/global-error.tsx` (React error boundary)
+
+**Setup:** Requires `SENTRY_DSN` env var. Free tier = 5k errors/month.
+
+## Documentation Files
+- **`SECURITY.md`** (481 lines) — Security architecture, risks, incident response
+- **`DEPLOYMENT.md`** (373 lines) — Deployment guide, backups, operations
+- **`CLAUDE.md`** (this file) — Code architecture reference
+- **`.env.example`** — All environment variables with generation commands
 
 ## Superadmin
 - Dashboard at `/superadmin`
