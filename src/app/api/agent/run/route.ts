@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { runAgentForUser } from '@/services/agent'
+import { verifyApiKey } from '@/lib/auth/api'
 
 export const maxDuration = 300 // 5 minutes for longer processing
 
 export async function POST(request: NextRequest) {
+  // Verify API key
+  const authError = verifyApiKey(request)
+  if (authError) {
+    return authError
+  }
+
   try {
     const body = await request.json()
     const { userId } = body

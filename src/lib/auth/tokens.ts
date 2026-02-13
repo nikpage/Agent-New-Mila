@@ -127,13 +127,18 @@ export function validateOAuthState(
 }
 
 /**
- * Generate a cron authentication token
+ * Validate cron authentication token
+ * SECURITY: Only allows cron jobs when CRON_SECRET is properly configured
  */
 export function validateCronToken(token: string | null | undefined): boolean {
   // Use bracket notation to prevent Next.js/SWC from inlining this at compile time
   const cronSecret = process.env['CRON_SECRET']
-  if (!cronSecret || process.env.NODE_ENV === 'development') {
-    return true // allow in dev / when no secret configured
+
+  if (!cronSecret) {
+    console.error('CRON_SECRET not configured — cron endpoints are disabled')
+    return false // reject if not configured
   }
+
+  // In development, still require the secret for security consistency
   return token === cronSecret
 }

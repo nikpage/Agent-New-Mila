@@ -36,7 +36,7 @@ export async function GET() {
   if (missingEnvVars.length > 0) {
     checks.environment = {
       status: 'error',
-      message: `Missing: ${missingEnvVars.join(', ')}`,
+      message: `Configuration incomplete (${missingEnvVars.length} variables missing)`,
     }
   } else {
     checks.environment = { status: 'ok' }

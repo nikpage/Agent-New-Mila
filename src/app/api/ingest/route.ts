@@ -4,6 +4,7 @@ import { processMessagesForThreading } from '@/services/threading'
 import { generateActionsForConversations } from '@/services/planning'
 import { getUnprocessedMessages } from '@/lib/db/messages'
 import { validateCronToken } from '@/lib/auth/tokens'
+import { verifyApiKey } from '@/lib/auth/api'
 
 export const maxDuration = 300
 
@@ -17,9 +18,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'userId or cronToken required' }, { status: 400 })
     }
 
-    // If cron token provided, validate it
+    // If cron token provided, validate it (for automated bulk ingestion)
     if (cronToken && !validateCronToken(cronToken)) {
       return NextResponse.json({ error: 'Invalid cron token' }, { status: 401 })
+    }
+
+    // If userId provided (manual trigger), verify API key
+    if (userId && !cronToken) {
+      const authError = verifyApiKey(request)
+      if (authError) {
+        return authError
+      }
     }
 
     if (userId) {
