@@ -12,19 +12,17 @@ export function verifyApiKey(request: NextRequest): NextResponse | null {
   const apiKey = request.headers.get('x-api-key')
   const customerKey = process.env.CUSTOMER_API_KEY
 
-  // In development, allow requests without key for easier testing
-  if (process.env.NODE_ENV === 'development' && !customerKey) {
-    console.warn('[AUTH] No CUSTOMER_API_KEY set - allowing request in development')
-    return null
-  }
-
-  // In production, key is mandatory
+  // If no key configured, allow in development, block in production
   if (!customerKey) {
-    console.error('[AUTH] CUSTOMER_API_KEY not configured - API endpoints disabled')
-    return NextResponse.json(
-      { error: 'API authentication not configured' },
-      { status: 503 }
-    )
+    if (process.env.NODE_ENV === 'production') {
+      console.error('[AUTH] CUSTOMER_API_KEY not configured in production')
+      return NextResponse.json(
+        { error: 'API authentication not configured' },
+        { status: 503 }
+      )
+    }
+    // Development: allow without key
+    return null
   }
 
   if (!apiKey) {
