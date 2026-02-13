@@ -3,6 +3,37 @@ import { getUserById } from './users'
 import type { CP, CPInsert, CPState } from '../supabase/types'
 
 /**
+ * Delete any CP row where the identifier matches the user's own email.
+ * The user is NOT a counterparty. Full stop.
+ * Called at the start of every agent run to clean up bad data.
+ */
+export async function purgeUserAsCp(userId: string): Promise<number> {
+  const user = await getUserById(userId)
+  if (!user?.email) return 0
+
+  const supabase = getSupabaseAdmin()
+  const userEmailLower = user.email.toLowerCase()
+
+  const { data, error } = await supabase
+    .from('cps')
+    .delete()
+    .eq('user_id', userId)
+    .eq('primary_identifier', userEmailLower)
+    .select('id')
+
+  if (error) {
+    console.error(`[purgeUserAsCp] Failed to purge: ${error.message}`)
+    return 0
+  }
+
+  if (data && data.length > 0) {
+    console.warn(`[purgeUserAsCp] Deleted ${data.length} self-CP rows for user ${userId}`)
+  }
+
+  return data?.length || 0
+}
+
+/**
  * Get a counterparty by ID
  */
 export async function getCPById(cpId: string): Promise<CP | null> {
