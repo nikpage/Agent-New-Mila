@@ -3,6 +3,67 @@ import { getUserById } from './users'
 import type { CP, CPInsert, CPState } from '../supabase/types'
 
 /**
+ * Gmail/Google Workspace treats dots in the local part as irrelevant:
+ * first.last@pod.one === firstlast@pod.one === f.i.r.s.t.last@pod.one
+ * Also: pod.one and podone are the same Google Workspace domain.
+ * Strip dots from both parts so every variant matches.
+ */
+function gmailNormalize(email: string): string {
+  const [local, domain] = email.toLowerCase().trim().split('@')
+  if (!local || !domain) return email.toLowerCase().trim()
+  return `${local.replace(/\./g, '')}@${domain.replace(/\./g, '')}`
+}
+
+/** True if two emails refer to the same Gmail / Google Workspace mailbox. */
+export function isSameGmailAddress(a: string, b: string): boolean {
+  return gmailNormalize(a) === gmailNormalize(b)
+}
+
+/**
+ * Delete any CP row where the identifier matches the user's own email.
+ * The user is NOT a counterparty. Full stop.
+ * Called at the start of every agent run to clean up bad data.
+ */
+export async function purgeUserAsCp(userId: string): Promise<number> {
+  const user = await getUserById(userId)
+  if (!user?.email) return 0
+
+  const supabase = getSupabaseAdmin()
+
+  // Fetch ALL CPs for this user and delete any that match via Gmail normalization.
+  // Cannot use .eq() because pod.one vs podone, dots in local part, etc.
+  const { data: allCps, error: fetchError } = await supabase
+    .from('cps')
+    .select('id, primary_identifier')
+    .eq('user_id', userId)
+
+  if (fetchError || !allCps) return 0
+
+  const selfCpIds = allCps
+    .filter(cp => isSameGmailAddress(cp.primary_identifier, user.email!))
+    .map(cp => cp.id)
+
+  if (selfCpIds.length === 0) return 0
+
+  const { data, error } = await supabase
+    .from('cps')
+    .delete()
+    .in('id', selfCpIds)
+    .select('id')
+
+  if (error) {
+    console.error(`[purgeUserAsCp] Failed to purge: ${error.message}`)
+    return 0
+  }
+
+  if (data && data.length > 0) {
+    console.warn(`[purgeUserAsCp] Deleted ${data.length} self-CP rows for user ${userId}`)
+  }
+
+  return data?.length || 0
+}
+
+/**
  * Get a counterparty by ID
  */
 export async function getCPById(cpId: string): Promise<CP | null> {
@@ -75,11 +136,11 @@ export async function upsertCP(cp: CPInsert): Promise<CP> {
     primary_identifier: cp.primary_identifier.toLowerCase(),
   }
 
-  // DOUBLE CHECK: Ensure we are not creating a CP for the user themselves
-  // This requires fetching the user, which adds overhead, but safety is priority.
-  // We only do this check if we are inserting (no ID) or if we want to be extra safe.
-  // Since upsertCP is low-level, we rely on findOrCreateCP for the logic,
-  // but we can add a basic check if the user_id is available to look up.
+  // HARD GUARD: Never create a CP for the user's own email.
+  const user = await getUserById(cp.user_id)
+  if (user?.email && isSameGmailAddress(user.email, normalizedCP.primary_identifier)) {
+    throw new Error(`[upsertCP] Refusing to create CP for user's own email: ${normalizedCP.primary_identifier}`)
+  }
 
   const { data, error } = await supabase
     .from('cps')
@@ -97,31 +158,23 @@ export async function upsertCP(cp: CPInsert): Promise<CP> {
 }
 
 /**
- * Find or create a counterparty by email
+ * Find or create a counterparty by email.
+ * Returns null if the email belongs to the user — the user is NOT a CP.
  */
 export async function findOrCreateCP(
   userId: string,
   email: string,
   name?: string
-): Promise<CP> {
+): Promise<CP | null> {
   const normalizedEmail = email.toLowerCase().trim()
 
-  // Guard: NEVER create a CP for the user's own email address
+  // The user is not a CP. Silent return, no throw, no noise.
   const user = await getUserById(userId)
-
-  if (user?.email) {
-    if (user.email.toLowerCase() === normalizedEmail) {
-      throw new Error(`Cannot create counterparty for user's own email address: ${normalizedEmail}`)
-    }
-  } else {
-    // If user has no email in DB, this is a critical data integrity issue.
-    // We should probably fail or warn, but to be safe, we proceed with caution.
-    console.warn(`[findOrCreateCP] User ${userId} has no email in DB. Cannot verify self-reference.`)
-  }
+  if (!user?.email) return null
+  if (isSameGmailAddress(user.email, normalizedEmail)) return null
 
   const existing = await getCPByIdentifier(userId, normalizedEmail)
   if (existing) {
-    // Update name if provided and CP doesn't have one
     if (name && !existing.name) {
       return updateCP(existing.id, { name })
     }

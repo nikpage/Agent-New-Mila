@@ -9,6 +9,7 @@ import { generateActionsForConversations } from './planning'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { getUnprocessedMessages } from '@/lib/db/messages'
 import { getUserById } from '@/lib/db/users'
+import { purgeUserAsCp } from '@/lib/db/counterparties'
 import type { ActionProposal } from '@/lib/supabase/types'
 
 export interface AgentRunResult {
@@ -51,6 +52,9 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       result.errors.push('User has no Google credentials')
       return result
     }
+
+    // Step 0: The user is NOT a counterparty. Purge any bad rows.
+    await purgeUserAsCp(userId)
 
     // Step 2: Ingest new emails (inbound)
     const ingestedMessages = await ingestEmailsForUser(userId)
