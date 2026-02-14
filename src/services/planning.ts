@@ -33,9 +33,14 @@ export async function generateActionProposal(
   const cp = await getCPById(latestWithCP.cp_id)
   if (!cp || cp.is_blacklisted) return null
 
+  // Detect conversation channel (email vs whatsapp)
+  const lastMessage = recentMessages[recentMessages.length - 1]
+  const conversationChannel = lastMessage?.channel_id === 'whatsapp' ? 'whatsapp' : 'email'
+
   const formattedMessages = recentMessages.map(m => ({
     direction: m.direction || 'UNKNOWN',
     text: m.cleaned_text || m.raw_text || '',
+    channel: m.channel_id === 'whatsapp' ? 'whatsapp' : 'email',
   }))
 
   try {
@@ -193,6 +198,7 @@ export async function generateActionProposal(
           dollar_value: proposal.dollarValue,
           pain_factor: proposal.painFactor,
         },
+        channel: conversationChannel,
         ...schedulingPayload,
       },
       queued_for_brief: true,

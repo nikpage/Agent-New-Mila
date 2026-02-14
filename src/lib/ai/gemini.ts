@@ -1,5 +1,6 @@
 import type { ConversationSummary, ActionType } from '../supabase/types'
 import { runAITask } from './runner'
+import { getAISystemPrompt, clientConfig } from '@/config/client'
 
 /**
  * Pre-filter: Quick spam/junk detection using cheapest model.
@@ -63,7 +64,7 @@ Be concise. Focus on actionable insights.`
  */
 export async function proposeAction(
   conversationSummary: ConversationSummary,
-  recentMessages: { direction: string; text: string }[],
+  recentMessages: { direction: string; text: string; channel?: string }[],
   cpName: string | null
 ): Promise<{
   actionType: ActionType
@@ -78,10 +79,19 @@ export async function proposeAction(
 }> {
   const recentText = recentMessages
     .slice(-3)
-    .map(m => `[${m.direction}]: ${m.text.slice(0, 500)}`)
+    .map(m => `[${m.direction}${m.channel ? ` via ${m.channel}` : ''}]: ${m.text.slice(0, 500)}`)
     .join('\n\n')
 
-  const prompt = `You are Mila, a proactive executive assistant. Based on this conversation, determine what action to take.
+  // Detect channel from messages
+  const lastChannel = recentMessages[recentMessages.length - 1]?.channel
+  const channelContext = lastChannel === 'whatsapp'
+    ? `\nCHANNEL: WhatsApp — reply via WhatsApp message (short, conversational, no email formality).`
+    : `\nCHANNEL: Email — reply via email (professional format).`
+
+  const prompt = `${getAISystemPrompt()}
+
+You are ${clientConfig.ai.name}, a proactive executive assistant. Based on this conversation, determine what action to take.
+${channelContext}
 
 CONVERSATION STATE:
 ${JSON.stringify(conversationSummary, null, 2)}
@@ -145,10 +155,16 @@ export async function generateFinalDraft(
   intent: string,
   userNotes?: string,
   missingInfo?: any[],
-  cpName?: string
+  cpName?: string,
+  channel?: string
 ): Promise<{ subject: string; body: string }> {
-  const prompt = `You are an executive assistant writing an email on behalf of your boss.
+  const isWhatsApp = channel === 'whatsapp'
+  const prompt = `${getAISystemPrompt()}
+
+You are an executive assistant writing ${isWhatsApp ? 'a WhatsApp message' : 'an email'} on behalf of your boss.
 Language: CZECH.
+${isWhatsApp ? 'Style: Short, conversational, no formal greeting/closing. Like a human texting.' : `Tone: ${clientConfig.ai.toneWithCounterparties}`}
+${!isWhatsApp && clientConfig.ai.emailSignature ? `Email signature:\n${clientConfig.ai.emailSignature}` : ''}
 
 CONTEXT:
 ${JSON.stringify(conversationContext, null, 2)}

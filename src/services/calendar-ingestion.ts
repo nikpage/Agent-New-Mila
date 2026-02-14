@@ -10,6 +10,7 @@ import {
   isIncomingInvitation,
   type CalendarEvent,
 } from '@/lib/google/calendar'
+import { isPersonalEvent } from '@/config/client'
 import {
   createEvent,
   getEventsInRange,
@@ -183,6 +184,11 @@ async function processInvitation(
   invitation: CalendarEvent
 ): Promise<boolean> {
   if (!invitation.organizer?.email) return false
+
+  // Skip personal events — they block time but don't need action proposals
+  if (invitation.summary && isPersonalEvent(invitation.summary)) {
+    return false
+  }
 
   // Guard: skip if organizer is the user (self-organized events can appear as
   // pending invitations due to Google Calendar quirks with shared calendars,
