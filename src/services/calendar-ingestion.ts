@@ -19,7 +19,7 @@ import {
 import { calculateEventScore } from '@/lib/db/events'
 import { getUserById } from '@/lib/db/users'
 import { getUserSettings } from '@/lib/db/users'
-import { getCPByIdentifier, findOrCreateCP } from '@/lib/db/counterparties'
+import { getCPByIdentifier, findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createAction, hasPendingAction, calculatePriorityScore } from '@/lib/db/actions'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import { v4 as uuidv4 } from 'uuid'
@@ -133,15 +133,21 @@ async function syncGoogleEventToLocal(
   if (gcalEvent.attendees && gcalEvent.attendees.length > 0) {
     // Find the first non-user attendee
     const user = await getUserById(userId)
-    const otherAttendees = gcalEvent.attendees.filter(
-      a => a.email?.toLowerCase() !== user?.email?.toLowerCase()
-    )
+    const userEmailLower = user?.email?.toLowerCase()
 
-    if (otherAttendees.length > 0) {
-      const firstAttendee = otherAttendees[0]
-      if (firstAttendee.email) {
-        const cp = await findOrCreateCP(userId, firstAttendee.email, firstAttendee.name || undefined)
-        cpId = cp.id
+    // Only filter if we actually know the user's email — otherwise skip CP
+    // creation entirely to avoid accidentally adding the user as their own CP.
+    if (userEmailLower) {
+      const otherAttendees = gcalEvent.attendees.filter(
+        a => a.email && !isSameGmailAddress(a.email, user!.email!)
+      )
+
+      if (otherAttendees.length > 0) {
+        const firstAttendee = otherAttendees[0]
+        if (firstAttendee.email) {
+          const cp = await findOrCreateCP(userId, firstAttendee.email, firstAttendee.name || undefined)
+          if (cp) cpId = cp.id
+        }
       }
     }
   }
@@ -178,17 +184,25 @@ async function processInvitation(
 ): Promise<boolean> {
   if (!invitation.organizer?.email) return false
 
-  // Skip if the organizer is the user themselves (user-created event)
-  if (invitation.organizer.email.toLowerCase() === userEmail.toLowerCase()) {
+  // Guard: skip if organizer is the user (self-organized events can appear as
+  // pending invitations due to Google Calendar quirks with shared calendars,
+  // resource rooms, etc.)
+  if (isSameGmailAddress(invitation.organizer.email, userEmail)) {
     return false
   }
 
-  // Find or create CP for the organizer
+  // Double-check with the full isIncomingInvitation check
+  if (!isIncomingInvitation(invitation, userEmail)) {
+    return false
+  }
+
+  // Find or create CP for the organizer (null = user's own email, skip)
   const cp = await findOrCreateCP(
     userId,
     invitation.organizer.email,
     invitation.organizer.name || undefined
   )
+  if (!cp) return false
 
   // Check if we already have a pending action for this invitation
   // Use a synthetic conversation ID based on the calendar event
