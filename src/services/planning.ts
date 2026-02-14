@@ -1,7 +1,6 @@
 import { proposeAction, generateFinalDraft } from '@/lib/ai/gemini'
 import {
   createAction,
-  hasPendingAction,
   calculatePriorityScore,
 } from '@/lib/db/actions'
 import { getConversationById, getRecentMessages } from '@/lib/db/conversations'
@@ -18,15 +17,9 @@ import { v4 as uuidv4 } from 'uuid'
 export async function generateActionProposal(
   conversation: ConversationThread
 ): Promise<ActionProposal | null> {
-  if (await hasPendingAction(conversation.id)) {
-    return null
-  }
-
-  const summary = conversation.summary_json as ConversationSummary | null
-  if (!summary) return null
+  const summary = conversation.summary_json as ConversationSummary
 
   const recentMessages = await getRecentMessages(conversation.id, 5)
-  if (recentMessages.length === 0) return null
 
   // Find CP from latest message — support both inbound AND outbound
   // Outbound: user sent an email to CP (e.g., proposing a meeting)
@@ -48,8 +41,6 @@ export async function generateActionProposal(
   try {
     // Get AI recommendation (Intent Only)
     const proposal = await proposeAction(summary, formattedMessages, cp.name)
-
-    if (proposal.actionType === 'WAIT') return null
 
     // Proactive Calendar: If SCHEDULE action, use full scheduling service
     // Mila acts as a human assistant - finds best slots, blocks them IN USER'S CALENDAR ONLY,
