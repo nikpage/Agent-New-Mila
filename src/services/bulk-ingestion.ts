@@ -4,6 +4,9 @@
  *   Phase 1: Fetch & store (paginated, pre-filter only, no embeddings)
  *   Phase 2: Thread conversations (chrono order, reuses existing threading)
  *   Phase 3: Propose actions (after all threading is done)
+ *
+ * Streams progress via onProgress callback so the HTTP response starts
+ * immediately and keeps the connection alive on long runs.
  */
 
 import {
@@ -12,7 +15,6 @@ import {
   extractName,
   getUserEmail,
   GMAIL_SKIP_CATEGORIES,
-  type EmailMessage,
 } from '@/lib/google/gmail'
 import { preFilterEmail } from '@/lib/ai/gemini'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
@@ -23,6 +25,8 @@ import { processMessagesForThreading } from './threading'
 import { generateActionsForConversations } from './planning'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
 import { v4 as uuidv4 } from 'uuid'
+
+export type ProgressCallback = (progress: Record<string, unknown>) => void
 
 export interface BulkIngestionResult {
   phase1: {
@@ -52,7 +56,8 @@ async function phase1FetchAndStore(
   userId: string,
   since: Date,
   until: Date | undefined,
-  maxTotal: number
+  maxTotal: number,
+  onProgress: ProgressCallback
 ): Promise<BulkIngestionResult['phase1'] & { errors: string[] }> {
   const stats = {
     inboxFetched: 0,
@@ -87,10 +92,13 @@ async function phase1FetchAndStore(
     return stats
   }
 
+  onProgress({ phase: 1, step: 'user_resolved', userEmail })
+
   // Purge user-as-CP
   await purgeUserAsCp(userId)
 
   // Fetch received emails (not just INBOX — includes archived/read)
+  onProgress({ phase: 1, step: 'fetching_inbox' })
   console.log(`[BulkIngest] Phase 1: Fetching received emails since ${since.toISOString()}`)
   const inboxEmails = await fetchEmailsPaginated(userId, {
     query: '-in:spam -in:trash -in:sent -in:draft',
@@ -99,8 +107,10 @@ async function phase1FetchAndStore(
     maxTotal,
   })
   stats.inboxFetched = inboxEmails.length
+  onProgress({ phase: 1, step: 'inbox_fetched', count: inboxEmails.length })
 
   // Fetch SENT emails
+  onProgress({ phase: 1, step: 'fetching_sent' })
   console.log(`[BulkIngest] Phase 1: Fetching SENT emails since ${since.toISOString()}`)
   const sentEmails = await fetchEmailsPaginated(userId, {
     query: 'in:sent',
@@ -109,13 +119,17 @@ async function phase1FetchAndStore(
     maxTotal,
   })
   stats.sentFetched = sentEmails.length
+  onProgress({ phase: 1, step: 'sent_fetched', count: sentEmails.length })
 
   // Combine and sort chronologically
   const allEmails = [...inboxEmails, ...sentEmails]
     .sort((a, b) => a.date.getTime() - b.date.getTime())
 
+  onProgress({ phase: 1, step: 'processing_emails', total: allEmails.length })
+
   // Process each email
-  for (const email of allEmails) {
+  for (let i = 0; i < allEmails.length; i++) {
+    const email = allEmails[i]
     try {
       // Dedup
       if (await messageExists(userId, email.id)) {
@@ -190,6 +204,18 @@ async function phase1FetchAndStore(
       })
 
       stats.stored++
+
+      // Stream progress every 5 emails
+      if ((i + 1) % 5 === 0 || i === allEmails.length - 1) {
+        onProgress({
+          phase: 1,
+          step: 'storing',
+          processed: i + 1,
+          total: allEmails.length,
+          stored: stats.stored,
+          skipped: stats.skippedCategory + stats.skippedBlocked + stats.skippedPreFilter + stats.skippedDuplicate,
+        })
+      }
     } catch (error) {
       console.error(`[BulkIngest] Error processing email ${email.id}:`, error)
       stats.errors.push(`Email ${email.id}: ${error instanceof Error ? error.message : 'Unknown'}`)
@@ -197,6 +223,7 @@ async function phase1FetchAndStore(
   }
 
   console.log(`[BulkIngest] Phase 1 complete: ${stats.stored} stored, ${stats.skippedCategory} category, ${stats.skippedBlocked} blocked, ${stats.skippedPreFilter} pre-filter, ${stats.skippedDuplicate} duplicate`)
+  onProgress({ phase: 1, step: 'complete', ...stats })
   return stats
 }
 
@@ -205,14 +232,18 @@ async function phase1FetchAndStore(
  * Get all unprocessed messages (sorted chrono), run existing threading.
  */
 async function phase2Thread(
-  userId: string
+  userId: string,
+  onProgress: ProgressCallback
 ): Promise<BulkIngestionResult['phase2'] & { conversationIds: string[] }> {
   console.log(`[BulkIngest] Phase 2: Threading messages`)
+  onProgress({ phase: 2, step: 'loading_unprocessed' })
 
   const unprocessed = await getUnprocessedMessages(userId, 1000)
   console.log(`[BulkIngest] Phase 2: ${unprocessed.length} unprocessed messages`)
+  onProgress({ phase: 2, step: 'threading', messageCount: unprocessed.length })
 
   if (unprocessed.length === 0) {
+    onProgress({ phase: 2, step: 'complete', messagesProcessed: 0, conversationsCreated: 0 })
     return { messagesProcessed: 0, conversationsCreated: 0, conversationIds: [] }
   }
 
@@ -225,6 +256,7 @@ async function phase2Thread(
 
   const conversationIds = Array.from(conversations.keys())
   console.log(`[BulkIngest] Phase 2 complete: ${unprocessed.length} messages → ${conversationIds.length} conversations`)
+  onProgress({ phase: 2, step: 'complete', messagesProcessed: unprocessed.length, conversationsCreated: conversationIds.length })
 
   return {
     messagesProcessed: unprocessed.length,
@@ -238,13 +270,16 @@ async function phase2Thread(
  * Run action generation on threaded conversations. No drafts.
  */
 async function phase3ProposeActions(
-  conversationIds: string[]
+  conversationIds: string[],
+  onProgress: ProgressCallback
 ): Promise<BulkIngestionResult['phase3']> {
   console.log(`[BulkIngest] Phase 3: Proposing actions for ${conversationIds.length} conversations`)
+  onProgress({ phase: 3, step: 'proposing', conversationCount: conversationIds.length })
 
   const actions = await generateActionsForConversations(conversationIds)
 
   console.log(`[BulkIngest] Phase 3 complete: ${actions.length} actions proposed`)
+  onProgress({ phase: 3, step: 'complete', actionsProposed: actions.length })
   return { actionsProposed: actions.length }
 }
 
@@ -252,12 +287,14 @@ async function phase3ProposeActions(
  * Run the full bulk ingestion pipeline.
  * Phase 1 completes entirely before Phase 2 starts.
  * Phase 2 completes entirely before Phase 3 starts.
+ * Streams progress via onProgress callback.
  */
 export async function runBulkIngestion(
   userId: string,
   since: Date,
   until?: Date,
-  maxTotal: number = 500
+  maxTotal: number = 500,
+  onProgress: ProgressCallback = () => {}
 ): Promise<BulkIngestionResult> {
   const result: BulkIngestionResult = {
     phase1: {
@@ -280,7 +317,7 @@ export async function runBulkIngestion(
   }
 
   // Phase 1: Fetch & Store
-  const p1 = await phase1FetchAndStore(userId, since, until, maxTotal)
+  const p1 = await phase1FetchAndStore(userId, since, until, maxTotal, onProgress)
   result.phase1 = {
     inboxFetched: p1.inboxFetched,
     sentFetched: p1.sentFetched,
@@ -297,7 +334,7 @@ export async function runBulkIngestion(
   }
 
   // Phase 2: Thread (after ALL messages stored)
-  const p2 = await phase2Thread(userId)
+  const p2 = await phase2Thread(userId, onProgress)
   result.phase2 = {
     messagesProcessed: p2.messagesProcessed,
     conversationsCreated: p2.conversationsCreated,
@@ -305,7 +342,7 @@ export async function runBulkIngestion(
 
   // Phase 3: Propose Actions (after ALL threading done)
   if (p2.conversationIds.length > 0) {
-    const p3 = await phase3ProposeActions(p2.conversationIds)
+    const p3 = await phase3ProposeActions(p2.conversationIds, onProgress)
     result.phase3 = p3
   }
 

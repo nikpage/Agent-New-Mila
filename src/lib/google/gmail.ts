@@ -306,6 +306,7 @@ export async function fetchEmailsPaginated(
   const messages: EmailMessage[] = []
   let pageToken: string | undefined
   const maxTotal = options?.maxTotal || 500
+  const BATCH_SIZE = 5 // Fetch 5 messages concurrently
 
   do {
     const listResponse = await gmail.users.messages.list({
@@ -316,22 +317,33 @@ export async function fetchEmailsPaginated(
       pageToken,
     })
 
-    for (const msg of listResponse.data.messages || []) {
-      if (!msg.id || messages.length >= maxTotal) break
+    const msgIds = (listResponse.data.messages || [])
+      .filter(msg => msg.id)
+      .map(msg => msg.id!)
+      .slice(0, maxTotal - messages.length)
 
-      try {
-        const fullMessage = await gmail.users.messages.get({
-          userId: 'me',
-          id: msg.id,
-          format: 'full',
-        })
+    // Fetch full messages in parallel batches
+    for (let i = 0; i < msgIds.length; i += BATCH_SIZE) {
+      const batch = msgIds.slice(i, i + BATCH_SIZE)
+      const results = await Promise.allSettled(
+        batch.map(id =>
+          gmail.users.messages.get({
+            userId: 'me',
+            id,
+            format: 'full',
+          })
+        )
+      )
 
-        const parsed = parseGmailMessage(fullMessage.data)
-        if (parsed) {
-          messages.push(parsed)
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          const parsed = parseGmailMessage(result.value.data)
+          if (parsed) {
+            messages.push(parsed)
+          }
+        } else {
+          console.error(`Failed to fetch message:`, result.reason)
         }
-      } catch (error) {
-        console.error(`Failed to fetch message ${msg.id}:`, error)
       }
     }
 
