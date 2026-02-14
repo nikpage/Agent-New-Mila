@@ -17,7 +17,7 @@ import { v4 as uuidv4 } from 'uuid'
 export async function generateActionProposal(
   conversation: ConversationThread
 ): Promise<ActionProposal | null> {
-  const summary = conversation.summary_json as ConversationSummary
+  const summary = conversation.summary_json as unknown as ConversationSummary
 
   const recentMessages = await getRecentMessages(conversation.id, 5)
 
