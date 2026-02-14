@@ -106,9 +106,9 @@ const actions = await supabase.from('action_proposals').select('*').eq('user_id'
 const actions = await supabase.from('action_proposals').select('*')
 ```
 
-## Database Tables (so you don't need to read types.ts)
+## Database Schema (actual columns from Supabase)
 
-## User Settings (JSONB)
+### User Settings (JSONB)
 Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 | Category | Fields | Defaults |
@@ -120,17 +120,140 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 | **AI Persona** | `ai_tone_user`, `ai_tone_cp`, `user_alias` | Professional, Polite, "User" |
 | **Misc** | `morning_brief_time`, `default_delegate_email`, `todo_auto_due_days` | 08:00, null, 1 |
 
+**⚠️ `ai_tone_user`, `ai_tone_cp`, `user_alias`** are defined but **NOT YET wired** into AI prompts.
 
-| Table | Key columns |
-|-------|------------|
-| `users` | id, email, name, google_tokens, settings (jsonb), timezone |
-| `cps` | id, user_id, name, email, identifiers[], role, location, state |
-| `conversation_threads` | id, user_id, subject, summary, gmail_thread_id, last_message_at |
-| `messages` | id, thread_id, from/to/cc, subject, body, gmail_message_id, date |
-| `action_proposals` | id, user_id, thread_id, type (REPLY/SCHEDULE/WAIT/FILE/DELEGATE), status, priority_score, draft_content |
-| `events` | id, user_id, title, start/end, location, attendees[], google_event_id, event_type |
-| `todos` | id, user_id, title, description, status, due_date |
-| `message_embeddings` | message_id, embedding (vector) |
+### Core Tables
+
+**`users`** — id, email, mila_name, public_name, email_timezone, email_enabled, email_unsubscribed, settings (jsonb), google_oauth_tokens (jsonb), encrypted_google_tokens (text), created_at
+
+**`cps`** (counterparties) — id, user_id, name, primary_identifier, other_identifiers (jsonb), role, locations (jsonb), is_blacklisted, created_at
+
+**`channels`** — id, user_id, type (email/whatsapp), identifier, created_at
+
+**`cp_states`** — cp_id → cps, state, summary_text, last_updated
+
+### Conversation & Messages
+
+**`conversation_threads`** — id, user_id, topic, summary_text, summary_json (jsonb), summary_confidence (numeric), summary_confidence_reason, messages_since_rebuild, message_count, state, deal_type, priority_score (integer), embedding (vector 768-dim), last_updated, created_at
+
+**`messages`** — id, user_id, cp_id, channel_id, thread_id → conversation_threads, conversation_id → conversation_threads, external_thread_id (gmail thread id), universal_message_id, external_id, direction (inbound/outbound), raw_text, cleaned_text, message_type (enum), tag_primary, tag_secondary, timestamp, occurred_at
+
+**`thread_participants`** — thread_id → conversation_threads, cp_id → cps, added_at
+
+**`message_embeddings`** — message_id → messages, embedding (vector 768-dim)
+
+### Actions & Execution
+
+**`action_proposals`** — id, user_id, cp_id, conversation_id, action_type (REPLY/SCHEDULE/TODO/DELEGATE), status, rationale, rationale_cs, intent_cs, missing_info (jsonb), payload (jsonb), draft_subject, draft_body_text, user_notes, priority_score (numeric), dollar_value (numeric), urgency (numeric), pain_factor (numeric), weight (numeric), offer_multiplier (numeric), queued_for_brief, last_notified_at, created_at
+
+**`emails`** (outbound send queue) — id, user_id, action_id → action_proposals, to, subject, text_body, html_body, status, external_id, sent_at, bounced, retry_count, last_retry_at, last_error, created_at, updated_at
+
+**`todos`** — id, user_id, cp_id, thread_id, description, status, due_date, scheduled_time, created_at
+
+### Calendar
+
+**`events`** — id, user_id, cp_id, title, description, location, start_time, end_time, event_type (meeting/travel_buffer), status, parent_event_id (self-ref for travel buffers), pre_block_group_id, created_at
+
+### System
+
+**`agent_errors`** — id, user_id, error_id, agent_type, message_internal, message_user, created_at
+
+### Known Redundancy / Unused Columns
+- `messages.thread_id` AND `messages.conversation_id` — both FK to `conversation_threads` (redundant)
+- `users.google_oauth_tokens` (jsonb) AND `users.encrypted_google_tokens` (text) — migration in progress from plaintext to encrypted
+- `conversation_threads.priority_score` — integer on thread vs numeric on action_proposals (different scales?)
+
+## Priority Scoring
+
+**Formula:** `(dollarValue × offerMultiplier × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
+
+**Implementation:** `src/lib/db/actions.ts` → `calculatePriorityScore()`
+
+| Input | Scale | Notes |
+|-------|-------|-------|
+| `dollarValue` | 0+ (CZK) | Deal/transaction value |
+| `offerMultiplier` | default 1 | From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) |
+| `urgency` | 1-10 | AI-assessed, safe default 1 |
+| `painFactor` | 1-10 | AI-assessed relationship pain, safe default 1 |
+| `daysIgnored` | 0+ | Days since last activity (squared growth) |
+| `weight` | 1-10, or **100** = immovable | How "movable" the event is. Flight departures, kids concert = 100. Default 0 (additive bonus). |
+
+**Safe defaults:** `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/null (prevents score collapse).
+
+**⚠️ Currently:** `planning.ts` calls `calculatePriorityScore()` WITHOUT `weight` or `offerMultiplier` — those are set separately, not yet wired into proposal generation.
+
+## AI Model Configuration
+
+**Config:** `src/config/ai-models.ts` — 6 pipeline stages, each with 3-model fallback chain.
+**Runner:** `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, logs which model succeeded.
+
+| Stage | Purpose | Primary → Fallback1 → Fallback2 |
+|-------|---------|----------------------------------|
+| `preFilter` | Spam detection | `gemini-2.5-flash` → `2.0-flash` → `1.5-flash` |
+| `classify` | Email category + priority | same chain |
+| `threading` | extractTopic, shouldJoinConversation | same chain |
+| `analysis` | analyzeConversation | same chain |
+| `planning` | proposeAction (type, rationale, intent) | same chain |
+| `drafting` | generateFinalDraft, generateBriefHeadline | same chain |
+
+**Embedding model:** `gemini-embedding-001` (768-dim, multilingual) — separate from chat, NO fallback chain.
+
+**Provider:** `src/lib/ai/providers/gemini.ts` — uses `@google/generative-ai` SDK with model caching.
+
+## Embeddings & Semantic Threading
+
+**Purpose:** Assign incoming messages to existing conversations when Gmail thread ID doesn't match.
+
+**Pipeline** (`src/services/threading.ts`):
+1. **Gmail thread ID match** (primary) — exact match on `external_thread_id`
+2. **Embedding similarity** (secondary) — cosine similarity against `conversation_threads.embedding` for same CP
+3. **New conversation** (fallback) — if nothing matches
+
+**Thresholds:**
+- `≥ 0.78` → auto-join conversation (no AI needed)
+- `0.55 – 0.78` → AI tiebreak via `shouldJoinConversation()`
+- `< 0.55` → new conversation
+
+**Conversation embeddings** are regenerated on summary rebuild (`rebuildConversationSummary()`). Embedding failure doesn't block summary updates.
+
+## Scheduling & Conflict Resolution
+
+**Implementation:** `src/services/scheduling.ts` (683 lines — largest service)
+
+### Slot Finding
+- `findFreeSlots()` scans working hours for gaps between ALL calendar events
+- Respects `working_hours_start/end`, `working_days` from user settings
+- Applies `meeting_buffer_minutes` (default 15m) between meetings
+
+### Travel Time
+- `calculateTravelForSlot()` uses Google Maps Distance Matrix API (`src/lib/google/maps.ts`)
+- Origin: previous event location → office_location → home_location (fallback chain)
+- Buffer = `max(travelTime + 10min, 15min minimum)`
+- Creates `🚗 Travel to {title}` buffer events linked via `parent_event_id`
+- Travel mode from user settings: driving/walking/transit/bicycling
+
+### Priority-Based Conflict Resolution
+When a new meeting conflicts with existing events:
+- `handleConflict()` compares `calculateEventScore()` of new vs existing
+- **New score > existing score** → `recommendation: 'move_existing'` (suggest moving the lower-priority meeting)
+- **New score ≤ existing score** → `recommendation: 'suggest_alternate'` (find different time)
+- **User-created events default weight = 100** (treated as immovable unless outranked)
+- If ALL conflicts recommend moving → slot is still offered with conflict info
+
+### Personal Calendar Events
+- Personal/private calendar events **block time** (included in availability calculation)
+- **DO generate actions** for personal calendar events
+- Currently no visibility/privacy field parsed from Google Calendar API — all events treated equally
+
+## Draft Generation
+
+**Timing:** On-demand only — drafts are generated at execution time, NOT during proposal creation.
+**Language:** Czech (hardcoded in prompts)
+**Channel-aware tone:** NOT YET IMPLEMENTED — same professional tone for all channels
+
+Proposal phase stores only: `intent_cs`, `rationale_cs`, `missing_info`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution.
+
+`generateFinalDraft()` in `src/lib/ai/gemini.ts` takes conversation context + intent + user notes → returns `{ subject, body }`.
 
 ## Conventions
 - All server-side code uses `async/await` with Supabase client
@@ -167,7 +290,7 @@ NEXTAUTH_SECRET      # Token signing secret
 SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)
 ```
 
-**⚠️ SECURITY WARNING:** OAuth tokens stored in plaintext in `users.google_tokens`. See `SECURITY.md` for mitigation roadmap.
+**⚠️ SECURITY:** OAuth tokens migrating from `users.google_oauth_tokens` (plaintext jsonb) to `users.encrypted_google_tokens` (encrypted text). See `SECURITY.md`.
 
 ## Error Monitoring (Sentry)
 - **Client-side:** Session replay + error tracking
