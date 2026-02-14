@@ -3,19 +3,19 @@ import { NextRequest, NextResponse } from 'next/server'
 /**
  * Verify API key for customer deployment
  *
- * Each customer deployment has a unique CUSTOMER_API_KEY in their environment.
+ * Each customer deployment has a unique MILA_USER_API_KEY in their environment.
  * This provides basic authentication for API endpoints.
  *
  * For production multi-tenant: Replace with session-based auth (NextAuth.js)
  */
 export function verifyApiKey(request: NextRequest): NextResponse | null {
   const apiKey = request.headers.get('x-api-key')
-  const customerKey = process.env.CUSTOMER_API_KEY
+  const customerKey = process.env.MILA_USER_API_KEY
 
   // If no key configured, allow in development, block in production
   if (!customerKey) {
     if (process.env.NODE_ENV === 'production') {
-      console.error('[AUTH] CUSTOMER_API_KEY not configured in production')
+      console.error('[AUTH] MILA_USER_API_KEY not configured in production')
       return NextResponse.json(
         { error: 'API authentication not configured' },
         { status: 503 }

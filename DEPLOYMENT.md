@@ -13,7 +13,7 @@ All environment variables must be configured in your deployment platform (Vercel
 **Critical Security Variables:**
 ```bash
 # Generate unique keys for each customer deployment
-CUSTOMER_API_KEY=$(node -e "console.log(require('crypto').randomUUID())")
+MILA_USER_API_KEY=$(node -e "console.log(require('crypto').randomUUID())")
 CRON_SECRET=$(openssl rand -hex 32)
 SUPERADMIN_KEY=$(openssl rand -hex 32)
 ```
@@ -114,7 +114,7 @@ curl -X POST https://your-app.vercel.app/api/agent/run \
 # This should succeed:
 curl -X POST https://your-app.vercel.app/api/agent/run \
   -H "Content-Type: application/json" \
-  -H "x-api-key: YOUR_CUSTOMER_API_KEY" \
+  -H "x-api-key: YOUR_MILA_USER_API_KEY" \
   -d '{"userId": "valid-user-id"}'
 ```
 
@@ -235,7 +235,7 @@ echo "Backup created: $BACKUP_DIR"
 ### Security Breach
 
 1. **Rotate All Secrets**: Generate new values for:
-   - `CUSTOMER_API_KEY`
+   - `MILA_USER_API_KEY`
    - `CRON_SECRET`
    - `NEXTAUTH_SECRET`
    - `SUPABASE_SERVICE_KEY` (if compromised)
@@ -284,7 +284,7 @@ vercel --prod
 Each customer deployment should have:
 
 1. **Unique Domain**: `customer-name.yourdomain.com`
-2. **Unique API Key**: Never reuse `CUSTOMER_API_KEY`
+2. **Unique API Key**: Never reuse `MILA_USER_API_KEY`
 3. **Separate Google Project**: Each customer needs their own OAuth credentials
 4. **Separate Sentry Project** (optional): For isolated error tracking
 

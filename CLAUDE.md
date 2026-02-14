@@ -147,7 +147,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 ### API Protection
 All API endpoints are protected by one of:
-1. **API Key** (`CUSTOMER_API_KEY`) — For `/api/agent/run`, `/api/ingest`
+1. **API Key** (`MILA_USER_API_KEY`) — For `/api/agent/run`, `/api/ingest`
 2. **Cron Secret** (`CRON_SECRET`) — For `/api/cron/*`
 3. **Action Token** (HMAC-signed) — For `/api/action/[id]/*` (email links)
 4. **Superadmin Key** — For `/api/superadmin/*`
@@ -161,7 +161,7 @@ All API endpoints are protected by one of:
 
 ### Critical Environment Variables
 ```bash
-CUSTOMER_API_KEY     # Unique per deployment (API protection)
+MILA_USER_API_KEY    # Unique per deployment (API protection)
 CRON_SECRET          # Protects cron endpoints
 NEXTAUTH_SECRET      # Token signing secret
 SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)

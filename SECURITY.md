@@ -67,7 +67,7 @@ User clicks email link → Verifies token → Executes action → Done
 #### 3. API Key Protection (NEW)
 **File:** `src/lib/auth/api.ts`
 
-- Manual triggers require `CUSTOMER_API_KEY` in `x-api-key` header
+- Manual triggers require `MILA_USER_API_KEY` in `x-api-key` header
 - Each deployment has unique key
 - Protects `/api/agent/run` and `/api/ingest` from unauthorized access
 
@@ -238,7 +238,7 @@ User clicks email link → Verifies token → Executes action → Done
 ### For Operators
 
 1. **Rotate secrets quarterly**
-   - `CUSTOMER_API_KEY` every 3 months
+   - `MILA_USER_API_KEY` every 3 months
    - `CRON_SECRET` every 6 months
    - Update Vercel env vars
 
@@ -312,7 +312,7 @@ User clicks email link → Verifies token → Executes action → Done
 
 ## 📋 Security Checklist for New Deployments
 
-- [ ] Generate unique `CUSTOMER_API_KEY` (never reuse)
+- [ ] Generate unique `MILA_USER_API_KEY` (never reuse)
 - [ ] Generate unique `CRON_SECRET` (never reuse)
 - [ ] Set strong `NEXTAUTH_SECRET` (32+ bytes)
 - [ ] Configure Sentry DSN (separate project per customer)
