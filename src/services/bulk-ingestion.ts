@@ -1,0 +1,313 @@
+/**
+ * Bulk Ingestion Service
+ * Historical email backfill in 3 phases:
+ *   Phase 1: Fetch & store (paginated, pre-filter only, no embeddings)
+ *   Phase 2: Thread conversations (chrono order, reuses existing threading)
+ *   Phase 3: Propose actions (after all threading is done)
+ */
+
+import {
+  fetchEmailsPaginated,
+  extractEmailAddress,
+  extractName,
+  getUserEmail,
+  GMAIL_SKIP_CATEGORIES,
+  type EmailMessage,
+} from '@/lib/google/gmail'
+import { preFilterEmail } from '@/lib/ai/gemini'
+import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
+import { createMessage, messageExists, getUnprocessedMessages } from '@/lib/db/messages'
+import { getUserById, upsertUser } from '@/lib/db/users'
+import { isBlockedSender } from './ingestion'
+import { processMessagesForThreading } from './threading'
+import { generateActionsForConversations } from './planning'
+import { purgeUserAsCp } from '@/lib/db/counterparties'
+import { v4 as uuidv4 } from 'uuid'
+
+export interface BulkIngestionResult {
+  phase1: {
+    inboxFetched: number
+    sentFetched: number
+    skippedCategory: number
+    skippedBlocked: number
+    skippedPreFilter: number
+    skippedDuplicate: number
+    stored: number
+  }
+  phase2: {
+    messagesProcessed: number
+    conversationsCreated: number
+  }
+  phase3: {
+    actionsProposed: number
+  }
+  errors: string[]
+}
+
+/**
+ * Phase 1: Fetch & Store
+ * Paginated fetch from INBOX + SENT, pre-filter, store raw messages.
+ */
+async function phase1FetchAndStore(
+  userId: string,
+  since: Date,
+  until: Date | undefined,
+  maxTotal: number
+): Promise<BulkIngestionResult['phase1'] & { errors: string[] }> {
+  const stats = {
+    inboxFetched: 0,
+    sentFetched: 0,
+    skippedCategory: 0,
+    skippedBlocked: 0,
+    skippedPreFilter: 0,
+    skippedDuplicate: 0,
+    stored: 0,
+    errors: [] as string[],
+  }
+
+  // Get user email for direction detection
+  let userEmail: string
+  try {
+    const user = await getUserById(userId)
+    if (!user) throw new Error(`User not found: ${userId}`)
+
+    if (!user.email) {
+      const emailFromGmail = await getUserEmail(userId)
+      if (emailFromGmail) {
+        await upsertUser({ ...user, email: emailFromGmail })
+        userEmail = emailFromGmail.toLowerCase()
+      } else {
+        throw new Error(`User ${userId} has no email address`)
+      }
+    } else {
+      userEmail = user.email.toLowerCase()
+    }
+  } catch (error) {
+    stats.errors.push(`User setup: ${error instanceof Error ? error.message : 'Unknown'}`)
+    return stats
+  }
+
+  // Purge user-as-CP
+  await purgeUserAsCp(userId)
+
+  // Fetch received emails (not just INBOX — includes archived/read)
+  console.log(`[BulkIngest] Phase 1: Fetching received emails since ${since.toISOString()}`)
+  const inboxEmails = await fetchEmailsPaginated(userId, {
+    query: '-in:spam -in:trash -in:sent -in:draft',
+    after: since,
+    before: until,
+    maxTotal,
+  })
+  stats.inboxFetched = inboxEmails.length
+
+  // Fetch SENT emails
+  console.log(`[BulkIngest] Phase 1: Fetching SENT emails since ${since.toISOString()}`)
+  const sentEmails = await fetchEmailsPaginated(userId, {
+    query: 'in:sent',
+    after: since,
+    before: until,
+    maxTotal,
+  })
+  stats.sentFetched = sentEmails.length
+
+  // Combine and sort chronologically
+  const allEmails = [...inboxEmails, ...sentEmails]
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+
+  // Process each email
+  for (const email of allEmails) {
+    try {
+      // Dedup
+      if (await messageExists(userId, email.id)) {
+        stats.skippedDuplicate++
+        continue
+      }
+
+      // Skip Gmail categories (promotions, social, updates, forums)
+      if (email.labels.some(l => GMAIL_SKIP_CATEGORIES.includes(l))) {
+        stats.skippedCategory++
+        continue
+      }
+
+      // Determine direction
+      const senderEmail = extractEmailAddress(email.from)
+      const isOutbound = isSameGmailAddress(senderEmail, userEmail)
+      const direction = isOutbound ? 'outbound' : 'inbound'
+
+      // Get the counterparty email
+      let cpEmail: string
+      let cpName: string | null
+      if (isOutbound) {
+        if (!email.to || email.to.length === 0) continue
+        cpEmail = extractEmailAddress(email.to[0])
+        cpName = extractName(email.to[0])
+      } else {
+        cpEmail = senderEmail
+        cpName = extractName(email.from)
+      }
+
+      // Skip if CP is the user themselves
+      if (isSameGmailAddress(cpEmail, userEmail)) continue
+
+      // Blocked sender check (free)
+      if (isBlockedSender(cpEmail)) {
+        stats.skippedBlocked++
+        continue
+      }
+
+      // Pre-filter (cheap AI call)
+      try {
+        const filter = await preFilterEmail(email.subject, email.body, email.from)
+        if (!filter.relevant) {
+          stats.skippedPreFilter++
+          continue
+        }
+      } catch (error) {
+        // If pre-filter fails, let the email through (fail open)
+        console.error(`[BulkIngest] Pre-filter failed for ${email.id}, allowing:`, error)
+      }
+
+      // Find or create CP
+      const cp = await findOrCreateCP(userId, cpEmail, cpName || undefined)
+      if (!cp) continue
+
+      // Store message
+      const messageId = uuidv4()
+      await createMessage({
+        id: messageId,
+        user_id: userId,
+        cp_id: cp.id,
+        external_id: email.id,
+        external_thread_id: email.threadId,
+        universal_message_id: email.id,
+        direction,
+        raw_text: email.body,
+        cleaned_text: email.body.slice(0, 5000),
+        tag_primary: 'bulk_import',
+        tag_secondary: null,
+        timestamp: email.date.toISOString(),
+        occurred_at: email.date.toISOString(),
+      })
+
+      stats.stored++
+    } catch (error) {
+      console.error(`[BulkIngest] Error processing email ${email.id}:`, error)
+      stats.errors.push(`Email ${email.id}: ${error instanceof Error ? error.message : 'Unknown'}`)
+    }
+  }
+
+  console.log(`[BulkIngest] Phase 1 complete: ${stats.stored} stored, ${stats.skippedCategory} category, ${stats.skippedBlocked} blocked, ${stats.skippedPreFilter} pre-filter, ${stats.skippedDuplicate} duplicate`)
+  return stats
+}
+
+/**
+ * Phase 2: Thread
+ * Get all unprocessed messages (sorted chrono), run existing threading.
+ */
+async function phase2Thread(
+  userId: string
+): Promise<BulkIngestionResult['phase2'] & { conversationIds: string[] }> {
+  console.log(`[BulkIngest] Phase 2: Threading messages`)
+
+  const unprocessed = await getUnprocessedMessages(userId, 1000)
+  console.log(`[BulkIngest] Phase 2: ${unprocessed.length} unprocessed messages`)
+
+  if (unprocessed.length === 0) {
+    return { messagesProcessed: 0, conversationsCreated: 0, conversationIds: [] }
+  }
+
+  // processMessagesForThreading handles:
+  // - external_thread_id matching (free, instant)
+  // - embedding similarity (fallback)
+  // - new conversation creation
+  // - conversation summary rebuilds
+  const conversations = await processMessagesForThreading(unprocessed)
+
+  const conversationIds = Array.from(conversations.keys())
+  console.log(`[BulkIngest] Phase 2 complete: ${unprocessed.length} messages → ${conversationIds.length} conversations`)
+
+  return {
+    messagesProcessed: unprocessed.length,
+    conversationsCreated: conversationIds.length,
+    conversationIds,
+  }
+}
+
+/**
+ * Phase 3: Propose Actions
+ * Run action generation on threaded conversations. No drafts.
+ */
+async function phase3ProposeActions(
+  conversationIds: string[]
+): Promise<BulkIngestionResult['phase3']> {
+  console.log(`[BulkIngest] Phase 3: Proposing actions for ${conversationIds.length} conversations`)
+
+  const actions = await generateActionsForConversations(conversationIds)
+
+  console.log(`[BulkIngest] Phase 3 complete: ${actions.length} actions proposed`)
+  return { actionsProposed: actions.length }
+}
+
+/**
+ * Run the full bulk ingestion pipeline.
+ * Phase 1 completes entirely before Phase 2 starts.
+ * Phase 2 completes entirely before Phase 3 starts.
+ */
+export async function runBulkIngestion(
+  userId: string,
+  since: Date,
+  until?: Date,
+  maxTotal: number = 500
+): Promise<BulkIngestionResult> {
+  const result: BulkIngestionResult = {
+    phase1: {
+      inboxFetched: 0,
+      sentFetched: 0,
+      skippedCategory: 0,
+      skippedBlocked: 0,
+      skippedPreFilter: 0,
+      skippedDuplicate: 0,
+      stored: 0,
+    },
+    phase2: {
+      messagesProcessed: 0,
+      conversationsCreated: 0,
+    },
+    phase3: {
+      actionsProposed: 0,
+    },
+    errors: [],
+  }
+
+  // Phase 1: Fetch & Store
+  const p1 = await phase1FetchAndStore(userId, since, until, maxTotal)
+  result.phase1 = {
+    inboxFetched: p1.inboxFetched,
+    sentFetched: p1.sentFetched,
+    skippedCategory: p1.skippedCategory,
+    skippedBlocked: p1.skippedBlocked,
+    skippedPreFilter: p1.skippedPreFilter,
+    skippedDuplicate: p1.skippedDuplicate,
+    stored: p1.stored,
+  }
+  result.errors.push(...p1.errors)
+
+  if (p1.stored === 0 && p1.errors.length > 0) {
+    return result
+  }
+
+  // Phase 2: Thread (after ALL messages stored)
+  const p2 = await phase2Thread(userId)
+  result.phase2 = {
+    messagesProcessed: p2.messagesProcessed,
+    conversationsCreated: p2.conversationsCreated,
+  }
+
+  // Phase 3: Propose Actions (after ALL threading done)
+  if (p2.conversationIds.length > 0) {
+    const p3 = await phase3ProposeActions(p2.conversationIds)
+    result.phase3 = p3
+  }
+
+  return result
+}

@@ -94,7 +94,7 @@ const BLOCKED_SENDER_DOMAINS = [
 ]
 
 /** Returns true if the sender should be blocked before AI classification. */
-function isBlockedSender(email: string): boolean {
+export function isBlockedSender(email: string): boolean {
   const lower = email.toLowerCase()
   if (BLOCKED_SENDERS.includes(lower)) return true
 

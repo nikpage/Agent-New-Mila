@@ -280,6 +280,79 @@ export async function markAsRead(userId: string, messageId: string): Promise<voi
 }
 
 /**
+ * Fetch emails with pagination for bulk historical ingestion.
+ * Follows nextPageToken to get all results up to maxTotal.
+ */
+export async function fetchEmailsPaginated(
+  userId: string,
+  options?: {
+    query?: string
+    labelIds?: string[]
+    after?: Date
+    before?: Date
+    maxTotal?: number
+  }
+): Promise<EmailMessage[]> {
+  const gmail = await getGmailClient(userId)
+
+  let query = options?.query || ''
+  if (options?.after) {
+    query += ` after:${Math.floor(options.after.getTime() / 1000)}`
+  }
+  if (options?.before) {
+    query += ` before:${Math.floor(options.before.getTime() / 1000)}`
+  }
+
+  const messages: EmailMessage[] = []
+  let pageToken: string | undefined
+  const maxTotal = options?.maxTotal || 500
+
+  do {
+    const listResponse = await gmail.users.messages.list({
+      userId: 'me',
+      maxResults: Math.min(100, maxTotal - messages.length),
+      q: query.trim() || undefined,
+      labelIds: options?.labelIds,
+      pageToken,
+    })
+
+    for (const msg of listResponse.data.messages || []) {
+      if (!msg.id || messages.length >= maxTotal) break
+
+      try {
+        const fullMessage = await gmail.users.messages.get({
+          userId: 'me',
+          id: msg.id,
+          format: 'full',
+        })
+
+        const parsed = parseGmailMessage(fullMessage.data)
+        if (parsed) {
+          messages.push(parsed)
+        }
+      } catch (error) {
+        console.error(`Failed to fetch message ${msg.id}:`, error)
+      }
+    }
+
+    pageToken = listResponse.data.nextPageToken || undefined
+  } while (pageToken && messages.length < maxTotal)
+
+  return messages
+}
+
+/**
+ * Gmail category labels that indicate non-primary mail.
+ * Messages with these labels are skipped during bulk ingestion.
+ */
+export const GMAIL_SKIP_CATEGORIES = [
+  'CATEGORY_PROMOTIONS',
+  'CATEGORY_SOCIAL',
+  'CATEGORY_UPDATES',
+  'CATEGORY_FORUMS',
+]
+
+/**
  * Get a specific email thread
  */
 export async function getThread(
