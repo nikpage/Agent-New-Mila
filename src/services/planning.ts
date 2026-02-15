@@ -43,8 +43,11 @@ export async function generateActionProposal(
   }))
 
   try {
+    // Get user settings for AI context
+    const settings = await getUserSettings(conversation.user_id)
+
     // Get AI recommendation (Intent Only)
-    const proposal = await proposeAction(summary, formattedMessages, cp.name, channel)
+    const proposal = await proposeAction(summary, formattedMessages, cp.name, settings, channel)
 
     // Proactive Calendar: If SCHEDULE action, use full scheduling service
     // Mila acts as a human assistant - finds best slots, blocks them IN USER'S CALENDAR ONLY,
@@ -53,7 +56,6 @@ export async function generateActionProposal(
     let schedulingPayload: Record<string, unknown> = {}
     if (proposal.actionType === 'SCHEDULE') {
       try {
-        const settings = await getUserSettings(conversation.user_id)
         const cpName = cp.name || cp.primary_identifier
 
         // Extract meeting location from: AI suggestion, CP's known locations, or null

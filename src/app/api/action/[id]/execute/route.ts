@@ -34,6 +34,9 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
+    // Get user settings for AI context
+    const settings = await getUserSettings(action.user_id)
+
     // Check action type and required data
     if (action.action_type === 'REPLY') {
       // Get the CP to get the email address
@@ -58,6 +61,7 @@ export async function POST(
         const draft = await generateFinalDraft(
           conversation.summary_json,
           action.intent_cs || action.rationale_cs || action.rationale,
+          settings,
           userNotes,
           missingInfo,
           cp.name || cp.primary_identifier
@@ -194,6 +198,7 @@ export async function POST(
           const draft = await generateFinalDraft(
             conversation?.summary_json,
             `Potvrzuji termín schůzky: ${formatDate(new Date(selectedSlot.start))}, ${formatTime(new Date(selectedSlot.start))} - ${formatTime(new Date(selectedSlot.end))}. Pozvánka v kalendáři byla odeslána.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
+            settings,
             userNotes || undefined,
             undefined,
             cp.name || cp.primary_identifier
@@ -227,6 +232,7 @@ export async function POST(
         const draft = await generateFinalDraft(
           conversation?.summary_json,
           `Navrhuji schůzku. Nabízím tyto termíny:\n${slotsText}${locationStr ? `\nMísto: ${locationStr}` : ''}\nProsím dejte vědět, který termín vám vyhovuje.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
+          settings,
           userNotes || undefined,
           undefined,
           cp.name || cp.primary_identifier
@@ -249,7 +255,6 @@ export async function POST(
 
       // Case 3: Simple scheduling without pre-blocks (fallback)
       // User provided a time manually, create the event directly
-      const settings = await getUserSettings(action.user_id)
       const userTimeInput = (action.missing_info as { label: string; value: string | null }[] | null)
         ?.[0]?.value
 

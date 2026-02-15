@@ -22,6 +22,7 @@ import { getUserSettings } from '@/lib/db/users'
 import { getCPByIdentifier, findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createAction, hasPendingAction, calculatePriorityScore } from '@/lib/db/actions'
 import { isPersonalEvent } from '@/config/client'
+import type { UserSettings } from '@/lib/supabase/types'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -80,7 +81,7 @@ export async function ingestCalendarEvents(
 
         for (const invitation of invitations) {
           try {
-            const actionCreated = await processInvitation(userId, user.email, invitation)
+            const actionCreated = await processInvitation(userId, user.email, invitation, settings)
             if (actionCreated) {
               result.actionsCreated++
             }
@@ -181,12 +182,13 @@ async function syncGoogleEventToLocal(
 async function processInvitation(
   userId: string,
   userEmail: string,
-  invitation: CalendarEvent
+  invitation: CalendarEvent,
+  settings: UserSettings
 ): Promise<boolean> {
   if (!invitation.organizer?.email) return false
 
   // Personal events block time but don't generate action proposals
-  if (isPersonalEvent(invitation.summary || '')) return false
+  if (isPersonalEvent(invitation.summary || '', settings)) return false
 
   // Guard: skip if organizer is the user (self-organized events can appear as
   // pending invitations due to Google Calendar quirks with shared calendars,

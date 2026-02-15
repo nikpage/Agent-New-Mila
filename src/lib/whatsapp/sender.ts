@@ -6,10 +6,8 @@
  * and exposes a simple REST endpoint for sending messages.
  */
 
-import { clientConfig } from '@/config/client'
+import type { UserSettings } from '@/lib/supabase/types'
 import type { WASendRequest, WASendResponse, WAConnectionStatus } from './types'
-
-const DAEMON_BASE_URL = `http://localhost:${clientConfig.whatsapp.daemonPort}`
 
 /**
  * Send a WhatsApp message via the daemon.
@@ -18,16 +16,18 @@ const DAEMON_BASE_URL = `http://localhost:${clientConfig.whatsapp.daemonPort}`
 export async function sendWhatsAppMessage(
   to: string,
   body: string,
+  settings: UserSettings,
   replyToMessageId?: string
 ): Promise<WASendResponse> {
-  if (!clientConfig.whatsapp.enabled) {
-    return { success: false, error: 'WhatsApp is disabled in client config' }
+  if (!settings.whatsapp_enabled) {
+    return { success: false, error: 'WhatsApp is disabled' }
   }
 
+  const daemonUrl = `http://localhost:${settings.whatsapp_daemon_port}`
   const request: WASendRequest = { to, body, replyToMessageId }
 
   try {
-    const response = await fetch(`${DAEMON_BASE_URL}/send`, {
+    const response = await fetch(`${daemonUrl}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -51,13 +51,15 @@ export async function sendWhatsAppMessage(
 /**
  * Check the WhatsApp daemon connection status.
  */
-export async function getWhatsAppStatus(): Promise<WAConnectionStatus> {
-  if (!clientConfig.whatsapp.enabled) {
-    return { connected: false, error: 'WhatsApp is disabled in client config' }
+export async function getWhatsAppStatus(settings: UserSettings): Promise<WAConnectionStatus> {
+  if (!settings.whatsapp_enabled) {
+    return { connected: false, error: 'WhatsApp is disabled' }
   }
 
+  const daemonUrl = `http://localhost:${settings.whatsapp_daemon_port}`
+
   try {
-    const response = await fetch(`${DAEMON_BASE_URL}/status`, {
+    const response = await fetch(`${daemonUrl}/status`, {
       signal: AbortSignal.timeout(5_000),
     })
 

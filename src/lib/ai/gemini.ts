@@ -1,6 +1,6 @@
-import type { ConversationSummary, ActionType } from '../supabase/types'
+import type { ConversationSummary, ActionType, UserSettings } from '../supabase/types'
 import { runAITask } from './runner'
-import { getAISystemPrompt, clientConfig } from '@/config/client'
+import { getAISystemPrompt } from '@/config/client'
 
 /**
  * Pre-filter: Quick spam/junk detection using cheapest model.
@@ -66,6 +66,7 @@ export async function proposeAction(
   conversationSummary: ConversationSummary,
   recentMessages: { direction: string; text: string }[],
   cpName: string | null,
+  settings: UserSettings,
   channel: 'email' | 'whatsapp' = 'email'
 ): Promise<{
   actionType: ActionType
@@ -83,7 +84,7 @@ export async function proposeAction(
     .map(m => `[${m.direction}]: ${m.text.slice(0, 500)}`)
     .join('\n\n')
 
-  const systemContext = getAISystemPrompt()
+  const systemContext = getAISystemPrompt(settings)
   const channelNote = channel === 'whatsapp'
     ? 'CHANNEL: WhatsApp — keep messages short, informal, no subject line needed.'
     : 'CHANNEL: Email — standard professional format.'
@@ -154,16 +155,17 @@ Rules:
 export async function generateFinalDraft(
   conversationContext: any,
   intent: string,
+  settings: UserSettings,
   userNotes?: string,
   missingInfo?: any[],
   cpName?: string,
   channel: 'email' | 'whatsapp' = 'email'
 ): Promise<{ subject: string; body: string }> {
-  const systemContext = getAISystemPrompt()
+  const systemContext = getAISystemPrompt(settings)
   const isWhatsApp = channel === 'whatsapp'
   const toneInstruction = isWhatsApp
     ? 'Write a short WhatsApp message. No subject line needed — set subject to empty string. Keep it conversational but professional.'
-    : `Write a professional email in CZECH.\nSign off with:\n${clientConfig.ai.emailSignature}`
+    : `Write a professional email in CZECH.\nSign off with:\n${settings.ai_email_signature}`
 
   const prompt = `${systemContext}
 

@@ -15,8 +15,9 @@
 import { getConversationsForUser, getRecentMessages } from '@/lib/db/conversations'
 import { hasPendingAction, createAction, calculatePriorityScore, getActionsForUser } from '@/lib/db/actions'
 import { getCPById } from '@/lib/db/counterparties'
-import { clientConfig, containsHighValueSignals } from '@/config/client'
-import type { ActionProposal, ConversationThread } from '@/lib/supabase/types'
+import { getUserSettings } from '@/lib/db/users'
+import { containsHighValueSignals } from '@/config/client'
+import type { ActionProposal, ConversationThread, UserSettings } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
 export interface LeadTrackingResult {
@@ -30,11 +31,10 @@ export interface LeadTrackingResult {
 
 type LeadStatus = 'active' | 'cooling' | 'cold' | 'dead'
 
-function getLeadStatus(daysSinceActivity: number): LeadStatus {
-  const { coolingThresholdDays, coldThresholdDays, deadThresholdDays } = clientConfig.leads
-  if (daysSinceActivity >= deadThresholdDays) return 'dead'
-  if (daysSinceActivity >= coldThresholdDays) return 'cold'
-  if (daysSinceActivity >= coolingThresholdDays) return 'cooling'
+function getLeadStatus(daysSinceActivity: number, settings: UserSettings): LeadStatus {
+  if (daysSinceActivity >= settings.dead_threshold_days) return 'dead'
+  if (daysSinceActivity >= settings.cold_threshold_days) return 'cold'
+  if (daysSinceActivity >= settings.cooling_threshold_days) return 'cooling'
   return 'active'
 }
 
@@ -70,6 +70,8 @@ export async function trackLeadsForUser(userId: string): Promise<LeadTrackingRes
   }
 
   try {
+    const settings = await getUserSettings(userId)
+
     // Get all conversations, ordered by least recently updated
     const conversations = await getConversationsForUser(userId, {
       orderBy: 'last_updated',
@@ -79,7 +81,7 @@ export async function trackLeadsForUser(userId: string): Promise<LeadTrackingRes
 
     for (const conversation of conversations) {
       try {
-        await processConversationForLeadTracking(conversation, userId, result)
+        await processConversationForLeadTracking(conversation, userId, result, settings)
       } catch (error) {
         result.errors.push(
           `Conv ${conversation.id}: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -96,7 +98,8 @@ export async function trackLeadsForUser(userId: string): Promise<LeadTrackingRes
 async function processConversationForLeadTracking(
   conversation: ConversationThread,
   userId: string,
-  result: LeadTrackingResult
+  result: LeadTrackingResult,
+  settings: UserSettings
 ): Promise<void> {
   // Calculate days since last activity
   const lastUpdate = conversation.last_updated
@@ -108,7 +111,7 @@ async function processConversationForLeadTracking(
     (Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24)
   )
 
-  const status = getLeadStatus(daysSinceActivity)
+  const status = getLeadStatus(daysSinceActivity, settings)
 
   // Active leads don't need intervention
   if (status === 'active') return
@@ -124,7 +127,7 @@ async function processConversationForLeadTracking(
 
   // Check how many follow-ups we've already sent
   const followUpCount = await countExistingFollowUps(userId, conversation.id)
-  if (followUpCount >= clientConfig.leads.maxAutoFollowUps) {
+  if (followUpCount >= settings.max_auto_follow_ups) {
     // Max follow-ups reached — for dead leads, we could create an escalation
     // but for now, just skip. The user will see these in their dashboard.
     return
@@ -140,7 +143,7 @@ async function processConversationForLeadTracking(
 
   // Check if the conversation involves high-value signals
   const conversationText = recentMessages.map(m => m.cleaned_text || m.raw_text || '').join(' ')
-  const isHighValue = containsHighValueSignals(conversationText)
+  const isHighValue = containsHighValueSignals(conversationText, settings)
 
   // Calculate priority with lead-tracking boosts
   const basePriority = calculatePriorityScore({
@@ -152,9 +155,9 @@ async function processConversationForLeadTracking(
 
   // Apply lead-status boost
   let priorityBoost = 1.0
-  if (status === 'cooling') priorityBoost = clientConfig.leads.coolingPriorityBoost
-  if (status === 'cold') priorityBoost = clientConfig.leads.coldPriorityBoost
-  if (status === 'dead') priorityBoost = clientConfig.leads.coldPriorityBoost * 1.5
+  if (status === 'cooling') priorityBoost = settings.cooling_priority_boost
+  if (status === 'cold') priorityBoost = settings.cold_priority_boost
+  if (status === 'dead') priorityBoost = settings.cold_priority_boost * 1.5
   if (isHighValue) priorityBoost *= 1.5
 
   const boostedPriority = Math.round(basePriority * priorityBoost)

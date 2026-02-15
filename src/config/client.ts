@@ -143,30 +143,32 @@ His office is at Václavské náměstí 1, Praha 1.`,
 
 export type ClientConfig = typeof clientConfig
 
+import type { UserSettings } from '@/lib/supabase/types'
+
 /**
  * Helper to get the AI system context with client details.
  * Injected into every AI prompt for consistent persona.
+ * Reads from per-user settings stored in DB.
  */
-export function getAISystemPrompt(): string {
-  const { ai, business, client } = clientConfig
-  return `${ai.systemContext}
+export function getAISystemPrompt(settings: UserSettings): string {
+  return `${settings.ai_system_context}
 
-Business: ${client.company} — ${business.specialization}
-Market: ${business.market}
-Typical deal: ${business.typicalDealSize.min.toLocaleString()}-${business.typicalDealSize.max.toLocaleString()} ${business.typicalDealSize.currency}
+Business: ${settings.client_company} — ${settings.business_specialization}
+Market: ${settings.business_market}
+Typical deal: ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} ${settings.typical_deal_size_currency}
 
-High-value signals: ${business.highValueSignals.join(', ')}
-Language: ${ai.language === 'cs' ? 'Czech' : ai.language}
-Tone with counterparties: ${ai.toneWithCounterparties}`
+High-value signals: ${settings.high_value_signals.join(', ')}
+Language: ${settings.ai_language === 'cs' ? 'Czech' : settings.ai_language}
+Tone with counterparties: ${settings.ai_tone_cp}`
 }
 
 /**
  * Check if a message contains high-value deal signals.
  * Used by lead tracking to boost priority.
  */
-export function containsHighValueSignals(text: string): boolean {
+export function containsHighValueSignals(text: string, settings: UserSettings): boolean {
   const lower = text.toLowerCase()
-  return clientConfig.business.highValueSignals.some(signal =>
+  return settings.high_value_signals.some(signal =>
     lower.includes(signal.toLowerCase())
   )
 }
@@ -174,9 +176,9 @@ export function containsHighValueSignals(text: string): boolean {
 /**
  * Check if an event title indicates a personal (non-business) event.
  */
-export function isPersonalEvent(title: string): boolean {
+export function isPersonalEvent(title: string, settings: UserSettings): boolean {
   const lower = title.toLowerCase()
-  return clientConfig.calendar.personalEventKeywords.some(keyword =>
+  return settings.personal_event_keywords.some(keyword =>
     lower.includes(keyword.toLowerCase())
   )
 }

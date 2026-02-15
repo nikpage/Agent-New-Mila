@@ -4,7 +4,7 @@
  */
 
 import { getPendingActionsForBrief, markActionsNotified } from '@/lib/db/actions'
-import { getUserById, getUsersWithEmailEnabled } from '@/lib/db/users'
+import { getUserById, getUsersWithEmailEnabled, getUserSettings } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
 import { getEventsForToday } from '@/lib/db/events'
@@ -126,14 +126,23 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
 }
 
 /**
- * Send morning briefs to all enabled users
+ * Send morning briefs to all enabled users whose local time
+ * falls within the 30-minute window of their configured morning_brief_time.
  */
-export async function sendAllMorningBriefs(): Promise<{ sent: number; failed: number }> {
+export async function sendAllMorningBriefs(): Promise<{ sent: number; failed: number; skipped: number }> {
   const users = await getUsersWithEmailEnabled()
   let sent = 0
   let failed = 0
+  let skipped = 0
 
   for (const user of users) {
+    const settings = await getUserSettings(user.id)
+
+    if (!isTimeForBrief(settings.morning_brief_time, settings.timezone)) {
+      skipped++
+      continue
+    }
+
     const success = await sendMorningBrief(user.id)
     if (success) {
       sent++
@@ -142,7 +151,32 @@ export async function sendAllMorningBriefs(): Promise<{ sent: number; failed: nu
     }
   }
 
-  return { sent, failed }
+  return { sent, failed, skipped }
+}
+
+/**
+ * Check if the current UTC time falls within a 30-minute window
+ * of the user's configured morning brief time in their timezone.
+ */
+function isTimeForBrief(briefTime: string, timezone: string): boolean {
+  const now = new Date()
+  // Get current time in user's timezone
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  })
+  const parts = formatter.formatToParts(now)
+  const currentHour = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10)
+  const currentMinute = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10)
+
+  const [targetHour, targetMinute] = briefTime.split(':').map(Number)
+
+  const targetMinutes = targetHour * 60 + targetMinute
+  const currentMinutes = currentHour * 60 + currentMinute
+
+  return currentMinutes >= targetMinutes && currentMinutes < targetMinutes + 30
 }
 
 /**

@@ -592,6 +592,51 @@ export interface UserSettings {
   ai_tone_user: string            // default "professional and concise"
   ai_tone_cp: string              // default "polite and formal"
   user_alias: string              // default "User" (what Mila calls the user)
+
+  // Client Identity
+  client_name: string
+  client_company: string
+  client_role: string
+  client_phone: string
+  client_whatsapp: string
+
+  // Business Context
+  business_type: string
+  business_market: string
+  business_specialization: string
+  typical_deal_size_min: number
+  typical_deal_size_max: number
+  typical_deal_size_currency: string
+  high_value_signals: string[]
+  low_priority_signals: string[]
+
+  // AI Persona (extended)
+  ai_name: string
+  ai_language: string
+  ai_email_signature: string
+  ai_system_context: string
+
+  // Lead Management
+  cooling_threshold_days: number
+  cold_threshold_days: number
+  dead_threshold_days: number
+  max_auto_follow_ups: number
+  cooling_priority_boost: number
+  cold_priority_boost: number
+  min_deal_value_for_tracking: number
+
+  // WhatsApp
+  whatsapp_enabled: boolean
+  whatsapp_session_data_path: string
+  whatsapp_daemon_port: number
+  whatsapp_auto_ack_message: string | null
+  whatsapp_blocked_numbers: string[]
+  whatsapp_monitored_groups: string[]
+
+  // Calendar
+  business_calendar_id: string
+  personal_calendar_id: string | null
+  personal_event_keywords: string[]
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -626,6 +671,56 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   ai_tone_user: 'professional and concise',
   ai_tone_cp: 'polite and formal',
   user_alias: 'User',
+
+  // Client Identity
+  client_name: '',
+  client_company: '',
+  client_role: '',
+  client_phone: '',
+  client_whatsapp: '',
+
+  // Business Context
+  business_type: '',
+  business_market: '',
+  business_specialization: '',
+  typical_deal_size_min: 0,
+  typical_deal_size_max: 0,
+  typical_deal_size_currency: 'CZK',
+  high_value_signals: [],
+  low_priority_signals: [],
+
+  // AI Persona (extended)
+  ai_name: 'Mila',
+  ai_language: 'cs',
+  ai_email_signature: '',
+  ai_system_context: '',
+
+  // Lead Management
+  cooling_threshold_days: 2,
+  cold_threshold_days: 5,
+  dead_threshold_days: 14,
+  max_auto_follow_ups: 3,
+  cooling_priority_boost: 1.5,
+  cold_priority_boost: 2.5,
+  min_deal_value_for_tracking: 0,
+
+  // WhatsApp
+  whatsapp_enabled: false,
+  whatsapp_session_data_path: './.wwebjs_auth',
+  whatsapp_daemon_port: 3001,
+  whatsapp_auto_ack_message: null,
+  whatsapp_blocked_numbers: [],
+  whatsapp_monitored_groups: [],
+
+  // Calendar
+  business_calendar_id: 'primary',
+  personal_calendar_id: null,
+  personal_event_keywords: [
+    'osobní', 'personal', 'rodina', 'family', 'lékař', 'doctor',
+    'dentist', 'zubař', 'sport', 'gym', 'fitness', 'dovolená',
+    'vacation', 'holiday', 'narozeniny', 'birthday', 'výročí',
+    'anniversary', 'škola', 'school', 'kroužek',
+  ],
 }
 
 // Conversation summary JSON structure
