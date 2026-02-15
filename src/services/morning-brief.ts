@@ -93,7 +93,7 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
       headline = `Máte ${briefActions.length} akčních návrhů ke zpracování.`
     }
 
-    const htmlContent = generateBriefEmailHtml(headline, briefActions, events.map(e => ({
+    const htmlContent = generateBriefEmailHtml(userId, headline, briefActions, events.map(e => ({
       title: e.title || 'Event',
       time: new Date(e.start_time).toLocaleTimeString('en-US', {
         hour: 'numeric',
@@ -149,10 +149,12 @@ export async function sendAllMorningBriefs(): Promise<{ sent: number; failed: nu
  * Generate HTML email content — card rendering delegated to ActionCard.tsx
  */
 function generateBriefEmailHtml(
+  userId: string,
   headline: string,
   actions: BriefAction[],
   events: { title: string; time: string; location?: string }[]
 ): string {
+  const triggerUrl = `${APP_BASE_URL}/api/trigger/ingest?uid=${userId}`
   return `
 <!DOCTYPE html>
 <html>
@@ -160,6 +162,7 @@ function generateBriefEmailHtml(
   <meta charset="utf-8">
 </head>
 <body style="margin: 0; padding: 0; background-color: ${theme.colors.background}; font-family: 'Inter', system-ui, sans-serif; color: ${theme.colors.text};">
+  <img src="${triggerUrl}" width="1" height="1" style="display:none" alt="" />
   <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
     <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">Dobré ráno</h1>
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
