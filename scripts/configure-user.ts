@@ -157,10 +157,17 @@ async function main() {
     fromJsonPath = args[jsonFlagIndex + 1]
   }
 
+  // Support --user-id <id> to skip interactive prompt (used by add-user.ts chaining)
+  const userIdFlagIndex = args.indexOf('--user-id')
+  let userIdArg: string | null = null
+  if (userIdFlagIndex !== -1 && args[userIdFlagIndex + 1]) {
+    userIdArg = args[userIdFlagIndex + 1]
+  }
+
   console.log('--- Mila User Settings Configuration ---')
   console.log('Step 2: Configure user settings (run after add-user.ts)\n')
 
-  const userId = await ask('Enter user ID (UUID from add-user.ts)')
+  const userId = userIdArg || await ask('Enter user ID (UUID from add-user.ts)')
   if (!userId) {
     console.error('User ID is required')
     process.exit(1)
