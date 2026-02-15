@@ -1,13 +1,14 @@
 # CLAUDE.md — Project Guide for Claude Code
 
 ## Project Overview
-**Mila** is an AI-powered executive assistant that ingests emails/calendars via Google Workspace APIs, uses Gemini AI to propose actions (reply, schedule, wait, delegate), and presents them for user approval.
+**Mila** is an AI-powered executive assistant that ingests emails, WhatsApp messages, and calendar events, uses Gemini AI to propose actions (reply, schedule, follow up, delegate), tracks leads, and presents everything for user approval via morning brief emails.
 
 - **Stack**: Next.js 14 (App Router) / TypeScript 5.7 (strict) / Supabase / Tailwind CSS 3
 - **AI**: Google Generative AI (Gemini) via `@google/generative-ai`
 - **Deployment**: Vercel with cron jobs
 - **Monitoring**: Sentry error tracking (client + server + edge)
 - **Path alias**: `@/*` → `src/*`
+- **Full product spec**: See `SPEC.md`
 
 ## Commands
 ```bash
@@ -27,25 +28,34 @@ src/
 │   ├── api/action/[id]/        # Action CRUD + execute/draft/todo/blacklist
 │   ├── api/auth/               # OAuth connect + callback
 │   ├── api/cron/morning-brief/ # Daily 8 AM cron
-│   ├── api/ingest/             # Manual email/calendar ingestion
+│   ├── api/ingest/             # Manual email/calendar ingestion (+ /bulk)
 │   ├── api/health/             # Health check
+│   ├── api/whatsapp/status/    # WhatsApp daemon status proxy
 │   ├── action/[id]/            # Action detail + edit pages
 │   └── page.tsx                # Home/status dashboard
 │
 ├── services/                   # Business logic (orchestration layer)
-│   ├── agent.ts                # Main pipeline (~120 lines)
+│   ├── agent.ts                # Main pipeline — 6-step orchestration
 │   ├── scheduling.ts           # Calendar slot finding (683 lines) ⚠️ LARGEST
-│   ├── planning.ts             # Action generation (235 lines)
-│   ├── threading.ts            # Email conversation grouping (306 lines)
+│   ├── planning.ts             # Action generation with channel detection
+│   ├── threading.ts            # Email/WA conversation grouping (306 lines)
 │   ├── ingestion.ts            # Email ingestion (225 lines)
-│   ├── calendar-ingestion.ts   # Calendar sync (297 lines)
-│   └── morning-brief.ts        # Daily summary (212 lines)
+│   ├── calendar-ingestion.ts   # Calendar sync + personal event filtering
+│   ├── lead-tracking.ts        # Cooling/cold/dead lead detection + follow-ups
+│   └── morning-brief.ts        # Daily summary email (212 lines)
 │
 ├── lib/                        # Shared utilities & integrations
-│   ├── db/                     # Supabase CRUD — 9 files, 1892 lines total
+│   ├── db/                     # Supabase CRUD — 9 files, ~1900 lines total
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
 │   ├── supabase/               # Client + types (types.ts = 593 lines)
-│   ├── ai/gemini.ts            # Gemini AI calls (228 lines)
+│   ├── ai/
+│   │   ├── gemini.ts           # AI functions (preFilter, classify, proposeAction, generateFinalDraft, etc.)
+│   │   ├── runner.ts           # runAITask() with 3-model fallback chain
+│   │   └── providers/          # gemini.ts, types.ts, index.ts — provider abstraction
+│   ├── whatsapp/
+│   │   ├── types.ts            # WAIncomingMessage, WASendRequest, normalizePhoneNumber, etc.
+│   │   ├── sender.ts           # sendWhatsAppMessage(), getWhatsAppStatus() — talks to daemon
+│   │   └── index.ts            # Barrel re-export
 │   ├── auth/
 │   │   ├── tokens.ts           # OAuth state, action tokens, cron validation
 │   │   └── api.ts              # API key verification middleware
@@ -56,10 +66,30 @@ src/
 │   ├── action/EditForm.tsx     # Action editor (142 lines)
 │   └── ui/                     # Button, Card, Badge, Input
 │
-└── config/
-    ├── env.ts                  # Environment config with validation
-    └── theme.ts                # Design tokens
+├── config/
+│   ├── client.ts               # Per-client config (identity, business, AI persona, leads, WA, calendar, scoring)
+│   ├── ai-models.ts            # 6 AI stages × 3-model fallback chains
+│   ├── env.ts                  # Environment config with validation
+│   └── theme.ts                # Design tokens
+│
+└── scripts/
+    └── whatsapp-daemon.ts      # Standalone WA Web process (excluded from tsconfig)
 ```
+
+## Agent Pipeline (src/services/agent.ts)
+
+```
+Step 0: purgeUserAsCp — data hygiene
+Step 1: Verify user exists + has Google credentials
+Step 2: Ingest inbound + outbound emails from Gmail
+Step 2.5: Sync Google Calendar events, detect invitations, filter personal events
+Step 3: Get all unprocessed messages (email + WhatsApp)
+Step 4: Thread messages into conversations
+Step 5: Generate action proposals for updated conversations (channel-aware)
+Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads, create follow-ups
+```
+
+Result type includes: `emailsIngested`, `whatsappMessagesProcessed`, `calendarEventsSynced`, `calendarInvitationsDetected`, `messagesProcessed`, `conversationsUpdated`, `actionsGenerated`, `followUpsGenerated`, `coolingLeads`, `coldLeads`.
 
 ## Performance Rules (CRITICAL)
 
@@ -67,8 +97,8 @@ src/
 Never read all files in a directory sequentially. This bloats context and causes hangs.
 
 **Worst offenders (do NOT read all files in these):**
-- `src/lib/db/` — 9 files, 1892 lines. Use the index below to pick the right file.
-- `src/services/` — 8 files, 2000+ lines. Read only the service relevant to the task.
+- `src/lib/db/` — 9 files, ~1900 lines. Use the index below to pick the right file.
+- `src/services/` — 8 files, 2500+ lines. Read only the service relevant to the task.
 - `src/lib/google/` — 5 files, 1100+ lines. Read only the API you need.
 
 ### Do NOT follow imports into large type files
@@ -83,28 +113,56 @@ Never read all files in a directory sequentially. This bloats context and causes
 ## src/lib/db/ Quick Reference
 Instead of reading these files, use this index:
 
-| File | Lines | Contents |
-|------|-------|----------|
-| `users.ts` | 146 | `getUserById`, `getUserByEmail`, `createUser`, `updateUser`, `getUserSettings`, `updateUserSettings` |
-| `counterparties.ts` | 203 | `getCPById`, `getCPByIdentifier`, `createCP`, `updateCP`, `getCPsForUser` |
-| `conversations.ts` | 289 | `getConversationById`, `createConversation`, `updateConversation`, `getConversationsForUser`, `addParticipant` |
-| `messages.ts` | 222 | `getMessageById`, `createMessage`, `getMessagesForConversation`, `getRecentMessages` |
-| `actions.ts` | 288 | `getActionById`, `createAction`, `updateAction`, `getActionsForUser`, `calculatePriorityScore` |
-| `todos.ts` | 206 | `getTodoById`, `createTodo`, `updateTodo`, `getTodosForUser` |
-| `events.ts` | 439 | `getEventById`, `createEvent`, `updateEvent`, `getEventsForUser`, `getEventsInRange` |
-| `embeddings.ts` | 91 | `saveMessageEmbedding`, `searchSimilarMessages` |
-| `index.ts` | 8 | Barrel re-exports (do not read — it just re-exports the above) |
+| File | Contents |
+|------|----------|
+| `users.ts` | `getUserById`, `getUserByEmail`, `createUser`, `updateUser`, `getUserSettings`, `updateUserSettings`, `getUsersWithEmailEnabled` |
+| `counterparties.ts` | `getCPById`, `getCPByIdentifier`, `createCP`, `updateCP`, `getCPsForUser`, `findOrCreateCP`, `isSameGmailAddress`, `purgeUserAsCp` |
+| `conversations.ts` | `getConversationById`, `createConversation`, `updateConversation`, `getConversationsForUser`, `addParticipant`, `getRecentMessages`, `findConversationByExternalThread` |
+| `messages.ts` | `getMessageById`, `createMessage`, `getMessagesForConversation`, `getUnprocessedMessages` |
+| `actions.ts` | `getActionById`, `createAction`, `updateAction`, `getActionsForUser`, `calculatePriorityScore`, `hasPendingAction`, `getPendingActionsForBrief`, `markActionsNotified` |
+| `todos.ts` | `getTodoById`, `createTodo`, `updateTodo`, `getTodosForUser` |
+| `events.ts` | `getEventById`, `createEvent`, `updateEvent`, `getEventsForUser`, `getEventsInRange`, `getEventsForToday`, `calculateEventScore` |
+| `embeddings.ts` | `saveMessageEmbedding`, `searchSimilarMessages` |
+| `index.ts` | Barrel re-exports (do not read) |
 
 All db files follow the same pattern: import `getSupabaseAdmin` from `../supabase/client`, import types from `../supabase/types`, export async CRUD functions.
 
-**⚠️ SECURITY:** When adding new queries, always filter by `user_id` unless specifically needed:
+**SECURITY:** When adding new queries, always filter by `user_id` unless specifically needed:
 ```typescript
-// ✅ GOOD
+// GOOD
 const actions = await supabase.from('action_proposals').select('*').eq('user_id', userId)
 
-// ❌ BAD (exposes all users' data)
+// BAD (exposes all users' data)
 const actions = await supabase.from('action_proposals').select('*')
 ```
+
+## Per-Client Config (src/config/client.ts)
+
+Single file customized per deployment. Contains:
+- **`client`** — name, company, email, phone, WhatsApp number
+- **`business`** — type, market, specialization, deal size range, high-value signals, low-priority signals
+- **`ai`** — assistant name, language, tone with user/counterparties, email signature, system context prompt
+- **`leads`** — cooling/cold/dead thresholds (days), max auto follow-ups, priority boost multipliers
+- **`whatsapp`** — enabled, session path, daemon port, blocked numbers, monitored groups
+- **`calendar`** — business/personal calendar IDs, personal event keywords
+- **`scoring`** — offer multipliers, VIP multiplier, KC factor
+
+Exports: `clientConfig`, `getAISystemPrompt()`, `containsHighValueSignals(text)`, `isPersonalEvent(title)`.
+
+`getAISystemPrompt()` is injected into `proposeAction()` and `generateFinalDraft()` in `src/lib/ai/gemini.ts`.
+
+## Lead Tracking (src/services/lead-tracking.ts)
+
+Runs as Step 6 of agent pipeline. Scans all conversations, detects stale leads:
+
+| Status | Days Inactive | Action |
+|--------|--------------|--------|
+| Active | < 2 | None |
+| Cooling | 2-5 | Gentle check-in (1.5x priority boost) |
+| Cold | 5-14 | Urgent follow-up (2.5x boost) |
+| Dead | 14+ | Last-chance contact (3.75x boost) |
+
+Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation. High-value conversations (matching `highValueSignals`) get additional 1.5x boost.
 
 ## Database Schema (actual columns from Supabase)
 
@@ -120,7 +178,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 | **AI Persona** | `ai_tone_user`, `ai_tone_cp`, `user_alias` | Professional, Polite, "User" |
 | **Misc** | `morning_brief_time`, `default_delegate_email`, `todo_auto_due_days` | 08:00, null, 1 |
 
-**⚠️ `ai_tone_user`, `ai_tone_cp`, `user_alias`** are defined but **NOT YET wired** into AI prompts.
+**Note:** `ai_tone_user`, `ai_tone_cp`, `user_alias` in user settings DB are NOT used. The AI persona is configured via `src/config/client.ts` → `ai` section instead.
 
 ### Core Tables
 
@@ -136,17 +194,17 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 **`conversation_threads`** — id, user_id, topic, summary_text, summary_json (jsonb), summary_confidence (numeric), summary_confidence_reason, messages_since_rebuild, message_count, state, deal_type, priority_score (integer), embedding (vector 768-dim), last_updated, created_at
 
-**`messages`** — id, user_id, cp_id, channel_id, thread_id → conversation_threads, conversation_id → conversation_threads, external_thread_id (gmail thread id), universal_message_id, external_id, direction (inbound/outbound), raw_text, cleaned_text, message_type (enum), tag_primary, tag_secondary, timestamp, occurred_at
+**`messages`** — id, user_id, cp_id, channel_id, thread_id, conversation_id, external_thread_id, universal_message_id, external_id, direction (inbound/outbound), raw_text, cleaned_text, message_type (enum), tag_primary, tag_secondary, timestamp, occurred_at
 
-**`thread_participants`** — thread_id → conversation_threads, cp_id → cps, added_at
+**`thread_participants`** — thread_id, cp_id, added_at
 
-**`message_embeddings`** — message_id → messages, embedding (vector 768-dim)
+**`message_embeddings`** — message_id, embedding (vector 768-dim)
 
 ### Actions & Execution
 
 **`action_proposals`** — id, user_id, cp_id, conversation_id, action_type (REPLY/SCHEDULE/TODO/DELEGATE), status, rationale, rationale_cs, intent_cs, missing_info (jsonb), payload (jsonb), draft_subject, draft_body_text, user_notes, priority_score (numeric), dollar_value (numeric), urgency (numeric), pain_factor (numeric), weight (numeric), offer_multiplier (numeric), queued_for_brief, last_notified_at, created_at
 
-**`emails`** (outbound send queue) — id, user_id, action_id → action_proposals, to, subject, text_body, html_body, status, external_id, sent_at, bounced, retry_count, last_retry_at, last_error, created_at, updated_at
+**`emails`** (outbound send queue) — id, user_id, action_id, to, subject, text_body, html_body, status, external_id, sent_at, bounced, retry_count, last_retry_at, last_error, created_at, updated_at
 
 **`todos`** — id, user_id, cp_id, thread_id, description, status, due_date, scheduled_time, created_at
 
@@ -160,8 +218,9 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 ### Known Redundancy / Unused Columns
 - `messages.thread_id` AND `messages.conversation_id` — both FK to `conversation_threads` (redundant)
-- `users.google_oauth_tokens` (jsonb) AND `users.encrypted_google_tokens` (text) — migration in progress from plaintext to encrypted
-- `conversation_threads.priority_score` — integer on thread vs numeric on action_proposals (different scales?)
+- `users.google_oauth_tokens` (jsonb) AND `users.encrypted_google_tokens` (text) — migration in progress
+- `conversation_threads.priority_score` — integer on thread vs numeric on action_proposals (different scales)
+- `users.settings.ai_tone_user/ai_tone_cp/user_alias` — unused, superseded by `src/config/client.ts`
 
 ## Priority Scoring
 
@@ -172,15 +231,15 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 | Input | Scale | Notes |
 |-------|-------|-------|
 | `dollarValue` | 0+ (CZK) | Deal/transaction value |
-| `offerMultiplier` | default 1 | From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) |
+| `offerMultiplier` | default 1 | From client config: seller (1.5) or buyer (1.0) |
 | `urgency` | 1-10 | AI-assessed, safe default 1 |
 | `painFactor` | 1-10 | AI-assessed relationship pain, safe default 1 |
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
-| `weight` | 1-10, or **100** = immovable | How "movable" the event is. Flight departures, kids concert = 100. Default 0 (additive bonus). |
+| `weight` | 0-100 | How "movable". 100 = immovable. Default 0. |
 
-**Safe defaults:** `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/null (prevents score collapse).
+Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/null (prevents score collapse).
 
-**⚠️ Currently:** `planning.ts` calls `calculatePriorityScore()` WITHOUT `weight` or `offerMultiplier` — those are set separately, not yet wired into proposal generation.
+**Note:** `planning.ts` calls `calculatePriorityScore()` without `weight` or `offerMultiplier` — those are not yet wired into proposal generation.
 
 ## AI Model Configuration
 
@@ -200,6 +259,8 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 **Provider:** `src/lib/ai/providers/gemini.ts` — uses `@google/generative-ai` SDK with model caching.
 
+**Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()` and `generateFinalDraft()` prompts. Channel context (email vs WhatsApp) adjusts tone.
+
 ## Embeddings & Semantic Threading
 
 **Purpose:** Assign incoming messages to existing conversations when Gmail thread ID doesn't match.
@@ -214,7 +275,9 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 - `0.55 – 0.78` → AI tiebreak via `shouldJoinConversation()`
 - `< 0.55` → new conversation
 
-**Conversation embeddings** are regenerated on summary rebuild (`rebuildConversationSummary()`). Embedding failure doesn't block summary updates.
+**WhatsApp threading:** By phone number — `external_thread_id = wa:+phone`
+
+**Conversation embeddings** are regenerated on summary rebuild. Embedding failure doesn't block summary updates.
 
 ## Scheduling & Conflict Resolution
 
@@ -229,31 +292,53 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 - `calculateTravelForSlot()` uses Google Maps Distance Matrix API (`src/lib/google/maps.ts`)
 - Origin: previous event location → office_location → home_location (fallback chain)
 - Buffer = `max(travelTime + 10min, 15min minimum)`
-- Creates `🚗 Travel to {title}` buffer events linked via `parent_event_id`
+- Creates travel buffer events linked via `parent_event_id`
 - Travel mode from user settings: driving/walking/transit/bicycling
 
 ### Priority-Based Conflict Resolution
 When a new meeting conflicts with existing events:
 - `handleConflict()` compares `calculateEventScore()` of new vs existing
-- **New score > existing score** → `recommendation: 'move_existing'` (suggest moving the lower-priority meeting)
-- **New score ≤ existing score** → `recommendation: 'suggest_alternate'` (find different time)
-- **User-created events default weight = 100** (treated as immovable unless outranked)
-- If ALL conflicts recommend moving → slot is still offered with conflict info
+- **New score > existing score** → `recommendation: 'move_existing'`
+- **New score ≤ existing score** → `recommendation: 'suggest_alternate'`
+- **User-created events default weight = 100** (treated as immovable)
 
 ### Personal Calendar Events
-- Personal/private calendar events **block time** (included in availability calculation)
-- **DO generate actions** for personal calendar events
-- Currently no visibility/privacy field parsed from Google Calendar API — all events treated equally
+- Personal events (matching keywords in `src/config/client.ts` → `calendar.personalEventKeywords`) **block time** but **do NOT generate action proposals**
+- Detection via `isPersonalEvent(title)` in `calendar-ingestion.ts`
 
 ## Draft Generation
 
 **Timing:** On-demand only — drafts are generated at execution time, NOT during proposal creation.
-**Language:** Czech (hardcoded in prompts)
-**Channel-aware tone:** NOT YET IMPLEMENTED — same professional tone for all channels
+**Language:** Czech (configured in `src/config/client.ts` → `ai.language`)
+**Channel-aware tone:** Implemented — email gets formal tone + signature; WhatsApp gets short, conversational messages.
 
-Proposal phase stores only: `intent_cs`, `rationale_cs`, `missing_info`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution.
+Proposal phase stores only: `intent_cs`, `rationale_cs`, `missing_info`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`.
 
-`generateFinalDraft()` in `src/lib/ai/gemini.ts` takes conversation context + intent + user notes → returns `{ subject, body }`.
+`generateFinalDraft()` in `src/lib/ai/gemini.ts` takes conversation context + intent + user notes + channel → returns `{ subject, body }`.
+
+## WhatsApp Integration
+
+### Architecture
+- **Daemon** (`scripts/whatsapp-daemon.ts`) — standalone process, NOT part of Next.js build (excluded in tsconfig)
+- Uses `whatsapp-web.js` (Puppeteer-based WA Web client)
+- Requires separate `npm install whatsapp-web.js qrcode-terminal`
+- Run with: `npx tsx scripts/whatsapp-daemon.ts`
+
+### Daemon HTTP API (default port 3001)
+- `GET /status` — connection status + QR code for pairing
+- `POST /send { to, body }` — send message
+- `GET /health` — alive check
+
+### Message Flow
+1. Daemon receives WA message → writes to Supabase `messages` table (`channel_id: 'whatsapp'`, `external_thread_id: wa:+phone`)
+2. Agent pipeline picks up WA messages in Step 3 (same as email)
+3. Threading groups by phone number
+4. AI receives channel context, adjusts tone
+5. On execution, sender calls daemon's `/send` endpoint
+
+### Configuration
+All in `src/config/client.ts` → `whatsapp` section:
+- `enabled`, `sessionDataPath`, `daemonPort`, `autoAckMessage`, `blockedNumbers`, `monitoredGroups`
 
 ## Conventions
 - All server-side code uses `async/await` with Supabase client
@@ -290,7 +375,7 @@ NEXTAUTH_SECRET      # Token signing secret
 SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)
 ```
 
-**⚠️ SECURITY:** OAuth tokens migrating from `users.google_oauth_tokens` (plaintext jsonb) to `users.encrypted_google_tokens` (encrypted text). See `SECURITY.md`.
+**SECURITY:** OAuth tokens migrating from `users.google_oauth_tokens` (plaintext jsonb) to `users.encrypted_google_tokens` (encrypted text). See `SECURITY.md`.
 
 ## Error Monitoring (Sentry)
 - **Client-side:** Session replay + error tracking
@@ -302,9 +387,11 @@ SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)
 **Setup:** Requires `SENTRY_DSN` env var. Free tier = 5k errors/month.
 
 ## Documentation Files
-- **`SECURITY.md`** (481 lines) — Security architecture, risks, incident response
-- **`DEPLOYMENT.md`** (373 lines) — Deployment guide, backups, operations
-- **`CLAUDE.md`** (this file) — Code architecture reference
+- **`SPEC.md`** — Full product specification
+- **`CLAUDE.md`** (this file) — Code architecture reference for AI coding assistants
+- **`ONBOARDING.md`** — Step-by-step CLI guide for setting up a new client
+- **`SECURITY.md`** — Security architecture, risks, incident response
+- **`DEPLOYMENT.md`** — Deployment guide, backups, operations
 - **`.env.example`** — All environment variables with generation commands
 
 ## Superadmin

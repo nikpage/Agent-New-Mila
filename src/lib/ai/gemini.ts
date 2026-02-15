@@ -1,5 +1,6 @@
 import type { ConversationSummary, ActionType } from '../supabase/types'
 import { runAITask } from './runner'
+import { getAISystemPrompt, clientConfig } from '@/config/client'
 
 /**
  * Pre-filter: Quick spam/junk detection using cheapest model.
@@ -64,7 +65,8 @@ Be concise. Focus on actionable insights.`
 export async function proposeAction(
   conversationSummary: ConversationSummary,
   recentMessages: { direction: string; text: string }[],
-  cpName: string | null
+  cpName: string | null,
+  channel: 'email' | 'whatsapp' = 'email'
 ): Promise<{
   actionType: ActionType
   rationale_cs: string
@@ -81,7 +83,16 @@ export async function proposeAction(
     .map(m => `[${m.direction}]: ${m.text.slice(0, 500)}`)
     .join('\n\n')
 
-  const prompt = `You are Mila, a proactive executive assistant. Based on this conversation, determine what action to take.
+  const systemContext = getAISystemPrompt()
+  const channelNote = channel === 'whatsapp'
+    ? 'CHANNEL: WhatsApp — keep messages short, informal, no subject line needed.'
+    : 'CHANNEL: Email — standard professional format.'
+
+  const prompt = `${systemContext}
+
+${channelNote}
+
+You are Mila, a proactive executive assistant. Based on this conversation, determine what action to take.
 
 CONVERSATION STATE:
 ${JSON.stringify(conversationSummary, null, 2)}
@@ -145,9 +156,18 @@ export async function generateFinalDraft(
   intent: string,
   userNotes?: string,
   missingInfo?: any[],
-  cpName?: string
+  cpName?: string,
+  channel: 'email' | 'whatsapp' = 'email'
 ): Promise<{ subject: string; body: string }> {
-  const prompt = `You are an executive assistant writing an email on behalf of your boss.
+  const systemContext = getAISystemPrompt()
+  const isWhatsApp = channel === 'whatsapp'
+  const toneInstruction = isWhatsApp
+    ? 'Write a short WhatsApp message. No subject line needed — set subject to empty string. Keep it conversational but professional.'
+    : `Write a professional email in CZECH.\nSign off with:\n${clientConfig.ai.emailSignature}`
+
+  const prompt = `${systemContext}
+
+You are an executive assistant writing a ${isWhatsApp ? 'WhatsApp message' : 'email'} on behalf of your boss.
 Language: CZECH.
 
 CONTEXT:
@@ -164,15 +184,14 @@ ${JSON.stringify(missingInfo)}` : ''}
 
 RECIPIENT: ${cpName || 'The Counterparty'}
 
-Write the final email in CZECH.
-- Professional, concise tone.
+${toneInstruction}
 - Use the specific data provided in the missingInfo section to answer the counterparty's questions.
 - If the plan implies scheduling, propose the specific times mentioned.
 
 Respond with ONLY valid JSON:
 {
-  "subject": "Email subject line",
-  "body": "Email body text (ready to send)"
+  "subject": "Email subject line${isWhatsApp ? ' (empty string for WhatsApp)' : ''}",
+  "body": "${isWhatsApp ? 'WhatsApp message text' : 'Email body text'} (ready to send)"
 }`
 
   const text = await runAITask('drafting', prompt)

@@ -33,6 +33,10 @@ export async function generateActionProposal(
   const cp = await getCPById(latestWithCP.cp_id)
   if (!cp || cp.is_blacklisted) return null
 
+  // Detect channel from most recent message
+  const lastMessage = recentMessages[recentMessages.length - 1]
+  const channel: 'email' | 'whatsapp' = lastMessage?.channel_id === 'whatsapp' ? 'whatsapp' : 'email'
+
   const formattedMessages = recentMessages.map(m => ({
     direction: m.direction || 'UNKNOWN',
     text: m.cleaned_text || m.raw_text || '',
@@ -40,7 +44,7 @@ export async function generateActionProposal(
 
   try {
     // Get AI recommendation (Intent Only)
-    const proposal = await proposeAction(summary, formattedMessages, cp.name)
+    const proposal = await proposeAction(summary, formattedMessages, cp.name, channel)
 
     // Proactive Calendar: If SCHEDULE action, use full scheduling service
     // Mila acts as a human assistant - finds best slots, blocks them IN USER'S CALENDAR ONLY,
@@ -187,6 +191,7 @@ export async function generateActionProposal(
         intent_cs: proposal.intent_cs,
         execution_plan: proposal.rationale_cs,
         required_inputs: proposal.missingInfo,
+        channel,
         action_metadata: {
           action_type: proposal.actionType,
           urgency: proposal.urgency,

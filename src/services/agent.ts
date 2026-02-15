@@ -7,6 +7,7 @@ import { ingestEmailsForUser, ingestOutboundEmails } from './ingestion'
 import { processMessagesForThreading } from './threading'
 import { generateActionsForConversations } from './planning'
 import { ingestCalendarEvents } from './calendar-ingestion'
+import { trackLeadsForUser } from './lead-tracking'
 import { getUnprocessedMessages } from '@/lib/db/messages'
 import { getUserById } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
@@ -15,11 +16,15 @@ import type { ActionProposal } from '@/lib/supabase/types'
 export interface AgentRunResult {
   success: boolean
   emailsIngested: number
+  whatsappMessagesProcessed: number
   calendarEventsSynced: number
   calendarInvitationsDetected: number
   messagesProcessed: number
   conversationsUpdated: number
   actionsGenerated: number
+  followUpsGenerated: number
+  coolingLeads: number
+  coldLeads: number
   actions: ActionProposal[]
   errors: string[]
 }
@@ -31,11 +36,15 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
   const result: AgentRunResult = {
     success: false,
     emailsIngested: 0,
+    whatsappMessagesProcessed: 0,
     calendarEventsSynced: 0,
     calendarInvitationsDetected: 0,
     messagesProcessed: 0,
     conversationsUpdated: 0,
     actionsGenerated: 0,
+    followUpsGenerated: 0,
+    coolingLeads: 0,
+    coldLeads: 0,
     actions: [],
     errors: [],
   }
@@ -84,9 +93,12 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       result.errors.push(`Calendar ingestion: ${calendarError instanceof Error ? calendarError.message : 'Unknown error'}`)
     }
 
-    // Step 3: Get all unprocessed messages (including newly ingested)
+    // Step 3: Get all unprocessed messages (including newly ingested + WhatsApp)
     const unprocessedMessages = await getUnprocessedMessages(userId)
     result.messagesProcessed = unprocessedMessages.length
+    result.whatsappMessagesProcessed = unprocessedMessages.filter(
+      m => m.channel_id === 'whatsapp'
+    ).length
 
     // Step 4: Process messages into conversations
     if (unprocessedMessages.length > 0) {
@@ -98,6 +110,21 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       const actions = await generateActionsForConversations(conversationIds)
       result.actionsGenerated = actions.length
       result.actions = actions
+    }
+
+    // Step 6: Lead tracking — detect cooling/cold leads, create follow-up actions
+    try {
+      const leadResult = await trackLeadsForUser(userId)
+      result.followUpsGenerated = leadResult.followUpsCreated
+      result.coolingLeads = leadResult.coolingLeads
+      result.coldLeads = leadResult.coldLeads
+      result.actionsGenerated += leadResult.followUpsCreated
+      if (leadResult.errors.length > 0) {
+        result.errors.push(...leadResult.errors)
+      }
+    } catch (leadError) {
+      console.error('[Agent] Lead tracking error:', leadError)
+      result.errors.push(`Lead tracking: ${leadError instanceof Error ? leadError.message : 'Unknown error'}`)
     }
 
     result.success = true
