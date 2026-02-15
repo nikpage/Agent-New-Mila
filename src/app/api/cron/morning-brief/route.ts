@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
 
     const result = await sendAllMorningBriefs()
 
-    console.log(`[Cron] Morning briefs sent: ${result.sent}, failed: ${result.failed}, skipped: ${result.skipped}`)
+    console.log(`[Cron] Morning briefs sent: ${result.sent}, failed: ${result.failed}`)
 
     return NextResponse.json({
       success: true,
