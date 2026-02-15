@@ -5,6 +5,9 @@
 - When reporting problems: ONLY list what's wrong and wait
 - Ask "Want me to fix this?" and WAIT for "yes"
 - Default mode is RESEARCH AND REPORT, not act
+- NEVER default to generic patterns. Every decision must be specific to THIS project (Mila, nikpage/Agent-New-Mila, shared multi-tenant deployment)
+- NEVER use placeholders, stubs, or "TODO" on the developer side. Use real values, real logic, real implementations
+- NEVER take shortcuts that create maintenance debt (e.g., clone-per-client instead of multi-tenant, hardcoded config instead of DB-driven)
 
 ## Project Overview
 **Mila** is an AI-powered executive assistant that ingests emails, WhatsApp messages, and calendar events, uses Gemini AI to propose actions (reply, schedule, follow up, delegate), tracks leads, and presents everything for user approval via morning brief emails.
