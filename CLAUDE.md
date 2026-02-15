@@ -1,5 +1,11 @@
 # CLAUDE.md — Project Guide for Claude Code
 
+## RULES
+- NEVER take action (edit files, write code, run commands) without explicit user instruction
+- When reporting problems: ONLY list what's wrong and wait
+- Ask "Want me to fix this?" and WAIT for "yes"
+- Default mode is RESEARCH AND REPORT, not act
+
 ## Project Overview
 **Mila** is an AI-powered executive assistant that ingests emails, WhatsApp messages, and calendar events, uses Gemini AI to propose actions (reply, schedule, follow up, delegate), tracks leads, and presents everything for user approval via morning brief emails.
 
