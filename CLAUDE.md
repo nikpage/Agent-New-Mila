@@ -398,7 +398,6 @@ SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)
 ## Documentation Files
 - **`SPEC.md`** — Full product specification
 - **`CLAUDE.md`** (this file) — Code architecture reference for AI coding assistants
-- **`ONBOARDING.md`** — Step-by-step CLI guide for setting up a new client
 - **`SECURITY.md`** — Security architecture, risks, incident response
 - **`DEPLOYMENT.md`** — Deployment guide, backups, operations
 - **`.env.example`** — All environment variables with generation commands
