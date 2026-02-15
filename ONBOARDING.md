@@ -1,391 +1,326 @@
 # Client Onboarding Guide
 
-Step-by-step CLI guide for deploying Mila for a new client.
+Deploy Mila for a new client. One Vercel deployment per client, configured via `src/config/client.ts`.
 
 ## Prerequisites
 
-- Node.js 18+ and npm
-- Vercel CLI (`npm i -g vercel`)
-- Supabase CLI (`npm i -g supabase`)
-- GitHub CLI (`gh`) — for repo setup
+- Node.js 18+, npm
+- Vercel CLI: `npm i -g vercel`
 - Google Cloud Console access
-- Client's Google Workspace email
+- Access to the client (you need their email, phone, business details, email signature)
 
-## 1. Clone and Fork
+## 1. Google Cloud Project
 
-```bash
-# Clone the base repo
-git clone git@github.com:yourorg/mila.git mila-clientname
-cd mila-clientname
+Create a Google Cloud project for this client (or use an existing one).
 
-# Remove origin, set up new private repo
-git remote remove origin
-gh repo create yourorg/mila-clientname --private --source=. --push
-```
+### Enable APIs
 
-## 2. Create Supabase Project
+In the Google Cloud Console, enable these three APIs:
 
-```bash
-# Login to Supabase
-supabase login
+- **Gmail API**
+- **Google Calendar API**
+- **Distance Matrix API**
 
-# Create a new project (interactive — pick region closest to client)
-supabase projects create mila-clientname --org-id YOUR_ORG_ID
+### Create OAuth 2.0 Credentials
 
-# Note the project ref from output
-export SUPABASE_PROJECT_REF=<project-ref>
-export SUPABASE_URL=https://${SUPABASE_PROJECT_REF}.supabase.co
+1. Go to **APIs & Services > Credentials**
+2. Click **Create Credentials > OAuth 2.0 Client ID**
+3. Application type: **Web application**
+4. Add Authorized redirect URIs:
+   - `http://localhost:3000/api/auth/callback` (development)
+   - `https://<vercel-domain>/api/auth/callback` (production — add after first deploy)
+5. Copy the **Client ID** and **Client Secret**
 
-# Get the service key
-supabase projects api-keys --project-ref $SUPABASE_PROJECT_REF
-# Copy the service_role key — this is SUPABASE_SERVICE_KEY
-```
+### Get a Gemini API Key
 
-### Apply Database Schema
+Go to https://aistudio.google.com/apikey, create one, copy it.
 
-```bash
-# Link to the project
-supabase link --project-ref $SUPABASE_PROJECT_REF
+### Get a Maps API Key
 
-# Run migrations (if using Supabase migrations)
-supabase db push
+In Google Cloud Console > APIs & Services > Credentials > Create API Key. Restrict it to Distance Matrix API.
 
-# Or apply schema manually via SQL editor in Supabase dashboard
-# Tables needed: users, cps, channels, cp_states, conversation_threads,
-# messages, thread_participants, message_embeddings, action_proposals,
-# emails, todos, events, agent_errors
-```
+## 2. Supabase Project
+
+Create a project at https://supabase.com. Pick the region closest to the client.
+
+From the project dashboard, copy:
+
+- **Project URL** (Settings > API > Project URL)
+- **anon/public key** (Settings > API > Project API Keys > anon)
+- **service_role key** (Settings > API > Project API Keys > service_role)
 
 ### Enable pgvector
 
+Run in the SQL Editor:
+
 ```sql
--- Run in Supabase SQL editor
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-## 3. Google Cloud Setup
+### Apply Schema
 
-### Create OAuth Credentials
-
-```bash
-# Open Google Cloud Console
-open https://console.cloud.google.com
-
-# 1. Create new project or select existing
-# 2. Enable APIs:
-#    - Gmail API
-#    - Google Calendar API
-#    - Distance Matrix API (for travel time)
-# 3. Create OAuth 2.0 credentials:
-#    - Application type: Web application
-#    - Authorized redirect URI: https://mila-clientname.vercel.app/api/auth/callback
-#    - (Also add http://localhost:3000/api/auth/callback for dev)
-# 4. Copy Client ID and Client Secret
-```
-
-### Get Gemini API Key
+Link and push migrations:
 
 ```bash
-open https://aistudio.google.com/apikey
-# Create API key, copy it
+supabase link --project-ref <ref>
+supabase db push
 ```
 
-### Get Maps API Key
+If not using migrations, apply the schema SQL directly in the SQL Editor. The tables are: `users`, `cps`, `channels`, `cp_states`, `conversation_threads`, `messages`, `thread_participants`, `message_embeddings`, `action_proposals`, `emails`, `todos`, `events`, `agent_errors`.
+
+## 3. Generate Secrets
+
+Run these locally, save the output — you need every value for `.env.local` and Vercel:
 
 ```bash
-# In Google Cloud Console:
-# 1. Go to APIs & Services > Credentials
-# 2. Create API Key
-# 3. Restrict to Distance Matrix API
+echo "NEXTAUTH_SECRET=$(openssl rand -hex 32)"
+echo "MILA_USER_API_KEY=$(node -e "console.log(require('crypto').randomUUID())")"
+echo "CRON_SECRET=$(openssl rand -hex 32)"
+echo "SUPERADMIN_KEY=$(openssl rand -hex 16)"
 ```
 
-## 4. Generate Secrets
+## 4. Configure Environment
 
-```bash
-# Application secret (token signing)
-export NEXTAUTH_SECRET=$(openssl rand -hex 32)
-echo "NEXTAUTH_SECRET=$NEXTAUTH_SECRET"
-
-# API key (protects /api/agent/run and /api/ingest)
-export MILA_USER_API_KEY=$(node -e "console.log(require('crypto').randomUUID())")
-echo "MILA_USER_API_KEY=$MILA_USER_API_KEY"
-
-# Cron secret (protects /api/cron/morning-brief)
-export CRON_SECRET=$(openssl rand -hex 32)
-echo "CRON_SECRET=$CRON_SECRET"
-
-# Superadmin key (protects /superadmin dashboard)
-export SUPERADMIN_KEY=$(openssl rand -hex 16)
-echo "SUPERADMIN_KEY=$SUPERADMIN_KEY"
-```
-
-## 5. Configure Client
-
-This is the core of the onboarding. Edit `src/config/client.ts` with the client's details.
-
-```bash
-$EDITOR src/config/client.ts
-```
-
-### Fields to fill in with the client:
+Create `.env.local` in the project root with all values from steps 1-3:
 
 ```
-client.name          → Full name (e.g., "Jan Novák")
-client.company       → Company name (e.g., "RE/MAX Premium")
-client.role          → Job title
-client.email         → Primary email
-client.phone         → Phone with country code
-client.whatsapp      → WhatsApp number (digits + country code)
+# App
+APP_BASE_URL=http://localhost:3000
+NEXTAUTH_SECRET=<generated in step 3>
 
-business.type        → Business category (e.g., "real_estate")
-business.market      → Market description
-business.specialization → What they focus on
-business.typicalDealSize → { min, max, currency }
-business.highValueSignals → Keywords that indicate a hot lead
-business.lowPrioritySignals → Keywords for noise
-
-ai.toneWithUser      → How Mila talks to the client
-ai.toneWithCounterparties → How Mila talks to their contacts
-ai.emailSignature    → Full email signature block
-ai.systemContext     → The "day 1 briefing" for the AI assistant
-
-leads.coolingThresholdDays → Days before "cooling" (default: 2)
-leads.coldThresholdDays    → Days before "cold" (default: 5)
-leads.deadThresholdDays    → Days before "dead" (default: 14)
-
-calendar.personalEventKeywords → Words that mark personal events
-
-scoring.offerMultiplierSeller → Priority boost for sell-side deals
-scoring.offerMultiplierBuyer  → Priority for buy-side deals
-```
-
-### Tips for the client meeting:
-
-- Ask: "What's the worst thing that happens if you don't reply to someone for 3 days?" — sets cooling threshold
-- Ask: "What words in a message make you drop everything?" — sets highValueSignals
-- Ask: "How do you sign your emails?" — copy their exact signature
-- Ask: "What's a typical deal worth?" — sets typicalDealSize
-- Write the systemContext as if briefing a new human assistant on their first day
-
-## 6. Set Up Environment
-
-```bash
-# Copy the example
-cp .env.example .env.local
-
-# Fill in all values
-cat > .env.local << 'EOF'
-APP_BASE_URL=https://mila-clientname.vercel.app
-NEXTAUTH_SECRET=<from step 4>
-SUPABASE_URL=<from step 2>
+# Supabase
+SUPABASE_URL=<project URL from step 2>
 SUPABASE_KEY=<anon key from step 2>
-SUPABASE_SERVICE_KEY=<service key from step 2>
-GOOGLE_CLIENT_ID=<from step 3>
-GOOGLE_CLIENT_SECRET=<from step 3>
-GOOGLE_MAPS_API_KEY=<from step 3>
-GEMINI_API_KEY=<from step 3>
-MILA_USER_API_KEY=<from step 4>
-CRON_SECRET=<from step 4>
-SUPERADMIN_KEY=<from step 4>
-EOF
+SUPABASE_SERVICE_KEY=<service_role key from step 2>
 
-# Verify locally
+# Google
+GOOGLE_CLIENT_ID=<OAuth client ID from step 1>
+GOOGLE_CLIENT_SECRET=<OAuth client secret from step 1>
+GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/callback
+GOOGLE_MAPS_API_KEY=<Maps API key from step 1>
+
+# AI
+GEMINI_API_KEY=<Gemini key from step 1>
+
+# Security
+MILA_USER_API_KEY=<generated in step 3>
+CRON_SECRET=<generated in step 3>
+SUPERADMIN_KEY=<generated in step 3>
+```
+
+Every value comes from a specific prior step. Fill in every line.
+
+Verify the build:
+
+```bash
 npm install
 npm run build
 ```
 
-## 7. Create User in Supabase
+Build must pass before proceeding.
+
+## 5. Configure the Client
+
+This is the core of onboarding. Open `src/config/client.ts` and fill in every field with the client's real details.
+
+### What you need from the client
+
+| Field | What to ask |
+|-------|-------------|
+| `client.name` | Full name |
+| `client.company` | Company name |
+| `client.role` | Job title |
+| `client.email` | Primary Gmail/Google Workspace email |
+| `client.phone` | Phone with country code (e.g. `+420777123456`) |
+| `client.whatsapp` | WhatsApp number (same format) |
+| `business.type` | Business category (`real_estate`, `consulting`, etc.) |
+| `business.market` | Description of their market |
+| `business.specialization` | What they focus on |
+| `business.typicalDealSize` | `{ min, max, currency }` — ask "What's a typical deal worth?" |
+| `business.highValueSignals` | Keywords that mean "drop everything" — ask "What words in a message make you stop what you're doing?" |
+| `business.lowPrioritySignals` | Keywords for noise they don't care about |
+| `ai.toneWithUser` | How Mila talks to them (formal/informal, name form) |
+| `ai.toneWithCounterparties` | How Mila represents them externally |
+| `ai.emailSignature` | Copy their exact email signature |
+| `ai.systemContext` | Write this like a day-1 briefing for a new human assistant |
+| `leads.coolingThresholdDays` | Ask "What's the worst that happens if you ignore someone for 3 days?" — calibrate from there |
+| `leads.coldThresholdDays` | When does a lead start to feel lost? |
+| `leads.deadThresholdDays` | When is it too late? |
+| `calendar.personalEventKeywords` | Words that mark events as personal (gym, doctor, family, etc.) |
+| `scoring.offerMultiplierSeller` | Boost for sell-side deals (default 1.5) |
+| `scoring.offerMultiplierBuyer` | Baseline for buy-side deals (default 1.0) |
+
+After editing, rebuild:
 
 ```bash
-# Generate a user ID
-export USER_ID=$(node -e "console.log(require('crypto').randomUUID())")
-
-# Insert via Supabase CLI or SQL editor:
+npm run build
 ```
 
-```sql
-INSERT INTO users (id, email, email_timezone, email_enabled, settings) VALUES (
-  '<USER_ID>',
-  'client@email.com',
-  'Europe/Prague',
-  true,
-  '{
-    "working_hours_start": 9,
-    "working_hours_end": 17,
-    "working_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
-    "timezone": "Europe/Prague",
-    "default_meeting_duration": 30,
-    "default_meeting_type": "in_person",
-    "meeting_buffer_minutes": 15,
-    "travel_mode": "driving",
-    "morning_brief_time": "08:00",
-    "todo_auto_due_days": 1
-  }'::jsonb
-);
-```
-
-Adjust `working_hours_*`, `timezone`, `travel_mode`, `meeting_buffer_minutes` based on client preferences.
-
-## 8. Deploy to Vercel
+## 6. Deploy to Vercel
 
 ```bash
-# Login
 vercel login
-
-# Deploy
 vercel --prod
+```
 
-# Set environment variables
+After the first deploy, note the production domain (e.g. `mila-clientname.vercel.app`).
+
+### Set environment variables
+
+Set every variable from `.env.local` in Vercel, but with production values for `APP_BASE_URL` and `GOOGLE_REDIRECT_URI`:
+
+```bash
+vercel env add APP_BASE_URL production         # https://<vercel-domain>
 vercel env add NEXTAUTH_SECRET production
 vercel env add SUPABASE_URL production
 vercel env add SUPABASE_KEY production
 vercel env add SUPABASE_SERVICE_KEY production
 vercel env add GOOGLE_CLIENT_ID production
 vercel env add GOOGLE_CLIENT_SECRET production
+vercel env add GOOGLE_REDIRECT_URI production  # https://<vercel-domain>/api/auth/callback
 vercel env add GOOGLE_MAPS_API_KEY production
 vercel env add GEMINI_API_KEY production
 vercel env add MILA_USER_API_KEY production
 vercel env add CRON_SECRET production
 vercel env add SUPERADMIN_KEY production
-vercel env add APP_BASE_URL production
-# Enter: https://mila-clientname.vercel.app
+```
 
-# Redeploy with env vars
+Also go back to Google Cloud Console and add `https://<vercel-domain>/api/auth/callback` as an authorized redirect URI on the OAuth credential.
+
+Redeploy with the env vars:
+
+```bash
 vercel --prod
 ```
 
-### Set Up Cron Job
+The cron job is already configured in `vercel.json` — morning brief runs at `0 8 * * *` UTC. Adjust the schedule in `vercel.json` for the client's timezone if needed.
 
-Add to `vercel.json`:
+## 7. Create the User
+
+Use the script — it creates a user in Supabase and generates a Google OAuth URL:
+
+```bash
+npx tsx scripts/add-user.ts
+```
+
+This will:
+1. Ask for the client's email address
+2. Create a user record in Supabase
+3. Print a user ID (save this)
+4. Print a Google OAuth URL
+
+The app must be running (`npm run dev`) or deployed for the OAuth callback to work.
+
+Add the user ID to `.env.local` for the CLI scripts:
+
+```bash
+echo "MILA_USER_ID=<user-id-from-above>" >> .env.local
+```
+
+## 8. Connect Google Account
+
+Open the OAuth URL printed by `scripts/add-user.ts` in a browser. The client logs in with their Google account, grants Gmail + Calendar access. The callback stores tokens in Supabase.
+
+If doing this against the production deployment, the app must be deployed (step 6) and `GOOGLE_REDIRECT_URI` must match the production domain.
+
+## 9. Test the Pipeline
+
+Run the agent:
+
+```bash
+./scripts/run-agent.sh <user-id>
+```
+
+The response should show:
 
 ```json
 {
-  "crons": [
-    {
-      "path": "/api/cron/morning-brief",
-      "schedule": "0 6 * * *"
-    }
-  ]
+  "success": true,
+  "emailsIngested": 12,
+  "calendarEventsSynced": 5,
+  "messagesProcessed": 12,
+  "conversationsUpdated": 8,
+  "actionsGenerated": 3
 }
 ```
 
-The schedule is UTC. `0 6 * * *` = 6 AM UTC = 8 AM CET. Adjust for client's timezone.
-
-## 9. Connect Google Account
+To backfill historical emails, edit `scripts/bulk-ingest.sh` (set `USER_ID`, `API_KEY`, and date range), then run:
 
 ```bash
-# Open the OAuth connection page
-open https://mila-clientname.vercel.app/auth/connect
-
-# Client logs in with their Google account
-# Grants Gmail + Calendar access
-# Callback stores OAuth tokens in Supabase
+./scripts/bulk-ingest.sh
 ```
 
-## 10. Test the Pipeline
+Run the health check:
 
 ```bash
-# Run the agent manually
-curl -X POST https://mila-clientname.vercel.app/api/agent/run \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: $MILA_USER_API_KEY" \
-  -d "{\"userId\": \"$USER_ID\"}"
-
-# Check the response — should show emailsIngested, calendarEventsSynced, etc.
-
-# Trigger a morning brief manually
-curl https://mila-clientname.vercel.app/api/cron/morning-brief \
-  -H "x-cron-secret: $CRON_SECRET"
-
-# Check health
-curl https://mila-clientname.vercel.app/api/health
-
-# Check superadmin dashboard
-open "https://mila-clientname.vercel.app/superadmin?key=$SUPERADMIN_KEY"
+./scripts/health-check.sh
 ```
 
-## 11. WhatsApp Setup (Optional)
-
-WhatsApp requires a daemon process running on a server with a persistent session.
+Trigger the morning brief manually:
 
 ```bash
-# Install WhatsApp dependencies (not in base package.json)
+curl -s "${APP_BASE_URL}/api/cron/morning-brief" \
+  -H "x-cron-secret: ${CRON_SECRET}" | python3 -m json.tool
+```
+
+Ask the client to check their inbox for the brief email.
+
+Check the superadmin dashboard at `https://<vercel-domain>/superadmin?key=<SUPERADMIN_KEY>`.
+
+## 10. WhatsApp Setup (Optional)
+
+WhatsApp requires a daemon process running on a server with persistent sessions. This is separate from the Vercel deployment.
+
+### Install dependencies
+
+```bash
 npm install whatsapp-web.js qrcode-terminal
+```
 
-# Set daemon env vars
-export MILA_USER_ID=$USER_ID
+These are not in `package.json` because the daemon runs outside Next.js.
+
+### Start the daemon
+
+```bash
+export MILA_USER_ID=<user-id>
 export WA_DAEMON_PORT=3001
 export WA_SESSION_PATH=./.wwebjs_auth
-
-# Start the daemon
 npx tsx scripts/whatsapp-daemon.ts
+```
 
-# First run: QR code appears in terminal
-# Client scans QR with WhatsApp on their phone
-# Session persists in .wwebjs_auth/
+On first run, a QR code appears in the terminal. The client scans it with WhatsApp on their phone. The session persists in `.wwebjs_auth/`.
 
-# Verify connection
+### Verify
+
+```bash
 curl http://localhost:3001/status
-# Should show: { "connected": true, "phone": "+420..." }
+# { "connected": true, "phone": "+420..." }
 
-# Test sending
 curl -X POST http://localhost:3001/send \
   -H "Content-Type: application/json" \
   -d '{"to": "+420777000000", "body": "Test from Mila"}'
 ```
 
-For production, run the daemon with a process manager:
+### Keep it running in production
 
 ```bash
-# Using pm2
 npm i -g pm2
 pm2 start "npx tsx scripts/whatsapp-daemon.ts" --name mila-wa
 pm2 save
 pm2 startup
 ```
 
-## 12. Sentry Setup (Optional)
+## 11. Sentry Setup (Optional)
+
+Create a project at https://sentry.io, get the DSN.
 
 ```bash
-# Create project at sentry.io
-# Get DSN from Settings > Projects > Client Keys
-
 vercel env add SENTRY_DSN production
 vercel env add NEXT_PUBLIC_SENTRY_DSN production
 vercel env add SENTRY_ORG production
 vercel env add SENTRY_PROJECT production
 vercel env add SENTRY_AUTH_TOKEN production
-
 vercel --prod
-```
-
-## 13. Verify Everything
-
-Final checklist:
-
-```bash
-# 1. Pipeline runs without errors
-curl -s -X POST https://mila-clientname.vercel.app/api/agent/run \
-  -H "x-api-key: $MILA_USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d "{\"userId\": \"$USER_ID\"}" | jq '.success'
-# Expected: true
-
-# 2. Morning brief sends
-curl -s https://mila-clientname.vercel.app/api/cron/morning-brief \
-  -H "x-cron-secret: $CRON_SECRET" | jq '.'
-
-# 3. Client received the morning brief email
-# Ask client to check inbox
-
-# 4. Action links work (click APPROVE/EDIT in the brief email)
-
-# 5. WhatsApp connected (if enabled)
-curl -s https://mila-clientname.vercel.app/api/whatsapp/status | jq '.connected'
-# Expected: true
-
-# 6. Superadmin dashboard loads
-open "https://mila-clientname.vercel.app/superadmin?key=$SUPERADMIN_KEY"
 ```
 
 ## Post-Setup
@@ -393,31 +328,29 @@ open "https://mila-clientname.vercel.app/superadmin?key=$SUPERADMIN_KEY"
 - Monitor Sentry for errors during the first week
 - Check superadmin dashboard daily
 - Fine-tune `leads` thresholds based on client feedback
-- Adjust `highValueSignals` as you learn their business
-- Add VIP contacts to counterparties with appropriate roles
+- Update `highValueSignals` as you learn their business patterns
+- Run `./scripts/run-agent.sh` manually if the cron hasn't kicked in yet
 
-## Updating Client Config
+## Scripts Reference
 
-To change client settings after deployment:
-
-```bash
-cd mila-clientname
-$EDITOR src/config/client.ts
-npm run build          # Verify
-git add src/config/client.ts
-git commit -m "Update client config: <what changed>"
-git push
-vercel --prod          # Deploy
-```
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `scripts/add-user.ts` | Create user + generate OAuth URL | `npx tsx scripts/add-user.ts` |
+| `scripts/run-agent.sh` | Trigger agent pipeline | `./scripts/run-agent.sh <user-id>` |
+| `scripts/bulk-ingest.sh` | Backfill historical emails | Edit USER_ID/dates, then `./scripts/bulk-ingest.sh` |
+| `scripts/health-check.sh` | Check app + DB + WA status | `./scripts/health-check.sh` |
+| `scripts/whatsapp-daemon.ts` | WhatsApp Web bridge | `npx tsx scripts/whatsapp-daemon.ts` |
 
 ## Troubleshooting
 
 | Problem | Check |
 |---------|-------|
 | Pipeline returns empty | Is OAuth connected? Check `users.google_oauth_tokens` is not null |
-| No morning brief | Is `email_enabled: true`? Is cron schedule correct timezone? |
+| No morning brief | Is `email_enabled: true` on the user? Is the cron schedule correct for the timezone? |
 | WhatsApp disconnected | Restart daemon, re-scan QR. Check `.wwebjs_auth/` exists |
-| Actions not generating | Check `conversation_threads` has entries. Check agent errors table |
-| Draft generation fails | Check `GEMINI_API_KEY` is valid. Check Sentry for AI errors |
+| Actions not generating | Check `conversation_threads` has entries. Check `agent_errors` table |
+| Draft generation fails | Check `GEMINI_API_KEY` is valid. Check Sentry |
 | Calendar not syncing | Verify Calendar API is enabled in Google Cloud Console |
 | Travel time errors | Verify Distance Matrix API enabled + `GOOGLE_MAPS_API_KEY` set |
+| OAuth callback fails | Check `GOOGLE_REDIRECT_URI` matches the URI in Google Cloud Console exactly |
+| Build fails after client.ts edit | TypeScript error — check you didn't break the `as const` types |
