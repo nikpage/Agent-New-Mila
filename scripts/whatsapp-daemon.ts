@@ -1,107 +1,112 @@
 /**
- * WhatsApp Daemon
+ * WhatsApp Daemon (Baileys Multi-Session)
  *
- * Standalone process that connects to WhatsApp Web via whatsapp-web.js.
+ * Standalone process that connects to WhatsApp via Baileys (no Puppeteer).
+ * Manages multiple user sessions — one WA connection per user.
  * Writes incoming messages to Supabase and exposes an HTTP API for sending.
  *
  * Run with: npx tsx scripts/whatsapp-daemon.ts
  *
  * Prerequisites:
- *   npm install whatsapp-web.js qrcode-terminal
+ *   npm install @whiskeysockets/baileys pino qrcode-terminal
  *
- * The daemon:
- *   1. Opens a Puppeteer-driven Chrome session
- *   2. Displays a QR code for WhatsApp pairing (first run only)
- *   3. Listens for incoming messages
- *   4. Writes them to the Supabase `messages` table
- *   5. Exposes HTTP endpoints for sending messages + checking status
+ * Memory: ~5-10 MB per session (vs 150-300 MB with whatsapp-web.js)
+ * Scales comfortably to 50-100 users on a single server.
  */
 
 import 'dotenv/config'
 import { createClient } from '@supabase/supabase-js'
 import { createServer, type IncomingMessage, type ServerResponse } from 'http'
+import { existsSync, mkdirSync, readdirSync } from 'fs'
+import { join } from 'path'
 import { v4 as uuidv4 } from 'uuid'
 
 // ─── Config ──────────────────────────────────────────────────────────
-// These mirror src/config/client.ts but we load them directly
-// since this script runs outside Next.js
 const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY!
-const USER_ID = process.env.MILA_USER_ID! // The user this daemon serves
 const DAEMON_PORT = parseInt(process.env.WA_DAEMON_PORT || '3001', 10)
-const SESSION_PATH = process.env.WA_SESSION_PATH || './.wwebjs_auth'
+const AUTH_BASE_DIR = process.env.WA_AUTH_DIR || './baileys_auth'
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY || !USER_ID) {
-  console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY, MILA_USER_ID')
+if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+  console.error('Missing required env vars: SUPABASE_URL, SUPABASE_SERVICE_KEY')
   process.exit(1)
 }
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
+// Ensure auth base directory exists
+if (!existsSync(AUTH_BASE_DIR)) {
+  mkdirSync(AUTH_BASE_DIR, { recursive: true })
+}
+
 // ─── Types ───────────────────────────────────────────────────────────
-interface WAMessage {
-  id: { _serialized: string }
-  from: string
-  to: string
-  body: string
-  timestamp: number
-  isGroupMsg: boolean
-  author?: string
-  hasMedia: boolean
+interface UserSession {
+  userId: string
+  socket: BaileysSocket | null
+  isConnected: boolean
+  lastQrCode: string | null
+  lastMessageAt: string | null
+  connectionError: string | null
+  phone: string | null
+  /** Prevents concurrent reconnect attempts */
+  connecting: boolean
 }
 
-interface WAChat {
-  name: string
-  isGroup: boolean
-}
+// Minimal Baileys types — the daemon imports the real ones at runtime
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type BaileysSocket = any
 
-interface WAClient {
-  on(event: string, callback: (...args: unknown[]) => void): void
-  initialize(): Promise<void>
-  sendMessage(chatId: string, content: string): Promise<{ id: { _serialized: string } }>
-  getState(): Promise<string>
-  info?: { wid?: { user?: string } }
-}
+// ─── Session Store ───────────────────────────────────────────────────
+const sessions = new Map<string, UserSession>()
 
-// ─── State ───────────────────────────────────────────────────────────
-let waClient: WAClient | null = null
-let isConnected = false
-let lastQrCode: string | null = null
-let lastMessageAt: string | null = null
-let connectionError: string | null = null
+function getOrCreateSession(userId: string): UserSession {
+  let session = sessions.get(userId)
+  if (!session) {
+    session = {
+      userId,
+      socket: null,
+      isConnected: false,
+      lastQrCode: null,
+      lastMessageAt: null,
+      connectionError: null,
+      phone: null,
+      connecting: false,
+    }
+    sessions.set(userId, session)
+  }
+  return session
+}
 
 // ─── Phone Number Helpers ────────────────────────────────────────────
-function waIdToPhone(waId: string): string {
-  // WA IDs look like "420777123456@c.us" or "420777123456@g.us" for groups
-  const match = waId.match(/^(\d+)@/)
-  if (!match) return waId
+function waJidToPhone(jid: string): string {
+  // Baileys JIDs: "420777123456@s.whatsapp.net" or "120363...@g.us" for groups
+  const match = jid.match(/^(\d+)@/)
+  if (!match) return jid
   return '+' + match[1]
 }
 
-function phoneToWaId(phone: string): string {
+function phoneToJid(phone: string): string {
   const digits = phone.replace(/[^\d]/g, '')
-  return digits + '@c.us'
+  return digits + '@s.whatsapp.net'
 }
 
 // ─── Supabase Helpers ────────────────────────────────────────────────
-async function findOrCreateCP(phone: string, name?: string) {
-  // Check if CP exists with this phone as primary identifier
+async function findOrCreateCP(userId: string, phone: string, name?: string) {
   const { data: existing } = await supabase
     .from('cps')
     .select('*')
-    .eq('user_id', USER_ID)
+    .eq('user_id', userId)
     .eq('primary_identifier', phone)
     .limit(1)
     .single()
 
   if (existing) return existing
 
-  // Create new CP
   const { data: created, error } = await supabase
     .from('cps')
     .insert({
       id: uuidv4(),
-      user_id: USER_ID,
+      user_id: userId,
       primary_identifier: phone,
       name: name || phone,
       other_identifiers: [phone],
@@ -110,123 +115,247 @@ async function findOrCreateCP(phone: string, name?: string) {
     .single()
 
   if (error) {
-    console.error(`[WA] Failed to create CP for ${phone}:`, error.message)
+    console.error(`[WA:${userId.slice(0, 8)}] Failed to create CP for ${phone}:`, error.message)
     return null
   }
 
-  console.log(`[WA] Created new CP: ${name || phone} (${phone})`)
+  console.log(`[WA:${userId.slice(0, 8)}] Created new CP: ${name || phone} (${phone})`)
   return created
 }
 
-async function storeMessage(msg: WAMessage, chat: WAChat) {
-  const phone = waIdToPhone(msg.from)
-  const senderName = chat.isGroup ? (msg.author || phone) : (chat.name || phone)
-
-  const cp = await findOrCreateCP(phone, senderName)
+async function storeInboundMessage(
+  userId: string,
+  phone: string,
+  senderName: string | undefined,
+  messageId: string,
+  body: string,
+  timestamp: number
+) {
+  const cp = await findOrCreateCP(userId, phone, senderName)
   if (!cp) return
 
-  const messageId = uuidv4()
-  const timestamp = new Date(msg.timestamp * 1000).toISOString()
+  const id = uuidv4()
+  const ts = new Date(timestamp * 1000).toISOString()
 
   const { error } = await supabase
     .from('messages')
     .insert({
-      id: messageId,
-      user_id: USER_ID,
+      id,
+      user_id: userId,
       cp_id: cp.id,
       channel_id: 'whatsapp',
-      external_id: msg.id._serialized,
-      external_thread_id: `wa:${phone}`, // Thread by phone number
-      universal_message_id: `wa:${msg.id._serialized}`,
+      external_id: messageId,
+      external_thread_id: `wa:${phone}`,
+      universal_message_id: `wa:${messageId}`,
       direction: 'inbound',
-      raw_text: msg.body,
-      cleaned_text: msg.body.slice(0, 5000),
+      raw_text: body,
+      cleaned_text: body.slice(0, 5000),
       tag_primary: 'whatsapp_message',
       tag_secondary: null,
-      timestamp,
-      occurred_at: timestamp,
+      timestamp: ts,
+      occurred_at: ts,
     })
 
   if (error) {
-    if (error.code === '23505') {
-      // Duplicate — already processed
-      return
-    }
-    console.error(`[WA] Failed to store message:`, error.message)
+    if (error.code === '23505') return // Duplicate — already processed
+    console.error(`[WA:${userId.slice(0, 8)}] Failed to store message:`, error.message)
     return
   }
 
-  lastMessageAt = timestamp
-  console.log(`[WA] Stored message from ${senderName} (${phone}): ${msg.body.slice(0, 80)}...`)
+  const session = sessions.get(userId)
+  if (session) session.lastMessageAt = ts
+  console.log(`[WA:${userId.slice(0, 8)}] Stored message from ${senderName || phone}: ${body.slice(0, 80)}...`)
 }
 
-// ─── WhatsApp Client Setup ──────────────────────────────────────────
-async function initWhatsApp() {
+async function storeOutboundMessage(
+  userId: string,
+  phone: string,
+  messageId: string,
+  body: string
+) {
+  const cp = await findOrCreateCP(userId, phone)
+  if (!cp) return
+
+  const ts = new Date().toISOString()
+
+  await supabase.from('messages').insert({
+    id: uuidv4(),
+    user_id: userId,
+    cp_id: cp.id,
+    channel_id: 'whatsapp',
+    external_id: messageId,
+    external_thread_id: `wa:${phone}`,
+    universal_message_id: `wa:${messageId}`,
+    direction: 'outbound',
+    raw_text: body,
+    cleaned_text: body.slice(0, 5000),
+    tag_primary: 'whatsapp_outbound',
+    tag_secondary: null,
+    timestamp: ts,
+    occurred_at: ts,
+  })
+}
+
+// ─── Baileys Session Management ──────────────────────────────────────
+async function connectUser(userId: string): Promise<void> {
+  const session = getOrCreateSession(userId)
+
+  if (session.connecting) {
+    console.log(`[WA:${userId.slice(0, 8)}] Already connecting, skipping...`)
+    return
+  }
+
+  session.connecting = true
+
   try {
-    // Dynamic import — whatsapp-web.js must be installed separately
-    const { Client, LocalAuth } = await import('whatsapp-web.js')
+    // Dynamic imports — baileys must be installed separately
+    const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } =
+      await import('@whiskeysockets/baileys')
+    const pino = (await import('pino')).default
 
-    waClient = new Client({
-      authStrategy: new LocalAuth({ dataPath: SESSION_PATH }),
-      puppeteer: {
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      },
-    }) as unknown as WAClient
+    const authDir = join(AUTH_BASE_DIR, userId)
+    if (!existsSync(authDir)) {
+      mkdirSync(authDir, { recursive: true })
+    }
 
-    waClient.on('qr', (qr: unknown) => {
-      lastQrCode = qr as string
-      console.log('[WA] QR code received. Scan with WhatsApp to connect.')
-      // Try to display in terminal
-      import('qrcode-terminal').then(qrt => {
-        qrt.generate(qr as string, { small: true })
-      }).catch(() => {
-        console.log('[WA] Install qrcode-terminal for terminal QR display: npm i qrcode-terminal')
-        console.log('[WA] Or GET http://localhost:' + DAEMON_PORT + '/status for the QR code string')
-      })
+    const { state, saveCreds } = await useMultiFileAuthState(authDir)
+    const { version } = await fetchLatestBaileysVersion()
+
+    const logger = pino({ level: 'silent' }) // Suppress Baileys internal logs
+
+    const socket = makeWASocket({
+      version,
+      auth: state,
+      logger,
+      printQRInTerminal: false, // We handle QR via HTTP API
+      // Reduce memory: don't cache messages in memory
+      getMessage: async () => undefined,
     })
 
-    waClient.on('ready', () => {
-      isConnected = true
-      lastQrCode = null
-      connectionError = null
-      const phone = (waClient as unknown as { info?: { wid?: { user?: string } } })?.info?.wid?.user
-      console.log(`[WA] Connected! Phone: ${phone || 'unknown'}`)
-    })
+    session.socket = socket
 
-    waClient.on('disconnected', (reason: unknown) => {
-      isConnected = false
-      connectionError = `Disconnected: ${reason}`
-      console.log(`[WA] Disconnected: ${reason}`)
-    })
+    // ── Auth credentials update ──
+    socket.ev.on('creds.update', saveCreds)
 
-    waClient.on('message', async (msg: unknown) => {
-      const waMsg = msg as WAMessage & { getChat: () => Promise<WAChat> }
-      try {
-        // Skip status messages and empty messages
-        if (!waMsg.body || waMsg.from === 'status@broadcast') return
+    // ── Connection status ──
+    socket.ev.on('connection.update', (update: { connection?: string; lastDisconnect?: { error?: { output?: { statusCode?: number } } }; qr?: string }) => {
+      const { connection, lastDisconnect, qr } = update
 
-        const chat = await waMsg.getChat()
+      if (qr) {
+        session.lastQrCode = qr
+        session.isConnected = false
+        console.log(`[WA:${userId.slice(0, 8)}] QR code generated — scan to connect`)
 
-        // Skip group messages unless the group is monitored
-        if (chat.isGroup) {
-          // For now, skip all group messages
-          // TODO: add group monitoring from client config
-          return
+        // Try to display in terminal (single-user dev convenience)
+        import('qrcode-terminal').then(qrt => {
+          qrt.generate(qr, { small: true })
+        }).catch(() => {
+          // qrcode-terminal not installed — that's fine, use HTTP API
+        })
+      }
+
+      if (connection === 'open') {
+        session.isConnected = true
+        session.lastQrCode = null
+        session.connectionError = null
+        session.connecting = false
+
+        // Extract phone number from socket
+        const me = socket.user
+        session.phone = me?.id ? waJidToPhone(me.id) : null
+        console.log(`[WA:${userId.slice(0, 8)}] Connected! Phone: ${session.phone || 'unknown'}`)
+      }
+
+      if (connection === 'close') {
+        session.isConnected = false
+        session.connecting = false
+
+        const statusCode = lastDisconnect?.error?.output?.statusCode
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut
+
+        if (shouldReconnect) {
+          session.connectionError = `Disconnected (code ${statusCode}), reconnecting...`
+          console.log(`[WA:${userId.slice(0, 8)}] ${session.connectionError}`)
+          // Reconnect after a brief delay
+          setTimeout(() => connectUser(userId), 3000)
+        } else {
+          session.connectionError = 'Logged out — re-scan QR code to reconnect'
+          session.socket = null
+          console.log(`[WA:${userId.slice(0, 8)}] Logged out. Remove auth and re-pair.`)
         }
-
-        await storeMessage(waMsg, chat)
-      } catch (error) {
-        console.error('[WA] Error processing message:', error)
       }
     })
 
-    console.log('[WA] Initializing WhatsApp Web client...')
-    await waClient.initialize()
+    // ── Incoming messages ──
+    socket.ev.on('messages.upsert', async (upsert: { messages: Array<{ key: { remoteJid?: string; fromMe?: boolean; id?: string; participant?: string }; message?: { conversation?: string; extendedTextMessage?: { text?: string } }; messageTimestamp?: number; pushName?: string }> }) => {
+      for (const msg of upsert.messages) {
+        try {
+          const jid = msg.key.remoteJid
+          if (!jid) continue
+
+          // Skip own outbound messages
+          if (msg.key.fromMe) continue
+
+          // Skip status broadcasts
+          if (jid === 'status@broadcast') continue
+
+          // Skip group messages (for now)
+          if (jid.endsWith('@g.us')) continue
+
+          // Extract message text
+          const body =
+            msg.message?.conversation ||
+            msg.message?.extendedTextMessage?.text
+          if (!body) continue // Skip media-only, reactions, etc.
+
+          const phone = waJidToPhone(jid)
+          const messageId = msg.key.id || uuidv4()
+          const timestamp = typeof msg.messageTimestamp === 'number'
+            ? msg.messageTimestamp
+            : Math.floor(Date.now() / 1000)
+
+          await storeInboundMessage(
+            userId,
+            phone,
+            msg.pushName || undefined,
+            messageId,
+            body,
+            timestamp
+          )
+        } catch (error) {
+          console.error(`[WA:${userId.slice(0, 8)}] Error processing message:`, error)
+        }
+      }
+    })
+
   } catch (error) {
-    connectionError = error instanceof Error ? error.message : 'Failed to initialize'
-    console.error('[WA] Initialization failed:', error)
-    console.error('[WA] Make sure whatsapp-web.js is installed: npm install whatsapp-web.js')
+    session.connectionError = error instanceof Error ? error.message : 'Failed to initialize'
+    session.connecting = false
+    console.error(`[WA:${userId.slice(0, 8)}] Init failed:`, error)
+    console.error(`[WA] Make sure Baileys is installed: npm install @whiskeysockets/baileys pino`)
+  }
+}
+
+// ─── Load Existing Sessions on Startup ───────────────────────────────
+async function loadExistingSessions() {
+  // Reconnect any users that have saved auth state
+  if (!existsSync(AUTH_BASE_DIR)) return
+
+  const userDirs = readdirSync(AUTH_BASE_DIR, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .map(d => d.name)
+
+  if (userDirs.length === 0) {
+    console.log('[WA] No existing sessions found. Use POST /sessions/:userId/connect to add users.')
+    return
+  }
+
+  console.log(`[WA] Found ${userDirs.length} existing session(s), reconnecting...`)
+
+  for (const userId of userDirs) {
+    // Stagger reconnections to avoid hammering WA servers
+    await connectUser(userId)
+    await new Promise(resolve => setTimeout(resolve, 2000))
   }
 }
 
@@ -240,124 +369,193 @@ function parseBody(req: IncomingMessage): Promise<string> {
   })
 }
 
+function jsonResponse(res: ServerResponse, status: number, data: unknown) {
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' })
+  res.end(JSON.stringify(data))
+}
+
 async function handleRequest(req: IncomingMessage, res: ServerResponse) {
   const url = req.url || '/'
   const method = req.method || 'GET'
 
-  // CORS headers for local development
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Content-Type', 'application/json')
-
   if (method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-    res.writeHead(204)
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+    })
     res.end()
     return
   }
 
-  // GET /status — connection status
-  if (url === '/status' && method === 'GET') {
-    const phone = isConnected
-      ? (waClient as unknown as { info?: { wid?: { user?: string } } })?.info?.wid?.user
-      : undefined
-    res.writeHead(200)
-    res.end(JSON.stringify({
-      connected: isConnected,
-      qrCode: lastQrCode,
-      phone: phone ? `+${phone}` : undefined,
-      lastMessageAt,
-      error: connectionError,
-    }))
+  // ── GET /health ──
+  if (url === '/health') {
+    const connectedCount = Array.from(sessions.values()).filter(s => s.isConnected).length
+    jsonResponse(res, 200, { ok: true, sessions: sessions.size, connected: connectedCount })
     return
   }
 
-  // POST /send — send a message
-  if (url === '/send' && method === 'POST') {
-    if (!isConnected || !waClient) {
-      res.writeHead(503)
-      res.end(JSON.stringify({ success: false, error: 'WhatsApp not connected' }))
+  // ── GET /sessions ── list all sessions
+  if (url === '/sessions' && method === 'GET') {
+    const list = Array.from(sessions.values()).map(s => ({
+      userId: s.userId,
+      connected: s.isConnected,
+      phone: s.phone,
+      lastMessageAt: s.lastMessageAt,
+      hasQr: !!s.lastQrCode,
+      error: s.connectionError,
+    }))
+    jsonResponse(res, 200, { sessions: list })
+    return
+  }
+
+  // ── GET /status/:userId ── single session status
+  const statusMatch = url.match(/^\/status\/([^/]+)$/)
+  if (statusMatch && method === 'GET') {
+    const userId = statusMatch[1]
+    const session = sessions.get(userId)
+
+    if (!session) {
+      jsonResponse(res, 404, { connected: false, error: 'No session for this user' })
       return
     }
 
+    jsonResponse(res, 200, {
+      connected: session.isConnected,
+      qrCode: session.lastQrCode,
+      phone: session.phone,
+      lastMessageAt: session.lastMessageAt,
+      error: session.connectionError,
+    })
+    return
+  }
+
+  // ── GET /status ── backward compat (returns first session or empty)
+  if (url === '/status' && method === 'GET') {
+    const firstSession = sessions.values().next().value as UserSession | undefined
+    if (!firstSession) {
+      jsonResponse(res, 200, { connected: false, error: 'No sessions configured' })
+      return
+    }
+    jsonResponse(res, 200, {
+      connected: firstSession.isConnected,
+      qrCode: firstSession.lastQrCode,
+      phone: firstSession.phone,
+      lastMessageAt: firstSession.lastMessageAt,
+      error: firstSession.connectionError,
+    })
+    return
+  }
+
+  // ── POST /sessions/:userId/connect ── start a new session
+  const connectMatch = url.match(/^\/sessions\/([^/]+)\/connect$/)
+  if (connectMatch && method === 'POST') {
+    const userId = connectMatch[1]
+    const session = sessions.get(userId)
+
+    if (session?.isConnected) {
+      jsonResponse(res, 200, { status: 'already_connected', phone: session.phone })
+      return
+    }
+
+    // Start connection in background
+    connectUser(userId).catch(err => {
+      console.error(`[WA:${userId.slice(0, 8)}] Connect error:`, err)
+    })
+
+    jsonResponse(res, 202, { status: 'connecting', message: 'GET /status/' + userId + ' for QR code' })
+    return
+  }
+
+  // ── DELETE /sessions/:userId ── disconnect and remove session
+  const disconnectMatch = url.match(/^\/sessions\/([^/]+)$/)
+  if (disconnectMatch && method === 'DELETE') {
+    const userId = disconnectMatch[1]
+    const session = sessions.get(userId)
+
+    if (session?.socket) {
+      session.socket.end(undefined)
+      session.socket = null
+    }
+    sessions.delete(userId)
+    jsonResponse(res, 200, { status: 'disconnected' })
+    return
+  }
+
+  // ── POST /send ── send a message
+  if (url === '/send' && method === 'POST') {
     try {
       const body = JSON.parse(await parseBody(req))
-      const { to, body: msgBody } = body as { to: string; body: string }
+      const { userId, to, body: msgBody } = body as { userId?: string; to: string; body: string }
 
       if (!to || !msgBody) {
-        res.writeHead(400)
-        res.end(JSON.stringify({ success: false, error: 'Missing "to" or "body"' }))
+        jsonResponse(res, 400, { success: false, error: 'Missing "to" or "body"' })
         return
       }
 
-      const chatId = phoneToWaId(to)
-      const sent = await waClient.sendMessage(chatId, msgBody)
-
-      // Store outbound message in Supabase
-      const cp = await findOrCreateCP(to)
-      if (cp) {
-        const timestamp = new Date().toISOString()
-        await supabase.from('messages').insert({
-          id: uuidv4(),
-          user_id: USER_ID,
-          cp_id: cp.id,
-          channel_id: 'whatsapp',
-          external_id: sent.id._serialized,
-          external_thread_id: `wa:${to}`,
-          universal_message_id: `wa:${sent.id._serialized}`,
-          direction: 'outbound',
-          raw_text: msgBody,
-          cleaned_text: msgBody.slice(0, 5000),
-          tag_primary: 'whatsapp_outbound',
-          tag_secondary: null,
-          timestamp,
-          occurred_at: timestamp,
-        })
+      // Find the session — use explicit userId, or fall back to first connected session
+      let session: UserSession | undefined
+      if (userId) {
+        session = sessions.get(userId)
+      } else {
+        // Backward compat: pick first connected session
+        session = Array.from(sessions.values()).find(s => s.isConnected)
       }
 
-      res.writeHead(200)
-      res.end(JSON.stringify({ success: true, messageId: sent.id._serialized }))
+      if (!session || !session.isConnected || !session.socket) {
+        jsonResponse(res, 503, { success: false, error: 'WhatsApp not connected for this user' })
+        return
+      }
+
+      const jid = phoneToJid(to)
+      const sent = await session.socket.sendMessage(jid, { text: msgBody })
+      const sentId = sent?.key?.id || uuidv4()
+
+      // Store outbound message in Supabase
+      await storeOutboundMessage(session.userId, to, sentId, msgBody)
+
+      jsonResponse(res, 200, { success: true, messageId: sentId })
     } catch (error) {
-      res.writeHead(500)
-      res.end(JSON.stringify({
+      jsonResponse(res, 500, {
         success: false,
         error: error instanceof Error ? error.message : 'Send failed',
-      }))
+      })
     }
     return
   }
 
-  // GET /health — basic health check
-  if (url === '/health') {
-    res.writeHead(200)
-    res.end(JSON.stringify({ ok: true, connected: isConnected }))
-    return
-  }
-
-  res.writeHead(404)
-  res.end(JSON.stringify({ error: 'Not found' }))
+  jsonResponse(res, 404, { error: 'Not found' })
 }
 
 // ─── Main ────────────────────────────────────────────────────────────
 async function main() {
-  console.log(`[WA] Starting WhatsApp daemon for user ${USER_ID}`)
+  console.log('[WA] Starting WhatsApp daemon (Baileys multi-session)')
+  console.log(`[WA] Auth directory: ${AUTH_BASE_DIR}`)
   console.log(`[WA] HTTP API will listen on port ${DAEMON_PORT}`)
 
   // Start HTTP server
   const server = createServer(handleRequest)
   server.listen(DAEMON_PORT, () => {
     console.log(`[WA] HTTP API running at http://localhost:${DAEMON_PORT}`)
-    console.log(`[WA]   GET  /status  — connection status + QR code`)
-    console.log(`[WA]   POST /send    — send a message { to, body }`)
-    console.log(`[WA]   GET  /health  — health check`)
+    console.log(`[WA]   GET  /health                      — health check`)
+    console.log(`[WA]   GET  /sessions                    — list all sessions`)
+    console.log(`[WA]   GET  /status/:userId              — session status + QR code`)
+    console.log(`[WA]   POST /sessions/:userId/connect    — start/reconnect session`)
+    console.log(`[WA]   DELETE /sessions/:userId          — disconnect session`)
+    console.log(`[WA]   POST /send { userId, to, body }   — send a message`)
   })
 
-  // Start WhatsApp client
-  await initWhatsApp()
+  // Reconnect existing sessions
+  await loadExistingSessions()
 
   // Graceful shutdown
   const shutdown = () => {
-    console.log('\n[WA] Shutting down...')
+    console.log('\n[WA] Shutting down all sessions...')
+    for (const session of sessions.values()) {
+      if (session.socket) {
+        try { session.socket.end(undefined) } catch { /* ignore */ }
+      }
+    }
     server.close()
     process.exit(0)
   }

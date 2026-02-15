@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
     })
   }
 
-  const status = await getWhatsAppStatus(settings)
+  const status = await getWhatsAppStatus(userId, settings)
 
   return NextResponse.json({
     enabled: true,

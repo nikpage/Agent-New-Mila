@@ -706,7 +706,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 
   // WhatsApp
   whatsapp_enabled: false,
-  whatsapp_session_data_path: './.wwebjs_auth',
+  whatsapp_session_data_path: './baileys_auth',
   whatsapp_daemon_port: 3001,
   whatsapp_auto_ack_message: null,
   whatsapp_blocked_numbers: [],

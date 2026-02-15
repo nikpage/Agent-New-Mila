@@ -3,7 +3,7 @@
  *
  * Sends messages via the local WhatsApp daemon's HTTP API.
  * The daemon runs as a separate process (scripts/whatsapp-daemon.ts)
- * and exposes a simple REST endpoint for sending messages.
+ * and manages Baileys sessions per user.
  */
 
 import type { UserSettings } from '@/lib/supabase/types'
@@ -11,9 +11,10 @@ import type { WASendRequest, WASendResponse, WAConnectionStatus } from './types'
 
 /**
  * Send a WhatsApp message via the daemon.
- * Returns the send result.
+ * Routes to the correct user session via userId.
  */
 export async function sendWhatsAppMessage(
+  userId: string,
   to: string,
   body: string,
   settings: UserSettings,
@@ -24,7 +25,7 @@ export async function sendWhatsAppMessage(
   }
 
   const daemonUrl = `http://localhost:${settings.whatsapp_daemon_port}`
-  const request: WASendRequest = { to, body, replyToMessageId }
+  const request: WASendRequest = { userId, to, body, replyToMessageId }
 
   try {
     const response = await fetch(`${daemonUrl}/send`, {
@@ -49,9 +50,9 @@ export async function sendWhatsAppMessage(
 }
 
 /**
- * Check the WhatsApp daemon connection status.
+ * Check the WhatsApp daemon connection status for a specific user.
  */
-export async function getWhatsAppStatus(settings: UserSettings): Promise<WAConnectionStatus> {
+export async function getWhatsAppStatus(userId: string, settings: UserSettings): Promise<WAConnectionStatus> {
   if (!settings.whatsapp_enabled) {
     return { connected: false, error: 'WhatsApp is disabled' }
   }
@@ -59,7 +60,7 @@ export async function getWhatsAppStatus(settings: UserSettings): Promise<WAConne
   const daemonUrl = `http://localhost:${settings.whatsapp_daemon_port}`
 
   try {
-    const response = await fetch(`${daemonUrl}/status`, {
+    const response = await fetch(`${daemonUrl}/status/${encodeURIComponent(userId)}`, {
       signal: AbortSignal.timeout(5_000),
     })
 

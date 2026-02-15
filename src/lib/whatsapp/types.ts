@@ -29,6 +29,8 @@ export interface WAIncomingMessage {
 
 /** Request to send a WhatsApp message via the daemon */
 export interface WASendRequest {
+  /** User ID — routes to the correct Baileys session */
+  userId: string
   /** Recipient phone number with country code */
   to: string
   /** Message body text */

@@ -97,8 +97,8 @@ His office is at Václavské náměstí 1, Praha 1.`,
   whatsapp: {
     /** Enable WhatsApp channel */
     enabled: true,
-    /** Directory for WA Web session persistence (QR code scan saved here) */
-    sessionDataPath: './.wwebjs_auth',
+    /** Directory for Baileys session persistence (auth state per user) */
+    sessionDataPath: './baileys_auth',
     /** Port for the local WA daemon HTTP API */
     daemonPort: 3001,
     /** Optional auto-acknowledge message sent immediately on receipt */
