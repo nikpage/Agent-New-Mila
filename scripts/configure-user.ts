@@ -107,40 +107,61 @@ async function configureInteractive(existing: UserSettings): Promise<Partial<Use
   settings.office_location = await ask('Office address', existing.office_location || undefined)
 
   // ── Section 6: Calendar ──
+  // Business calendar uses 'primary' (Google API = authenticated user's main calendar)
+  // Only ask about personal calendar
   printSection('Calendar')
 
-  settings.business_calendar_id = await ask('Business Google Calendar ID', existing.business_calendar_id)
-  const personalCal = await ask('Personal Google Calendar ID (leave empty to skip)', existing.personal_calendar_id || '')
-  settings.personal_calendar_id = personalCal || null
+  console.log('  Business calendar: using your primary Google Calendar automatically.')
+  settings.business_calendar_id = 'primary'
+  const hasPersonalCal = await ask('Do you have a separate personal calendar to block time from?', 'no')
+  if (hasPersonalCal.toLowerCase() === 'yes' || hasPersonalCal.toLowerCase() === 'y') {
+    settings.personal_calendar_id = await ask('Personal calendar ID (find in Google Calendar → Settings → calendar ID)')
+  } else {
+    settings.personal_calendar_id = null
+  }
 
-  // ── Section 7: Advanced (ask whether to configure) ──
-  const configAdvanced = await ask('\nConfigure advanced settings? (lead tracking, scoring, WhatsApp)', 'no')
+  // ── Section 7: Advanced ──
+  console.log('\n── Advanced Settings (current defaults) ──')
+  console.log('')
+  console.log('  Lead tracking:')
+  console.log(`    No reply in ${existing.cooling_threshold_days} days  → gentle check-in`)
+  console.log(`    No reply in ${existing.cold_threshold_days} days  → urgent follow-up`)
+  console.log(`    No reply in ${existing.dead_threshold_days} days → last-chance contact`)
+  console.log(`    Max ${existing.max_auto_follow_ups} auto follow-ups per conversation`)
+  console.log('')
+  console.log('  Scoring:')
+  console.log(`    Seller deals get ${existing.offer_multiplier_seller}x priority boost`)
+  console.log(`    Buyer deals get ${existing.offer_multiplier_buyer}x priority boost`)
+  console.log(`    VIP contacts get ${existing.priority_multiplier_vip}x priority boost`)
+  console.log('')
+  console.log('  WhatsApp: ' + (existing.whatsapp_enabled ? `enabled (port ${existing.whatsapp_daemon_port})` : 'disabled'))
+  console.log('')
 
-  if (configAdvanced.toLowerCase() === 'yes' || configAdvanced.toLowerCase() === 'y') {
+  const changeAdvanced = await ask('Change any of these?', 'no')
+
+  if (changeAdvanced.toLowerCase() === 'yes' || changeAdvanced.toLowerCase() === 'y') {
     printSection('Lead Tracking')
+    console.log('  How many days of silence before Mila follows up automatically?\n')
 
-    settings.cooling_threshold_days = await askNumber('Cooling threshold (days inactive)', existing.cooling_threshold_days)
-    settings.cold_threshold_days = await askNumber('Cold threshold (days inactive)', existing.cold_threshold_days)
-    settings.dead_threshold_days = await askNumber('Dead threshold (days inactive)', existing.dead_threshold_days)
+    settings.cooling_threshold_days = await askNumber('Days before gentle check-in', existing.cooling_threshold_days)
+    settings.cold_threshold_days = await askNumber('Days before urgent follow-up', existing.cold_threshold_days)
+    settings.dead_threshold_days = await askNumber('Days before last-chance contact', existing.dead_threshold_days)
     settings.max_auto_follow_ups = await askNumber('Max auto follow-ups per conversation', existing.max_auto_follow_ups)
-    settings.cooling_priority_boost = await askNumber('Cooling priority boost multiplier', existing.cooling_priority_boost)
-    settings.cold_priority_boost = await askNumber('Cold priority boost multiplier', existing.cold_priority_boost)
-    settings.min_deal_value_for_tracking = await askNumber('Min deal value for lead tracking', existing.min_deal_value_for_tracking)
 
     printSection('Scoring')
+    console.log('  Priority multipliers — higher = more important in the morning brief.\n')
 
-    settings.offer_multiplier_seller = await askNumber('Seller offer multiplier', existing.offer_multiplier_seller)
-    settings.offer_multiplier_buyer = await askNumber('Buyer offer multiplier', existing.offer_multiplier_buyer)
-    settings.priority_multiplier_vip = await askNumber('VIP priority multiplier', existing.priority_multiplier_vip)
-    settings.kc_factor = await askNumber('KC factor', existing.kc_factor)
+    settings.offer_multiplier_seller = await askNumber('Seller deal multiplier', existing.offer_multiplier_seller)
+    settings.offer_multiplier_buyer = await askNumber('Buyer deal multiplier', existing.offer_multiplier_buyer)
+    settings.priority_multiplier_vip = await askNumber('VIP contact multiplier', existing.priority_multiplier_vip)
 
     printSection('WhatsApp')
+    console.log('  Requires the WhatsApp daemon running separately (see docs).\n')
 
     const waEnabled = await ask('Enable WhatsApp?', existing.whatsapp_enabled ? 'yes' : 'no')
     settings.whatsapp_enabled = waEnabled.toLowerCase() === 'yes' || waEnabled.toLowerCase() === 'y'
     if (settings.whatsapp_enabled) {
       settings.whatsapp_daemon_port = await askNumber('WhatsApp daemon port', existing.whatsapp_daemon_port)
-      settings.whatsapp_session_data_path = await ask('Session data path', existing.whatsapp_session_data_path)
     }
   }
 
