@@ -341,10 +341,13 @@ User clicks email link → Verifies token → Executes action → Done
   - **Why:** Isolate blast radius, better performance
   - **When:** Enterprise customers with >100 users
 
-### If Adding WhatsApp Bot
+### WhatsApp Daemon (Baileys Multi-Session)
+The daemon (`scripts/whatsapp-daemon.ts`) uses `@whiskeysockets/baileys` and manages multiple user sessions on a single process. Security considerations:
 - [ ] **Rate limiting per phone number** (Upstash Redis) - 2 hours
-- [ ] **WhatsApp webhook signature verification** - 1 hour
-- [ ] **Message encryption** for sensitive data - 2 hours
+- [ ] **Daemon API authentication** — daemon HTTP API (port 3001) is localhost-only but has no auth; add shared secret header if exposing beyond localhost - 1 hour
+- [ ] **Auth state file permissions** — `./baileys_auth/<userId>/` dirs contain session keys; ensure restricted file permissions (0700) - 30 minutes
+- [ ] **Session isolation** — each user's Baileys socket runs in the same process; a crash in one session's event handler could affect others. Consider per-session error boundaries - 2 hours
+- [ ] **Message encryption** for sensitive data in transit/storage - 2 hours
 
 ---
 

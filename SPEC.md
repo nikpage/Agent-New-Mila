@@ -72,11 +72,13 @@ Primary channel. Mila reads inbound and outbound emails via Gmail API, processes
 ### WhatsApp
 
 Secondary channel. Architecture:
-- **Daemon** (`scripts/whatsapp-daemon.ts`) — standalone Node.js process using `whatsapp-web.js` (Puppeteer-based WhatsApp Web client). Runs separately from the Next.js app.
+- **Daemon** (`scripts/whatsapp-daemon.ts`) — standalone Node.js process using `@whiskeysockets/baileys` (pure WebSocket, no Puppeteer). Runs separately from the Next.js app.
+- **Multi-session**: manages one Baileys connection per user (~5-10 MB each, scales to 50-100 users per server)
+- Auth state persisted per user in `./baileys_auth/<userId>/`
 - Daemon listens for incoming messages → writes to Supabase `messages` table with `channel_id: 'whatsapp'`
-- Daemon exposes HTTP API: `GET /status`, `POST /send`, `GET /health`
-- **Sender** (`src/lib/whatsapp/sender.ts`) — Next.js client that talks to the daemon's HTTP API
-- **Status endpoint** (`/api/whatsapp/status`) — proxies daemon status for the dashboard
+- Daemon exposes HTTP API: `GET /sessions`, `GET /status/:userId`, `POST /sessions/:userId/connect`, `DELETE /sessions/:userId`, `POST /send { userId, to, body }`, `GET /health`
+- **Sender** (`src/lib/whatsapp/sender.ts`) — Next.js client that talks to the daemon's HTTP API, routing by `userId`
+- **Status endpoint** (`/api/whatsapp/status?userId=xxx`) — proxies per-user daemon status for the dashboard
 
 WhatsApp messages flow through the same pipeline as email. The AI receives channel context and adjusts tone — shorter, more conversational for WhatsApp vs. formal for email.
 
@@ -226,7 +228,7 @@ Every AI prompt receives the client's business context via `getAISystemPrompt()`
 | Email | Gmail API via `googleapis` |
 | Calendar | Google Calendar API via `googleapis` |
 | Maps | Google Maps Distance Matrix API |
-| WhatsApp | whatsapp-web.js (separate daemon process) |
+| WhatsApp | @whiskeysockets/baileys (multi-session daemon, no Puppeteer) |
 | Deployment | Vercel + cron jobs |
 | Monitoring | Sentry (client + server + edge) |
 | Auth | Google OAuth (email ownership proves identity) |
@@ -279,7 +281,7 @@ PostgreSQL via Supabase with pgvector extension for embeddings.
 ## What's Not Built Yet
 
 - **Multi-language support** — currently Czech only (hardcoded in prompts)
-- **WhatsApp group monitoring** — daemon skips group messages (TODO in code)
+- **WhatsApp group monitoring** — Baileys daemon skips group messages (TODO in code)
 - **Offer multiplier wiring** — `planning.ts` doesn't yet pass `offerMultiplier` from client config to `calculatePriorityScore()`
 - **Weight in proposals** — `weight` field not set during proposal generation
 - **Email encryption** — OAuth tokens migration from plaintext to encrypted is in progress
