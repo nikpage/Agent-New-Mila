@@ -365,7 +365,6 @@ The daemon (`scripts/whatsapp-daemon.ts`) uses `@whiskeysockets/baileys` and man
 - [OWASP Top 10](https://owasp.org/www-project-top-ten/)
 - [Supabase RLS Best Practices](https://supabase.com/docs/guides/auth/row-level-security)
 - [Vercel Security](https://vercel.com/docs/security)
-- [DEPLOYMENT.md](./DEPLOYMENT.md) - Deployment guide
 - [CLAUDE.md](./CLAUDE.md) - Code architecture
 
 ---

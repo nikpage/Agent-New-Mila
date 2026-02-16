@@ -411,7 +411,6 @@ SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)
 - **`SPEC.md`** — Full product specification
 - **`CLAUDE.md`** (this file) — Code architecture reference for AI coding assistants
 - **`SECURITY.md`** — Security architecture, risks, incident response
-- **`DEPLOYMENT.md`** — Deployment guide, backups, operations
 - **`.env.example`** — All environment variables with generation commands
 
 ## Superadmin
