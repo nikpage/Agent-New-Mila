@@ -49,10 +49,10 @@ npx tsx scripts/configure-user.ts --user-id <uuid> --from-json settings.json
 
 ```bash
 # App health
-curl https://your-mila-instance.com/api/health
+curl https://mila.specialagents.pro/api/health
 
 # Run the agent pipeline once manually
-curl -X POST https://your-mila-instance.com/api/agent/run \
+curl -X POST https://mila.specialagents.pro/api/agent/run \
   -H "x-api-key: $MILA_USER_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"userId": "<uuid>"}'
@@ -67,7 +67,7 @@ Check that the response includes `emailsIngested`, `calendarEventsSynced`, etc.
 Set up the daily morning brief cron job (Vercel cron or external scheduler):
 
 ```
-0 8 * * * curl -H "Authorization: Bearer $CRON_SECRET" https://your-mila-instance.com/api/cron/morning-brief
+0 8 * * * curl -H "Authorization: Bearer $CRON_SECRET" https://mila.specialagents.pro/api/cron/morning-brief
 ```
 
 The user should receive their first morning brief email the next business day.
@@ -111,7 +111,7 @@ The `qrCode` field contains the QR string. The user scans it with their phone's 
 curl http://localhost:3001/status/<userId>
 
 # Also verify via the app
-curl "https://your-mila-instance.com/api/whatsapp/status?userId=<userId>"
+curl "https://mila.specialagents.pro/api/whatsapp/status?userId=<userId>"
 ```
 
 ### 5e. Enable WhatsApp in user settings
