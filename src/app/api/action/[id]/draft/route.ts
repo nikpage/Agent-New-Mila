@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getActionById, updateActionDraft, updateAction } from '@/lib/db/actions'
+import { getActionById, updateActionDraft, updateAction, dismissAction, dismissAllPendingActions } from '@/lib/db/actions'
 import { validateActionToken } from '@/lib/auth/tokens'
+
+/** Commands the user can type to dismiss this action or all pending actions */
+const CANCEL_ALL_COMMANDS = ['cancel all', 'zrušit vše', 'zrušit všechno', 'zruš vše', 'zruš všechno']
+const CANCEL_THIS_COMMANDS = ['cancel', 'zrušit', 'zruš', 'ne', 'nechci']
 
 export async function PUT(
   request: NextRequest,
@@ -25,6 +29,17 @@ export async function PUT(
     // Validate the token
     if (!validateActionToken(token, actionId, action.user_id)) {
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
+    }
+
+    // Check for verbal cancel commands in notes
+    const notesLower = (notes || '').trim().toLowerCase()
+    if (notesLower && CANCEL_ALL_COMMANDS.includes(notesLower)) {
+      const dismissed = await dismissAllPendingActions(action.user_id)
+      return NextResponse.json({ success: true, command: 'cancel_all', dismissed })
+    }
+    if (notesLower && CANCEL_THIS_COMMANDS.includes(notesLower)) {
+      await dismissAction(actionId)
+      return NextResponse.json({ success: true, command: 'cancel_this' })
     }
 
     // Update the draft if subject/body provided

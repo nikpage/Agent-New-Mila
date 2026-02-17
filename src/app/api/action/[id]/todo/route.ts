@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getActionById, updateActionStatus } from '@/lib/db/actions'
-import { getConversationById } from '@/lib/db/conversations'
-import { getCPById } from '@/lib/db/counterparties'
-import { createTodo } from '@/lib/db/todos'
+import { getActionById, dismissAction } from '@/lib/db/actions'
 import { validateActionToken } from '@/lib/auth/tokens'
 
 export async function POST(
@@ -30,32 +27,15 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
-    // Get related data for the todo description
-    const [conversation, cp] = await Promise.all([
-      getConversationById(action.conversation_id),
-      getCPById(action.cp_id),
-    ])
-
-    // Create a todo for this action
-    const todoDescription = `${action.action_type}: ${conversation?.topic || 'Unknown topic'} (${cp?.name || cp?.primary_identifier || 'Unknown contact'})`
-
-    await createTodo({
-      user_id: action.user_id,
-      cp_id: action.cp_id,
-      thread_id: action.conversation_id,
-      description: todoDescription,
-      status: 'pending',
-    })
-
-    // Update action status to indicate user will handle it
-    await updateActionStatus(actionId, 'needs_revision')
+    // Dismiss this action — user handles it themselves
+    await dismissAction(actionId)
 
     return NextResponse.json({ success: true })
 
   } catch (error) {
-    console.error('Error creating todo:', error)
+    console.error('Error dismissing action:', error)
     return NextResponse.json(
-      { error: 'Failed to create todo' },
+      { error: 'Failed to dismiss action' },
       { status: 500 }
     )
   }
