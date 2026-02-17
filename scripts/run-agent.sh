@@ -17,13 +17,12 @@ fi
 # Source env vars
 export $(grep -v '^#' "$ENV_FILE" | grep -v '^\s*$' | xargs)
 
-USER_ID="${1:-${MILA_USER_ID:-}}"
+USER_ID="${1:-}"
 BASE_URL="${APP_BASE_URL:-http://localhost:3000}"
 API_KEY="${MILA_USER_API_KEY:?MILA_USER_API_KEY not set in .env.local}"
 
 if [ -z "$USER_ID" ]; then
   echo "Usage: ./scripts/run-agent.sh <user-id>"
-  echo "Or set MILA_USER_ID in .env.local"
   exit 1
 fi
 
