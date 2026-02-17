@@ -165,7 +165,7 @@ function ActionContent() {
     setSuccess({
       show: true,
       message: 'Zrušeno',
-      subMessage: 'Akce byla zrušena. Vyřídíte to sami.',
+      subMessage: 'Akce byla zrušena.',
     })
   }
 
