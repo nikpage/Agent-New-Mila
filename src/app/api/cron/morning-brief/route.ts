@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { sendAllMorningBriefs } from '@/services/morning-brief'
+import { sendAllMorningBriefs, sendMorningBrief } from '@/services/morning-brief'
 import { validateCronToken } from '@/lib/auth/tokens'
 
 export const dynamic = 'force-dynamic'
@@ -12,6 +12,18 @@ export async function GET(request: NextRequest) {
 
     if (!validateCronToken(token)) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    const userId = request.nextUrl.searchParams.get('userId')
+
+    if (userId) {
+      console.log(`[Cron] Sending morning brief for user ${userId}`)
+      const success = await sendMorningBrief(userId)
+      return NextResponse.json({
+        success,
+        userId,
+        timestamp: new Date().toISOString(),
+      })
     }
 
     console.log('[Cron] Starting morning brief send')
