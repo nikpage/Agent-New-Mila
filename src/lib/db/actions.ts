@@ -171,6 +171,25 @@ export async function dismissAction(actionId: string): Promise<void> {
 }
 
 /**
+ * Dismiss all pending actions for a user
+ */
+export async function dismissAllPendingActions(userId: string): Promise<number> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('action_proposals')
+    .update({ status: 'dismissed' })
+    .eq('user_id', userId)
+    .eq('status', 'pending')
+    .select('id')
+
+  if (error) {
+    throw new Error(`Failed to dismiss all actions: ${error.message}`)
+  }
+
+  return data?.length || 0
+}
+
+/**
  * Update action draft
  */
 export async function updateActionDraft(

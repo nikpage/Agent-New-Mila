@@ -91,11 +91,11 @@ export function SuccessOverlay({
         )}
 
         <p style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, marginBottom: theme.spacing.md }}>
-          This window will close in {countdown} seconds
+          Toto okno se zavře za {countdown} s
         </p>
 
         <Button variant="outline" onClick={handleClose}>
-          Close Now
+          Zavřít
         </Button>
       </div>
     </div>

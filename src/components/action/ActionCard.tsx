@@ -184,13 +184,13 @@ export function ActionCard({
           border: `1px solid ${theme.colors.border}`
         }}>
           <p style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: theme.spacing.sm }}>
-            Přidat poznámky nebo omezení
+            Instrukce pro Milu
           </p>
           <Textarea
             value={notes}
             onChange={e => setNotes(e.target.value)}
             rows={3}
-            placeholder="např. Nezapomeň zmínit, že bazén bude připraven pro jeho děti."
+            placeholder={'např. "Zmíň, že bazén bude připraven pro děti." nebo "zrušit vše"'}
           />
           <div style={{ display: 'flex', gap: theme.spacing.sm, marginTop: theme.spacing.sm }}>
             <Button

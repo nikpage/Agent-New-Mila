@@ -126,6 +126,26 @@ function ActionContent() {
       throw new Error(errorData.error || 'Failed to save draft')
     }
 
+    const result = await response.json()
+
+    // Handle cancel commands detected by the API
+    if (result.command === 'cancel_all') {
+      setSuccess({
+        show: true,
+        message: 'Vše zrušeno',
+        subMessage: `Zrušeno ${result.dismissed} akcí.`,
+      })
+      return
+    }
+    if (result.command === 'cancel_this') {
+      setSuccess({
+        show: true,
+        message: 'Zrušeno',
+        subMessage: 'Akce byla zrušena.',
+      })
+      return
+    }
+
     await loadAction()
   }
 
@@ -144,8 +164,8 @@ function ActionContent() {
     setExecuting(false)
     setSuccess({
       show: true,
-      message: 'Přidáno do úkolů',
-      subMessage: 'Tento úkol je nyní sledován ve vašem seznamu úkolů.',
+      message: 'Zrušeno',
+      subMessage: 'Akce byla zrušena. Vyřídíte to sami.',
     })
   }
 
