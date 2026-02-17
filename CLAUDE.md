@@ -9,6 +9,20 @@
 - NEVER use placeholders, stubs, or "TODO" on the developer side. Use real values, real logic, real implementations
 - NEVER take shortcuts that create maintenance debt (e.g., clone-per-client instead of multi-tenant, hardcoded config instead of DB-driven)
 
+## Base URLs & Testing
+- **Local**: `http://localhost:3000`
+- **Prod**: `https://mila.specialagents.pro/`
+- **Test userId**: `ee23bcb7-ee2c-4e3f-a686-fb955ba0d753`
+
+### Test commands (always local first, then prod)
+```bash
+# Local
+curl "http://localhost:3000/api/cron/morning-brief?userId=ee23bcb7-ee2c-4e3f-a686-fb955ba0d753" -H "Authorization: Bearer $CRON_SECRET"
+
+# Prod
+curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c-4e3f-a686-fb955ba0d753" -H "Authorization: Bearer $CRON_SECRET"
+```
+
 ## Project Overview
 **Mila** is an AI-powered executive assistant that ingests emails, WhatsApp messages, and calendar events, uses Gemini AI to propose actions (reply, schedule, follow up, delegate), tracks leads, and presents everything for user approval via morning brief emails.
 
