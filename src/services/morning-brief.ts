@@ -26,6 +26,9 @@ interface BriefAction {
   summary:  ConversationSummary | null
   actionUrl: string
   editUrl: string
+  executeUrl: string
+  todoUrl: string
+  blacklistUrl: string
 }
 
 /**
@@ -58,6 +61,9 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
       const token = generateActionToken(action.id, userId)
       const actionUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}`
       const editUrl = `${APP_BASE_URL}/action/${action.id}/edit?token=${token}`
+      const executeUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute`
+      const todoUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`
+      const blacklistUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`
 
       briefActions.push({
         action,
@@ -68,6 +74,9 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
         summary:  conversation.summary_json as ConversationSummary | null,
         actionUrl,
         editUrl,
+        executeUrl,
+        todoUrl,
+        blacklistUrl,
       })
     }
 
@@ -167,7 +176,7 @@ function generateBriefEmailHtml(
     <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">Dobré ráno</h1>
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
 
-    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl }) => {
+    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl }) => {
       const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
       const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
       const payload = action.payload as Record<string, unknown> | null
@@ -182,6 +191,9 @@ function generateBriefEmailHtml(
         intent: action.intent_cs || action.rationale_cs || action.rationale,
         actionUrl,
         editUrl,
+        executeUrl,
+        todoUrl,
+        blacklistUrl,
         needsInput,
       })
     }).join('')}

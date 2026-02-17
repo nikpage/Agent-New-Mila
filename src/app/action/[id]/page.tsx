@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { ActionCard } from '@/components/action/ActionCard'
 import { SuccessOverlay } from '@/components/action/SuccessOverlay'
@@ -26,11 +26,14 @@ function ActionContent() {
   const searchParams = useSearchParams()
   const actionId = params.id as string
   const token = searchParams.get('token')
+  const doAction = searchParams.get('do') // 'execute' | 'todo' | 'blacklist' | null
 
   const [data, setData] = useState<ActionPageData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [executing, setExecuting] = useState(false)
   const [success, setSuccess] = useState<SuccessState>({ show: false, message: '' })
+  const autoExecuted = useRef(false)
 
   useEffect(() => {
     loadAction()
@@ -54,6 +57,43 @@ function ActionContent() {
     }
   }
 
+  // Auto-execute when `do` param is present and data is loaded
+  useEffect(() => {
+    if (!data || !doAction || autoExecuted.current || success.show) return
+    if (data.action.status !== 'pending') return
+
+    autoExecuted.current = true
+
+    if (doAction === 'execute') {
+      // Check if action can be executed (not disabled)
+      const missingInfoFields = (data.action.missing_info as { label: string; value: string | null }[] | null) || []
+      const hasUnfilledFields = missingInfoFields.length > 0 && missingInfoFields.some(f => f.value === null || f.value === '')
+      const actionPayload = data.action.payload as Record<string, unknown> | null
+      const hasBlockedSlots = !!(actionPayload?.blocked_slots && Array.isArray(actionPayload.blocked_slots) && (actionPayload.blocked_slots as unknown[]).length > 0)
+      const doItDisabled = hasUnfilledFields && !hasBlockedSlots
+
+      if (doItDisabled) {
+        // Can't auto-execute — needs user input, show the card instead
+        return
+      }
+      runAutoAction('execute', handleDoIt)
+    } else if (doAction === 'todo') {
+      runAutoAction('todo', handleIllDoIt)
+    } else if (doAction === 'blacklist') {
+      runAutoAction('blacklist', handleBlacklist)
+    }
+  }, [data, doAction])
+
+  async function runAutoAction(label: string, handler: () => Promise<void>) {
+    setExecuting(true)
+    try {
+      await handler()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to ${label} action`)
+      setExecuting(false)
+    }
+  }
+
   async function handleDoIt() {
     const response = await fetch(`/api/action/${actionId}/execute`, {
       method: 'POST',
@@ -66,10 +106,11 @@ function ActionContent() {
       throw new Error(errorData.error || 'Failed to execute action')
     }
 
+    setExecuting(false)
     setSuccess({
       show: true,
       message: 'Hotovo!',
-      subMessage: 'Váš e-mail byl odeslán.',
+      subMessage: 'Akce byla provedena.',
     })
   }
 
@@ -100,6 +141,7 @@ function ActionContent() {
       throw new Error(errorData.error || 'Failed to create todo')
     }
 
+    setExecuting(false)
     setSuccess({
       show: true,
       message: 'Přidáno do úkolů',
@@ -119,6 +161,7 @@ function ActionContent() {
       throw new Error(errorData.error || 'Failed to blacklist')
     }
 
+    setExecuting(false)
     setSuccess({
       show: true,
       message: 'Kontakt zablokován',
@@ -126,7 +169,8 @@ function ActionContent() {
     })
   }
 
-  if (loading) {
+  if (loading || executing) {
+    const statusMessage = executing ? 'Provádím akci...' : 'Načítání akce...'
     return (
       <div style={{ textAlign: 'center' }}>
         <div className="animate-spin" style={{
@@ -137,7 +181,7 @@ function ActionContent() {
           borderRadius: '50%',
           margin: `0 auto ${theme.spacing.md} auto`
         }} />
-        <p style={{ color: theme.colors.textMuted }}>Načítání akce...</p>
+        <p style={{ color: theme.colors.textMuted }}>{statusMessage}</p>
       </div>
     )
   }

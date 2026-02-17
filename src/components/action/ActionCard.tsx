@@ -227,11 +227,12 @@ export function ActionCard({
       }}>
         <div style={{ display: 'flex', gap: theme.spacing.sm }}>
           <Button
-            variant="primary"
+            variant={doItDisabled ? 'secondary' : 'primary'}
             onClick={run('doit', onDoIt)}
             loading={loading === 'doit'}
             disabled={doItDisabled}
             title={doItDisabled ? 'Nejdříve vyplňte požadované údaje přes UPRAVIT' : undefined}
+            style={doItDisabled ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
           >
             UDĚLAT
           </Button>
