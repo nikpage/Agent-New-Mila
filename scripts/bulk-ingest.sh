@@ -14,8 +14,19 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
-# Source env vars
-export $(grep -v '^#' "$ENV_FILE" | grep -v '^\s*$' | xargs)
+# Source env vars (handles special characters in values)
+set -a
+while IFS='=' read -r key value; do
+  # Skip comments, blank lines, and lines without =
+  [[ -z "$key" || "$key" =~ ^# || -z "$value" ]] && continue
+  # Skip lines that aren't valid variable names
+  [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && continue
+  # Strip surrounding quotes if present
+  value="${value%\"}"
+  value="${value#\"}"
+  export "$key=$value"
+done < "$ENV_FILE"
+set +a
 
 USER_ID="${1:-}"
 BASE_URL="${APP_BASE_URL:-http://localhost:3000}"
