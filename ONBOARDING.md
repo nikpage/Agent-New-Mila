@@ -47,14 +47,10 @@ npx tsx scripts/configure-user.ts --user-id <uuid> --from-json settings.json
 
 ## Step 3: Set Your User ID
 
-Export the user's UUID as an environment variable. This simplifies all subsequent commands:
+The `add-user.ts` script prints the UUID after creating the user. Copy it and export it as an environment variable — all subsequent commands use `$UID_NIK`:
 
 ```bash
-export UID_NIK="<uuid-from-step-1>"
-```
-
-Example:
-```bash
+# Nik's user ID (output from add-user.ts)
 export UID_NIK="ee23bcb7-ee2c-4e3f-a686-fb955ba0d753"
 ```
 
