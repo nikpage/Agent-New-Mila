@@ -12,7 +12,7 @@
 ## Base URLs & Testing
 - **Local**: `http://localhost:3000`
 - **Prod**: `https://mila.specialagents.pro/`
-- **Test userId**: `ee23bcb7-ee2c-4e3f-a686-fb955ba0d753`
+
 
 ### Test commands (always local first, then prod)
 ```bash
