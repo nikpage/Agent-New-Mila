@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from 'crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'crypto'
 
 /**
  * Generate a secure action token
@@ -56,7 +56,12 @@ export function validateActionToken(
     .digest('hex')
     .slice(0, 32)
 
-  return signature === expectedSignature
+  if (signature.length !== expectedSignature.length) return false
+  try {
+    return timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -116,13 +121,56 @@ export function validateOAuthState(
       .digest('hex')
       .slice(0, 16)
 
-    if (signature !== expectedSignature) {
+    if (signature.length !== expectedSignature.length) return null
+    try {
+      if (!timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+        return null
+      }
+    } catch {
       return null
     }
 
     return userId
   } catch {
     return null
+  }
+}
+
+/**
+ * Generate HMAC signature for the trigger/ingest tracking pixel URL.
+ * Unlike action tokens these do NOT expire — the pixel URL is baked into
+ * every brief email we've ever sent. Replay is limited because the route
+ * only fires an agent run, not a destructive action.
+ */
+export function generateTriggerToken(userId: string): string {
+  const secret = process.env.NEXTAUTH_SECRET
+  if (!secret) throw new Error('NEXTAUTH_SECRET not configured')
+
+  return createHmac('sha256', secret)
+    .update(`trigger.${userId}`)
+    .digest('hex')
+    .slice(0, 32)
+}
+
+/**
+ * Validate a trigger token.
+ * Returns true only if the HMAC matches the userId.
+ */
+export function validateTriggerToken(token: string, userId: string): boolean {
+  const secret = process.env.NEXTAUTH_SECRET
+  if (!secret) return false
+
+  const expected = createHmac('sha256', secret)
+    .update(`trigger.${userId}`)
+    .digest('hex')
+    .slice(0, 32)
+
+  // Timing-safe comparison
+  if (token.length !== expected.length) return false
+  try {
+    return timingSafeEqual(Buffer.from(token), Buffer.from(expected))
+  } catch {
+    return false
   }
 }
 
@@ -140,5 +188,10 @@ export function validateCronToken(token: string | null | undefined): boolean {
   }
 
   // In development, still require the secret for security consistency
-  return token === cronSecret
+  if (!token || token.length !== cronSecret.length) return false
+  try {
+    return timingSafeEqual(Buffer.from(token), Buffer.from(cronSecret))
+  } catch {
+    return false
+  }
 }

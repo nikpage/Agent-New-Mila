@@ -160,6 +160,10 @@ export async function upsertCP(cp: CPInsert): Promise<CP> {
 /**
  * Find or create a counterparty by email.
  * Returns null if the email belongs to the user — the user is NOT a CP.
+ *
+ * Uses upsert-first to avoid the SELECT→INSERT race condition where two
+ * concurrent messages from the same unknown sender both see "not found"
+ * and both try to insert.
  */
 export async function findOrCreateCP(
   userId: string,
@@ -173,6 +177,33 @@ export async function findOrCreateCP(
   if (!user?.email) return null
   if (isSameGmailAddress(user.email, normalizedEmail)) return null
 
+  const supabase = getSupabaseAdmin()
+
+  // Upsert-first: ON CONFLICT (user_id, primary_identifier) DO NOTHING.
+  // This is atomic — no race window between SELECT and INSERT.
+  const { data: upserted, error: upsertError } = await supabase
+    .from('cps')
+    .upsert(
+      {
+        user_id: userId,
+        primary_identifier: normalizedEmail,
+        name: name || null,
+        is_blacklisted: false,
+      },
+      { onConflict: 'user_id,primary_identifier', ignoreDuplicates: true }
+    )
+    .select()
+    .single()
+
+  // If upsert returned data, we either created or matched. Check name backfill.
+  if (!upsertError && upserted) {
+    if (name && !upserted.name) {
+      return updateCP(upserted.id, { name })
+    }
+    return upserted
+  }
+
+  // ignoreDuplicates may return no rows on conflict. Fetch the existing row.
   const existing = await getCPByIdentifier(userId, normalizedEmail)
   if (existing) {
     if (name && !existing.name) {
@@ -181,12 +212,8 @@ export async function findOrCreateCP(
     return existing
   }
 
-  return upsertCP({
-    user_id: userId,
-    primary_identifier: normalizedEmail,
-    name: name || null,
-    is_blacklisted: false,
-  })
+  // Should not reach here, but surface the original error if we do
+  throw new Error(`Failed to find or create CP for ${normalizedEmail}: ${upsertError?.message || 'unknown error'}`)
 }
 
 /**

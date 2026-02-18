@@ -1,6 +1,44 @@
 import { google } from 'googleapis'
 import { getUserById, updateUserGoogleTokens, type GoogleTokens } from '../db/users'
 
+/**
+ * In-memory OAuth token cache.
+ * Avoids hitting Supabase on every Gmail/Calendar API call (tens of thousands
+ * of redundant reads per cron cycle at 500 users).
+ *
+ * Cache entry holds the GoogleTokens object + a `cachedAt` timestamp.
+ * TTL = 4 minutes (tokens are proactively refreshed when < 5 min to expiry,
+ * so a 4-min cache ensures we always re-check before the refresh window).
+ */
+interface CachedToken {
+  tokens: GoogleTokens
+  cachedAt: number
+}
+
+const TOKEN_CACHE_TTL_MS = 4 * 60 * 1000 // 4 minutes
+const tokenCache = new Map<string, CachedToken>()
+
+/** Invalidate cache for a user (called after token refresh). */
+function invalidateTokenCache(userId: string) {
+  tokenCache.delete(userId)
+}
+
+/** Get cached tokens if still valid. */
+function getCachedTokens(userId: string): GoogleTokens | null {
+  const entry = tokenCache.get(userId)
+  if (!entry) return null
+  if (Date.now() - entry.cachedAt > TOKEN_CACHE_TTL_MS) {
+    tokenCache.delete(userId)
+    return null
+  }
+  return entry.tokens
+}
+
+/** Store tokens in cache. */
+function setCachedTokens(userId: string, tokens: GoogleTokens) {
+  tokenCache.set(userId, { tokens, cachedAt: Date.now() })
+}
+
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.send',
@@ -71,17 +109,23 @@ export async function exchangeCodeForTokens(code: string): Promise<GoogleTokens>
 }
 
 /**
- * Get authenticated OAuth2 client for a user
- * Automatically refreshes token if expired
+ * Get authenticated OAuth2 client for a user.
+ * Uses in-memory token cache to avoid redundant DB reads.
+ * Automatically refreshes token if expired.
  */
 export async function getAuthenticatedClient(userId: string) {
-  const user = await getUserById(userId)
+  // Try cache first — avoids DB hit on every API call
+  let tokens = getCachedTokens(userId)
 
-  if (!user?.google_oauth_tokens) {
-    throw new Error('User has no Google OAuth tokens')
+  if (!tokens) {
+    const user = await getUserById(userId)
+    if (!user?.google_oauth_tokens) {
+      throw new Error('User has no Google OAuth tokens')
+    }
+    tokens = user.google_oauth_tokens as unknown as GoogleTokens
+    setCachedTokens(userId, tokens)
   }
 
-  const tokens = user.google_oauth_tokens as unknown as GoogleTokens
   const oauth2Client = createOAuth2Client()
 
   oauth2Client.setCredentials({
@@ -105,8 +149,10 @@ export async function getAuthenticatedClient(userId: string) {
         token_type: tokens.token_type,
       }
 
-      // Update tokens in database
+      // Persist to DB and update cache
       await updateUserGoogleTokens(userId, newTokens)
+      invalidateTokenCache(userId)
+      setCachedTokens(userId, newTokens)
 
       oauth2Client.setCredentials({
         access_token: newTokens.access_token,
@@ -114,6 +160,7 @@ export async function getAuthenticatedClient(userId: string) {
         expiry_date: newTokens.expiry_date,
       })
     } catch (error) {
+      invalidateTokenCache(userId)
       console.error('Failed to refresh token:', error)
       throw new Error('Failed to refresh Google OAuth token. User may need to re-authenticate.')
     }

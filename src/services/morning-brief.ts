@@ -10,7 +10,7 @@ import { getConversationById } from '@/lib/db/conversations'
 import { getEventsForToday } from '@/lib/db/events'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefHeadline } from '@/lib/ai/gemini'
-import { generateActionToken } from '@/lib/auth/tokens'
+import { generateActionToken, generateTriggerToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template';
 import { theme } from '@/config/theme'
 import type { ActionProposal, ConversationSummary } from '@/lib/supabase/types'
@@ -173,7 +173,8 @@ function generateBriefEmailHtml(
   actions: BriefAction[],
   events: { title: string; time: string; location?: string }[]
 ): string {
-  const triggerUrl = `${APP_BASE_URL}/api/trigger/ingest?uid=${userId}`
+  const triggerSig = generateTriggerToken(userId)
+  const triggerUrl = `${APP_BASE_URL}/api/trigger/ingest?uid=${userId}&sig=${triggerSig}`
   return `
 <!DOCTYPE html>
 <html>

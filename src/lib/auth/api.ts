@@ -1,4 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { timingSafeEqual } from 'crypto'
+
+/**
+ * Timing-safe string comparison.
+ * Prevents timing attacks where an attacker measures response time
+ * to deduce how many characters of the key matched.
+ */
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  try {
+    return timingSafeEqual(Buffer.from(a), Buffer.from(b))
+  } catch {
+    return false
+  }
+}
 
 /**
  * Verify API key for customer deployment
@@ -32,7 +47,7 @@ export function verifyApiKey(request: NextRequest): NextResponse | null {
     )
   }
 
-  if (apiKey !== customerKey) {
+  if (!safeEqual(apiKey, customerKey)) {
     console.warn('[AUTH] Invalid API key attempt')
     return NextResponse.json(
       { error: 'Invalid API key' },

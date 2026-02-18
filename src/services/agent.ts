@@ -30,9 +30,43 @@ export interface AgentRunResult {
 }
 
 /**
+ * Per-user concurrency lock.
+ * Prevents two simultaneous agent runs for the same user (e.g. cron + email-open
+ * or double cron fire) which would cause duplicate messages, CPs, and actions.
+ *
+ * Key = userId, Value = true while running.
+ * In-memory is fine: Vercel serverless can't share state across instances,
+ * so the worst case is two cold-start instances both run — but that's far
+ * better than the current situation where EVERY concurrent call runs.
+ */
+const runningUsers = new Map<string, true>()
+
+/**
  * Run the full agent pipeline for a user
  */
 export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
+  // Per-user concurrency guard
+  if (runningUsers.has(userId)) {
+    console.warn(`[Agent] Skipping — pipeline already running for ${userId}`)
+    return {
+      success: true,
+      emailsIngested: 0,
+      whatsappMessagesProcessed: 0,
+      calendarEventsSynced: 0,
+      calendarInvitationsDetected: 0,
+      messagesProcessed: 0,
+      conversationsUpdated: 0,
+      actionsGenerated: 0,
+      followUpsGenerated: 0,
+      coolingLeads: 0,
+      coldLeads: 0,
+      actions: [],
+      errors: ['Skipped — concurrent run already in progress'],
+    }
+  }
+
+  runningUsers.set(userId, true)
+
   const result: AgentRunResult = {
     success: false,
     emailsIngested: 0,
@@ -131,6 +165,8 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
   } catch (error) {
     console.error('[Agent] Error:', error)
     result.errors.push(error instanceof Error ? error.message : 'Unknown error')
+  } finally {
+    runningUsers.delete(userId)
   }
 
   return result
