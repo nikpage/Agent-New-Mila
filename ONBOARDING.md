@@ -5,7 +5,7 @@
 Before onboarding anyone, make sure the Mila instance is deployed and healthy:
 - Next.js app running (Vercel or local)
 - Supabase database provisioned with schema
-- Environment variables set (see `.env.example` in CLAUDE.md)
+- Environment variables set (see `.env.example`)
 - Google OAuth credentials configured (Client ID + Secret)
 
 ---
@@ -45,46 +45,74 @@ npx tsx scripts/configure-user.ts --user-id <uuid> --from-json settings.json
 
 ---
 
-## Step 3: Verify Setup
+## Step 3: Set Your User ID
+
+Export the user's UUID as an environment variable. This simplifies all subsequent commands:
 
 ```bash
-# App health
-curl https://mila.specialagents.pro/api/health
+export UID_NIK="<uuid-from-step-1>"
+```
 
-# Run the agent pipeline once manually
-curl -X POST https://mila.specialagents.pro/api/agent/run \
-  -H "x-api-key: $MILA_USER_API_KEY" \
+Example:
+```bash
+export UID_NIK="ee23bcb7-ee2c-4e3f-a686-fb955ba0d753"
+```
+
+> **Tip:** Add this to your `~/.bashrc` or `~/.zshrc` so it persists across terminal sessions.
+
+---
+
+## Step 4: Verify Setup
+
+### Health check (no auth required)
+
+```bash
+curl http://localhost:3000/api/health
+```
+
+### Run the agent pipeline
+
+```bash
+curl -X POST http://localhost:3000/api/agent/run \
+  -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local | cut -d'=' -f2-)" \
   -H "Content-Type: application/json" \
-  -d '{"userId": "<uuid>"}'
+  -d "{\"userId\":\"$UID_NIK\"}"
 ```
 
 Check that the response includes `emailsIngested`, `calendarEventsSynced`, etc.
 
+### Send morning brief
+
+```bash
+curl http://localhost:3000/api/cron/morning-brief \
+  -H "Authorization: Bearer $(grep '^CRON_SECRET=' .env.local | cut -d'=' -f2-)"
+```
+
 ---
 
-## Step 4: Enable Cron
+## Step 5: Enable Cron
 
 Set up the daily morning brief cron job (Vercel cron or external scheduler):
 
 ```
-0 8 * * * curl -H "Authorization: Bearer $CRON_SECRET" https://mila.specialagents.pro/api/cron/morning-brief
+0 8 * * * curl -H "Authorization: Bearer $CRON_SECRET" https://your-domain.com/api/cron/morning-brief
 ```
 
 The user should receive their first morning brief email the next business day.
 
 ---
 
-## Step 5 (Optional): Add WhatsApp
+## Step 6 (Optional): Add WhatsApp
 
 WhatsApp is an add-on channel. Only set up once the user is working correctly with email + calendar.
 
-### 5a. Install daemon dependencies (once per server)
+### 6a. Install daemon dependencies (once per server)
 
 ```bash
 npm install @whiskeysockets/baileys pino qrcode-terminal
 ```
 
-### 5b. Start the WhatsApp daemon (if not already running)
+### 6b. Start the WhatsApp daemon (if not already running)
 
 ```bash
 npx tsx scripts/whatsapp-daemon.ts
@@ -92,39 +120,78 @@ npx tsx scripts/whatsapp-daemon.ts
 
 The daemon manages multiple users on a single process (~5-10 MB per session).
 
-### 5c. Connect the user's WhatsApp session
+### 6c. Connect the user's WhatsApp session
 
 ```bash
 # Initiate connection (returns 202)
-curl -X POST http://localhost:3001/sessions/<userId>/connect
+curl -X POST http://localhost:3001/sessions/$UID_NIK/connect
 
 # Poll for QR code
-curl http://localhost:3001/status/<userId>
+curl http://localhost:3001/status/$UID_NIK
 ```
 
 The `qrCode` field contains the QR string. The user scans it with their phone's WhatsApp (Linked Devices > Link a Device).
 
-### 5d. Confirm connection
+### 6d. Confirm connection
 
 ```bash
 # Should return connected: true, phone: "+420..."
-curl http://localhost:3001/status/<userId>
+curl http://localhost:3001/status/$UID_NIK
 
 # Also verify via the app
-curl "https://mila.specialagents.pro/api/whatsapp/status?userId=<userId>"
+curl "http://localhost:3000/api/whatsapp/status?userId=$UID_NIK"
 ```
 
-### 5e. Enable WhatsApp in user settings
+### 6e. Enable WhatsApp in user settings
 
 Either re-run `configure-user.ts` and set WhatsApp to enabled in the Advanced section, or update directly:
 
 ```bash
-npx tsx scripts/configure-user.ts --user-id <uuid> --from-json <(echo '{"whatsapp_enabled": true}')
+npx tsx scripts/configure-user.ts --user-id $UID_NIK --from-json <(echo '{"whatsapp_enabled": true}')
 ```
 
 From this point, the agent pipeline will pick up WhatsApp messages alongside email.
 
 ---
+
+## API Quick Reference
+
+All commands below assume `$UID_NIK` is set and the app is running on `localhost:3000`.
+
+### Core Operations
+
+| What | Command |
+|------|---------|
+| **Health check** | `curl http://localhost:3000/api/health` |
+| **Run agent pipeline** | `curl -X POST http://localhost:3000/api/agent/run -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\"}"` |
+| **Send morning briefs** | `curl http://localhost:3000/api/cron/morning-brief -H "Authorization: Bearer $(grep '^CRON_SECRET=' .env.local \| cut -d'=' -f2-)"` |
+| **Manual ingest** | `curl -X POST http://localhost:3000/api/ingest -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\"}"` |
+| **Bulk ingest** | `curl -X POST http://localhost:3000/api/ingest/bulk -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\"}"` |
+| **Superadmin stats** | `curl "http://localhost:3000/api/superadmin/stats?key=$(grep '^SUPERADMIN_KEY=' .env.local \| cut -d'=' -f2-)"` |
+
+### Auth Headers Summary
+
+| Endpoint | Auth Method | Header |
+|----------|------------|--------|
+| `/api/agent/run` | API Key | `x-api-key: $MILA_USER_API_KEY` |
+| `/api/ingest` | API Key | `x-api-key: $MILA_USER_API_KEY` |
+| `/api/ingest/bulk` | API Key | `x-api-key: $MILA_USER_API_KEY` |
+| `/api/cron/morning-brief` | Bearer Token | `Authorization: Bearer $CRON_SECRET` |
+| `/api/action/[id]/*` | Action Token | `?token=<hmac-token>` (from email links) |
+| `/api/superadmin/stats` | Query Param or Bearer | `?key=$SUPERADMIN_KEY` |
+| `/api/health` | None | — |
+| `/api/whatsapp/status` | None | `?userId=$UID_NIK` |
+
+### WhatsApp Daemon (port 3001)
+
+| What | Command |
+|------|---------|
+| **Daemon health** | `curl http://localhost:3001/health` |
+| **List sessions** | `curl http://localhost:3001/sessions` |
+| **User status** | `curl http://localhost:3001/status/$UID_NIK` |
+| **Connect session** | `curl -X POST http://localhost:3001/sessions/$UID_NIK/connect` |
+| **Disconnect session** | `curl -X DELETE http://localhost:3001/sessions/$UID_NIK` |
+| **Send message** | `curl -X POST http://localhost:3001/send -H "Content-Type: application/json" -d '{"userId":"'$UID_NIK'","to":"+420...","body":"Hello"}'` |
 
 ---
 
