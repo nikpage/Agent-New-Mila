@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { sendAllMorningBriefs, sendMorningBrief } from '@/services/morning-brief'
+import { sendAllMorningBriefs, sendMorningBrief, type BriefType } from '@/services/morning-brief'
 import { validateCronToken } from '@/lib/auth/tokens'
 
 export const dynamic = 'force-dynamic'
@@ -15,22 +15,25 @@ export async function GET(request: NextRequest) {
     }
 
     const userId = request.nextUrl.searchParams.get('userId')
+    const typeParam = request.nextUrl.searchParams.get('type')
+    const briefType: BriefType = typeParam === 'afternoon' ? 'afternoon' : 'morning'
 
     if (userId) {
-      console.log(`[Cron] Sending morning brief for user ${userId}`)
-      const success = await sendMorningBrief(userId)
+      console.log(`[Cron] Sending ${briefType} brief for user ${userId}`)
+      const success = await sendMorningBrief(userId, briefType)
       return NextResponse.json({
         success,
         userId,
+        briefType,
         timestamp: new Date().toISOString(),
       })
     }
 
-    console.log('[Cron] Starting morning brief send')
+    console.log(`[Cron] Starting ${briefType} brief send`)
 
-    const result = await sendAllMorningBriefs()
+    const result = await sendAllMorningBriefs(briefType)
 
-    console.log(`[Cron] Morning briefs sent: ${result.sent}, failed: ${result.failed}`)
+    console.log(`[Cron] ${briefType} briefs sent: ${result.sent}, failed: ${result.failed}`)
 
     return NextResponse.json({
       success: true,

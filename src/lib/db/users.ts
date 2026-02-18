@@ -128,6 +128,38 @@ export async function getUserSettings(userId: string): Promise<UserSettings> {
 }
 
 /**
+ * Get users whose brief is due now (within windowMinutes of their configured time).
+ * Compares user's configured brief time (in their timezone) to current real time.
+ */
+export async function getUsersDueBrief(
+  briefType: 'morning' | 'afternoon',
+  windowMinutes: number = 30
+): Promise<User[]> {
+  const users = await getUsersWithEmailEnabled()
+  const now = new Date()
+
+  return users.filter(user => {
+    const settings = user.settings as Record<string, unknown> | null
+    const settingKey = briefType === 'morning' ? 'morning_brief_time' : 'afternoon_brief_time'
+    const briefTime = (settings?.[settingKey] as string) ||
+      (briefType === 'morning' ? '08:00' : '13:00')
+    const timezone = (settings?.timezone as string) || 'Europe/Prague'
+
+    // Get current HH:MM in user's timezone
+    const userNow = new Date(now.toLocaleString('en-US', { timeZone: timezone }))
+    const userMinutes = userNow.getHours() * 60 + userNow.getMinutes()
+
+    const [hours, minutes] = briefTime.split(':').map(Number)
+    const briefMinutes = hours * 60 + minutes
+
+    // User is due if their brief time falls within [now, now + window)
+    // e.g., cron fires at 7:30, window=30 → catches users with brief_time 7:30-7:59
+    const diff = briefMinutes - userMinutes
+    return diff >= 0 && diff < windowMinutes
+  })
+}
+
+/**
  * Update user settings
  */
 export async function updateUserSettings(

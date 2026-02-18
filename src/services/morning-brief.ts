@@ -4,7 +4,7 @@
  */
 
 import { getPendingActionsForBrief, markActionsNotified } from '@/lib/db/actions'
-import { getUserById, getUsersWithEmailEnabled } from '@/lib/db/users'
+import { getUserById, getUsersDueBrief } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
 import { getEventsForToday } from '@/lib/db/events'
@@ -31,10 +31,12 @@ interface BriefAction {
   blacklistUrl: string
 }
 
+export type BriefType = 'morning' | 'afternoon'
+
 /**
- * Generate and send morning brief for a user
+ * Generate and send a brief for a user
  */
-export async function sendMorningBrief(userId: string): Promise<boolean> {
+export async function sendMorningBrief(userId: string, briefType: BriefType = 'morning'): Promise<boolean> {
   try {
     const user = await getUserById(userId)
     if (!user || !user.email_enabled || user.email_unsubscribed) {
@@ -102,7 +104,9 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
       headline = `Máte ${briefActions.length} akčních návrhů ke zpracování.`
     }
 
-    const htmlContent = generateBriefEmailHtml(userId, headline, briefActions, events.map(e => ({
+    const greeting = briefType === 'morning' ? 'Dobré ráno' : 'Dobré odpoledne'
+
+    const htmlContent = generateBriefEmailHtml(userId, greeting, headline, briefActions, events.map(e => ({
       title: e.title || 'Event',
       time: new Date(e.start_time).toLocaleTimeString('en-US', {
         hour: 'numeric',
@@ -112,7 +116,7 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
       location: e.location || undefined,
     })))
 
-    const textContent = generateBriefEmailText(headline, briefActions)
+    const textContent = generateBriefEmailText(greeting, headline, briefActions)
     const userEmail = await getUserEmail(userId)
 
 
@@ -135,15 +139,20 @@ export async function sendMorningBrief(userId: string): Promise<boolean> {
 }
 
 /**
- * Send morning briefs to all enabled users
+ * Send briefs to all users whose configured brief time is due now.
+ * windowMinutes controls how wide the "due now" window is (default 30 min).
  */
-export async function sendAllMorningBriefs(): Promise<{ sent: number; failed: number }> {
-  const users = await getUsersWithEmailEnabled()
+export async function sendAllMorningBriefs(
+  briefType: BriefType = 'morning',
+  windowMinutes: number = 30
+): Promise<{ sent: number; failed: number }> {
+  const users = await getUsersDueBrief(briefType, windowMinutes)
+  console.log(`[Brief] ${briefType}: ${users.length} user(s) due (window=${windowMinutes}m)`)
   let sent = 0
   let failed = 0
 
   for (const user of users) {
-    const success = await sendMorningBrief(user.id)
+    const success = await sendMorningBrief(user.id, briefType)
     if (success) {
       sent++
     } else {
@@ -159,6 +168,7 @@ export async function sendAllMorningBriefs(): Promise<{ sent: number; failed: nu
  */
 function generateBriefEmailHtml(
   userId: string,
+  greeting: string,
   headline: string,
   actions: BriefAction[],
   events: { title: string; time: string; location?: string }[]
@@ -173,7 +183,7 @@ function generateBriefEmailHtml(
 <body style="margin: 0; padding: 0; background-color: ${theme.colors.background}; font-family: 'Inter', system-ui, sans-serif; color: ${theme.colors.text};">
   <img src="${triggerUrl}" width="1" height="1" style="display:none" alt="" />
   <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-    <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">Dobré ráno</h1>
+    <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">${greeting}</h1>
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
 
     ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl }) => {
@@ -205,8 +215,8 @@ function generateBriefEmailHtml(
 /**
  * Generate plain text email content
  */
-function generateBriefEmailText(headline: string, actions: BriefAction[]): string {
-  let text = `Dobré ráno\n\n${headline}\n\n`;
+function generateBriefEmailText(greeting: string, headline: string, actions: BriefAction[]): string {
+  let text = `${greeting}\n\n${headline}\n\n`;
   for (const { action, cpName, cpRole, topic, actionUrl } of actions) {
     const intent = action.intent_cs || action.rationale_cs || action.rationale;
     text += `${cpName}${cpRole ? ` · ${cpRole}` : ''}\n`;

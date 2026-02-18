@@ -567,6 +567,7 @@ export interface UserSettings {
   working_days: number[]         // default [1,2,3,4,5] (Mon-Fri)
   timezone: string               // default "Europe/Prague"
   morning_brief_time: string     // default "08:00"
+  afternoon_brief_time: string   // default "13:00"
 
   // Meeting Preferences
   default_meeting_duration: number // default 30 (minutes)
@@ -646,6 +647,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   working_days: [1, 2, 3, 4, 5],
   timezone: 'Europe/Prague',
   morning_brief_time: '08:00',
+  afternoon_brief_time: '13:00',
 
   // Meeting Preferences
   default_meeting_duration: 30,

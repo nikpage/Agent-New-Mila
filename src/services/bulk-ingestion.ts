@@ -238,28 +238,40 @@ async function phase2Thread(
   console.log(`[BulkIngest] Phase 2: Threading messages`)
   onProgress({ phase: 2, step: 'loading_unprocessed' })
 
-  const unprocessed = await getUnprocessedMessages(userId, 1000)
-  console.log(`[BulkIngest] Phase 2: ${unprocessed.length} unprocessed messages`)
-  onProgress({ phase: 2, step: 'threading', messageCount: unprocessed.length })
+  const BATCH_SIZE = 1000
+  let totalProcessed = 0
+  const allConversationIds = new Set<string>()
 
-  if (unprocessed.length === 0) {
-    onProgress({ phase: 2, step: 'complete', messagesProcessed: 0, conversationsCreated: 0 })
-    return { messagesProcessed: 0, conversationsCreated: 0, conversationIds: [] }
+  // Loop in batches until all unprocessed messages are threaded
+  while (true) {
+    const unprocessed = await getUnprocessedMessages(userId, BATCH_SIZE)
+    if (unprocessed.length === 0) break
+
+    console.log(`[BulkIngest] Phase 2: Threading batch of ${unprocessed.length} messages (total so far: ${totalProcessed})`)
+    onProgress({ phase: 2, step: 'threading', batchSize: unprocessed.length, totalProcessed })
+
+    // processMessagesForThreading handles:
+    // - external_thread_id matching (free, instant)
+    // - embedding similarity (fallback)
+    // - new conversation creation
+    // - conversation summary rebuilds
+    const conversations = await processMessagesForThreading(unprocessed)
+
+    for (const id of conversations.keys()) {
+      allConversationIds.add(id)
+    }
+    totalProcessed += unprocessed.length
+
+    // If we got fewer than BATCH_SIZE, we've processed everything
+    if (unprocessed.length < BATCH_SIZE) break
   }
 
-  // processMessagesForThreading handles:
-  // - external_thread_id matching (free, instant)
-  // - embedding similarity (fallback)
-  // - new conversation creation
-  // - conversation summary rebuilds
-  const conversations = await processMessagesForThreading(unprocessed)
-
-  const conversationIds = Array.from(conversations.keys())
-  console.log(`[BulkIngest] Phase 2 complete: ${unprocessed.length} messages → ${conversationIds.length} conversations`)
-  onProgress({ phase: 2, step: 'complete', messagesProcessed: unprocessed.length, conversationsCreated: conversationIds.length })
+  const conversationIds = Array.from(allConversationIds)
+  console.log(`[BulkIngest] Phase 2 complete: ${totalProcessed} messages → ${conversationIds.length} conversations`)
+  onProgress({ phase: 2, step: 'complete', messagesProcessed: totalProcessed, conversationsCreated: conversationIds.length })
 
   return {
-    messagesProcessed: unprocessed.length,
+    messagesProcessed: totalProcessed,
     conversationsCreated: conversationIds.length,
     conversationIds,
   }
