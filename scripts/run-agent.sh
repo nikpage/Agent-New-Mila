@@ -14,18 +14,9 @@ if [ ! -f "$ENV_FILE" ]; then
   exit 1
 fi
 
-# Source env vars (handles special characters in values)
+# Source env vars
 set -a
-while IFS='=' read -r key value; do
-  # Skip comments, blank lines, and lines without =
-  [[ -z "$key" || "$key" =~ ^# || -z "$value" ]] && continue
-  # Skip lines that aren't valid variable names
-  [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && continue
-  # Strip surrounding quotes if present
-  value="${value%\"}"
-  value="${value#\"}"
-  export "$key=$value"
-done < "$ENV_FILE"
+source "$ENV_FILE"
 set +a
 
 USER_ID="${1:-}"
