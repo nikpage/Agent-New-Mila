@@ -141,7 +141,13 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
 /**
  * Send briefs to all users whose configured brief time is due now.
  * windowMinutes controls how wide the "due now" window is (default 30 min).
+ *
+ * Processes up to CONCURRENCY users in parallel to stay within Vercel's
+ * 300s function timeout. At ~10s per user and concurrency=10, this handles
+ * ~100 users before the deadline (with headroom for slow AI calls).
  */
+const BRIEF_CONCURRENCY = 10
+
 export async function sendAllMorningBriefs(
   briefType: BriefType = 'morning',
   windowMinutes: number = 30
@@ -151,12 +157,18 @@ export async function sendAllMorningBriefs(
   let sent = 0
   let failed = 0
 
-  for (const user of users) {
-    const success = await sendMorningBrief(user.id, briefType)
-    if (success) {
-      sent++
-    } else {
-      failed++
+  // Process in batches of BRIEF_CONCURRENCY
+  for (let i = 0; i < users.length; i += BRIEF_CONCURRENCY) {
+    const batch = users.slice(i, i + BRIEF_CONCURRENCY)
+    const results = await Promise.allSettled(
+      batch.map(user => sendMorningBrief(user.id, briefType))
+    )
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) {
+        sent++
+      } else {
+        failed++
+      }
     }
   }
 
