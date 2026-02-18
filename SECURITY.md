@@ -2,7 +2,7 @@
 
 This document outlines the security architecture, known risks, and mitigation strategies for Mila.
 
-**Last Updated:** 2026-02-13
+**Last Updated:** 2026-02-18
 **Architecture:** Event-driven email automation agent (NOT interactive SaaS)
 
 ---
@@ -43,37 +43,60 @@ User clicks email link → Verifies token → Executes action → Done
 ### ✅ IMPLEMENTED
 
 #### 1. Cron Job Protection
-**File:** `src/lib/auth/tokens.ts:132-143`
+**File:** `src/lib/auth/tokens.ts`
 
 - All cron endpoints require `CRON_SECRET` in Authorization header
 - Rejects requests if secret not configured (secure by default)
+- **Timing-safe comparison** (`crypto.timingSafeEqual`) prevents timing attacks
 - Protects automated email processing from unauthorized triggers
 
 **Protected endpoints:**
 - `/api/cron/morning-brief` (daily 8am brief)
 
 #### 2. Action Token Authentication
-**File:** `src/lib/auth/tokens.ts:7-60`
+**File:** `src/lib/auth/tokens.ts`
 
 - Email action links contain HMAC-signed tokens
 - Token proves: "User X owns action Y"
 - 7-day expiry window
 - One-time use (action marked completed after execution)
+- **Timing-safe comparison** on all signature verifications
 
 **Protected flows:**
 - User clicks email → `/api/action/[id]/execute?token=xyz`
 - Token validates `actionId` + `userId` + `timestamp`
 
-#### 3. API Key Protection (NEW)
+#### 3. API Key Protection
 **File:** `src/lib/auth/api.ts`
 
 - Manual triggers require `MILA_USER_API_KEY` in `x-api-key` header
 - Each deployment has unique key
+- **Timing-safe comparison** (`crypto.timingSafeEqual`) prevents timing attacks
 - Protects `/api/agent/run` and `/api/ingest` from unauthorized access
 
 **Use case:** Admin manually triggers processing for specific user
 
-#### 4. Row Level Security (RLS)
+#### 4. Trigger Pixel Authentication
+**File:** `src/lib/auth/tokens.ts` + `src/app/api/trigger/ingest/route.ts`
+
+- Tracking pixel URL embedded in brief emails is **HMAC-signed**: `?uid=<userId>&sig=<hmac>`
+- Unsigned or tampered URLs silently return the 1x1 GIF (no info leak) but do NOT trigger agent runs
+- `generateTriggerToken()` signs with `NEXTAUTH_SECRET`; `validateTriggerToken()` verifies with timing-safe comparison
+- Tokens are non-expiring (pixel URLs are baked into every email ever sent; replay limited to triggering a non-destructive agent run)
+
+**Previously:** Any UUID in `?uid=` would trigger a full agent pipeline — no auth at all.
+
+#### 5. Per-User Agent Concurrency Lock
+**File:** `src/services/agent.ts`
+
+- In-memory `Map<userId, true>` prevents two simultaneous pipeline runs for the same user
+- Second concurrent call returns immediately with `success: true` + `errors: ['Skipped — concurrent run already in progress']`
+- Lock releases in `finally` block (crash-safe)
+- Prevents duplicate messages, CPs, and action proposals from race conditions (e.g. cron + email-open firing simultaneously)
+
+**Limitation:** In-memory lock per Vercel instance — two cold-start instances could still race, but this eliminates the most common case.
+
+#### 6. Row Level Security (RLS)
 **Location:** Supabase Database
 
 - All tables have `user_id` column with RLS policies
@@ -82,21 +105,46 @@ User clicks email link → Verifies token → Executes action → Done
 
 **Critical for shared database architecture**
 
-#### 5. OAuth Token Storage
+#### 7. OAuth Token Storage
 **Current state:** Plaintext in `users.google_tokens` JSONB column
 
 **Risk:** If `SUPABASE_SERVICE_KEY` leaks → all Gmail access compromised
 
 **Accepted for now:** Strong service key + Vercel env encryption + limited customer count (<20)
 
-#### 6. Health Endpoint Hardening (NEW)
+#### 8. Health Endpoint Hardening
 **File:** `src/app/api/health/route.ts`
 
 - Returns generic "Configuration incomplete" instead of leaking env var names
 - Prevents reconnaissance attacks
 
-#### 7. Error Monitoring (NEW)
+#### 9. Error Monitoring
 **Sentry:** Client + server + edge runtime tracking
+
+#### 10. Data Integrity: Atomic Counterparty Creation
+**File:** `src/lib/db/counterparties.ts`
+
+- `findOrCreateCP()` uses **upsert-first** pattern with `ON CONFLICT (user_id, primary_identifier) DO NOTHING`
+- Eliminates race condition where two concurrent messages from the same unknown sender both insert a duplicate CP
+- Falls back to SELECT only if upsert returns no rows (conflict path)
+
+#### 11. OAuth Token Caching
+**File:** `src/lib/google/auth.ts`
+
+- In-memory cache with 4-minute TTL on `getAuthenticatedClient()`
+- Eliminates tens of thousands of redundant DB reads per cron cycle at scale
+- Cache invalidates on token refresh and on refresh failure
+- TTL (4 min) is shorter than refresh window (5 min before expiry) to ensure stale tokens are never served
+
+#### 12. Timing-Safe Comparisons (All Auth Paths)
+**Files:** `src/lib/auth/tokens.ts`, `src/lib/auth/api.ts`
+
+All secret comparisons use `crypto.timingSafeEqual`:
+- API key verification (`verifyApiKey`)
+- Cron token validation (`validateCronToken`)
+- Action token validation (`validateActionToken`)
+- OAuth state validation (`validateOAuthState`)
+- Trigger pixel validation (`validateTriggerToken`)
 
 ---
 
@@ -327,19 +375,54 @@ User clicks email link → Verifies token → Executes action → Done
 
 ## 🔄 Security Roadmap
 
+### ✅ COMPLETED (2026-02-18)
+- [x] **HMAC-signed trigger pixel URL** — prevents unauthorized agent runs via tracking pixel
+- [x] **Per-user agent concurrency lock** — prevents duplicate pipeline runs from race conditions
+- [x] **Timing-safe comparisons on all auth paths** — API key, cron, action tokens, OAuth state, trigger tokens
+- [x] **Atomic counterparty creation** — upsert-first eliminates findOrCreateCP race condition
+- [x] **OAuth token caching** — 4-min TTL eliminates redundant DB reads at scale
+
 ### Before 10th Customer (CRITICAL)
 - [ ] **Encrypt OAuth tokens** (Supabase Vault or app-level) - 3 hours
   - **Why:** Plaintext tokens = catastrophic if leaked
   - **How:** Supabase Vault or AES encryption with `NEXTAUTH_SECRET`
 
-### Before 20th Customer
+### Before 20th Customer — GDPR Compliance
+- [ ] **User data deletion endpoint** (Right to be Forgotten, GDPR Art. 17) - 4 hours
+  - **Why:** GDPR requires ability to delete all personal data on request
+  - **What:** Cascade delete: users → cps → conversations → messages → actions → events → embeddings → emails → todos
+  - **How:** `/api/superadmin/users/[id]/delete` with confirmation, or self-service via authenticated request
+  - **Note:** Must also revoke Google OAuth tokens and purge any cached data
+
+- [ ] **User data export endpoint** (Right to Portability, GDPR Art. 20) - 3 hours
+  - **Why:** GDPR requires users can download their data in machine-readable format
+  - **What:** Export all user data as JSON: profile, conversations, messages, actions, events
+  - **How:** `/api/superadmin/users/[id]/export` returns ZIP with structured JSON
+
 - [ ] **Per-user audit logs** - 2 hours
-  - **Why:** Forensics for security incidents, compliance (GDPR)
+  - **Why:** Forensics for security incidents, GDPR accountability (Art. 5)
   - **What:** Log `user_id`, `action`, `timestamp`, `ip_address`
+
+- [ ] **Data retention policy** - 1 hour
+  - **Why:** GDPR storage limitation (Art. 5) — don't keep data longer than needed
+  - **What:** Auto-purge completed actions older than 90 days, processed messages older than 180 days
 
 - [ ] **Separate Supabase for high-value customers** - 4 hours
   - **Why:** Isolate blast radius, better performance
   - **When:** Enterprise customers with >100 users
+
+### Before 500 Users — Scale Hardening
+- [ ] **Database-level concurrency lock** (replace in-memory) - 2 hours
+  - **Why:** In-memory lock only works per Vercel instance; Postgres advisory locks work globally
+  - **How:** `pg_advisory_xact_lock(hashtext(userId))` or Supabase-side lock table
+
+- [ ] **Calendar incremental sync** (sync tokens) - 3 hours
+  - **Why:** Current full re-fetch of 14 days of events per user per run wastes Google API quota
+  - **How:** Store `nextSyncToken` from Google Calendar API, pass on subsequent calls
+
+- [ ] **Job queue for fan-out** - 4 hours
+  - **Why:** Sequential user processing in cron doesn't scale past ~100 users in Vercel's 60s timeout
+  - **How:** Inngest, Trigger.dev, or QStash for per-user agent runs
 
 ### WhatsApp Daemon (Baileys Multi-Session)
 The daemon (`scripts/whatsapp-daemon.ts`) uses `@whiskeysockets/baileys` and manages multiple user sessions on a single process. Security considerations:
@@ -369,6 +452,6 @@ The daemon (`scripts/whatsapp-daemon.ts`) uses `@whiskeysockets/baileys` and man
 
 ---
 
-**Document Version:** 2.0 (Architecture-corrected)
-**Last Review:** 2026-02-13
-**Next Review:** 2026-05-13 (quarterly)
+**Document Version:** 3.0 (Security hardening + GDPR roadmap)
+**Last Review:** 2026-02-18
+**Next Review:** 2026-05-18 (quarterly)
