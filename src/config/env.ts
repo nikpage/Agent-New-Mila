@@ -47,6 +47,11 @@ export const env = {
   auth: {
     secret: requireEnv('NEXTAUTH_SECRET'),
   },
+
+  // QStash
+  qstash: {
+    token: optionalEnv('QSTASH_TOKEN'),
+  },
 } as const
 
 // Lazy initialization to avoid errors during build
@@ -83,6 +88,9 @@ export function getEnvSafe() {
     },
     auth: {
       secret: process.env.NEXTAUTH_SECRET,
+    },
+    qstash: {
+      token: process.env.QSTASH_TOKEN,
     },
   }
 }

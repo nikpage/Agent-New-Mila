@@ -5,6 +5,7 @@ import { readFileSync } from 'fs'
 import { getUserById, getUserSettings, updateUserSettings } from '../src/lib/db/users'
 import { DEFAULT_USER_SETTINGS } from '../src/lib/supabase/types'
 import type { UserSettings } from '../src/lib/supabase/types'
+import { createBriefSchedules, updateBriefSchedules } from '../src/lib/qstash/client'
 
 const rl = createInterface({
   input: process.stdin,
@@ -255,7 +256,38 @@ async function main() {
 
   await updateUserSettings(userId, merged)
   console.log('\nSettings saved successfully.')
-  console.log(`User ${user.email} (${userId}) is now configured.`)
+
+  // Create or update QStash brief schedules
+  if (process.env.QSTASH_TOKEN) {
+    try {
+      const morningTime = (merged.morning_brief_time as string) || '08:00'
+      const afternoonTime = (merged.afternoon_brief_time as string) || '13:00'
+      const tz = (merged.timezone as string) || 'Europe/Prague'
+      const oldMorningId = (existing.qstash_morning_schedule_id as string | null) || null
+      const oldAfternoonId = (existing.qstash_afternoon_schedule_id as string | null) || null
+
+      console.log('\nSetting up QStash brief schedules...')
+      const scheduleIds = oldMorningId || oldAfternoonId
+        ? await updateBriefSchedules(userId, oldMorningId, oldAfternoonId, morningTime, afternoonTime, tz)
+        : await createBriefSchedules(userId, morningTime, afternoonTime, tz)
+
+      // Save schedule IDs back to settings
+      await updateUserSettings(userId, {
+        ...merged,
+        qstash_morning_schedule_id: scheduleIds.morningScheduleId,
+        qstash_afternoon_schedule_id: scheduleIds.afternoonScheduleId,
+      })
+      console.log(`  Morning brief: ${morningTime} ${tz} (schedule: ${scheduleIds.morningScheduleId})`)
+      console.log(`  Afternoon brief: ${afternoonTime} ${tz} (schedule: ${scheduleIds.afternoonScheduleId})`)
+    } catch (err) {
+      console.error('\nFailed to set up QStash schedules:', err)
+      console.error('You can set them up manually later or re-run this script.')
+    }
+  } else {
+    console.log('\nSkipping QStash schedule setup (QSTASH_TOKEN not set).')
+  }
+
+  console.log(`\nUser ${user.email} (${userId}) is now configured.`)
 
   rl.close()
   process.exit(0)

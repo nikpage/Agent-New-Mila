@@ -638,6 +638,10 @@ export interface UserSettings {
   business_calendar_id: string
   personal_calendar_id: string | null
   personal_event_keywords: string[]
+
+  // QStash schedule IDs (managed automatically)
+  qstash_morning_schedule_id: string | null
+  qstash_afternoon_schedule_id: string | null
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -723,6 +727,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
     'vacation', 'holiday', 'narozeniny', 'birthday', 'výročí',
     'anniversary', 'škola', 'school', 'kroužek',
   ],
+
+  // QStash schedule IDs
+  qstash_morning_schedule_id: null,
+  qstash_afternoon_schedule_id: null,
 }
 
 // Conversation summary JSON structure
