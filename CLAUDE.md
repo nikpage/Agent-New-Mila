@@ -452,7 +452,6 @@ QSTASH_TOKEN         # Upstash QStash token for per-user brief scheduling (optio
 - **`SPEC.md`** — Full product specification
 - **`CLAUDE.md`** (this file) — Code architecture reference for AI coding assistants
 - **`SECURITY.md`** — Security architecture, risks, incident response
-- **`.env.example`** — All environment variables with generation commands
 
 ## Superadmin
 - Dashboard at `/superadmin`
