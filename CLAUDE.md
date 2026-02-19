@@ -36,11 +36,14 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
+npm test             # Run Vitest test suite (91 tests)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
+npm run test:watch   # Vitest in watch mode (re-runs on file change)
+npm run test:coverage # Vitest with v8 coverage report
 ```
-**Always run `npm run build` after making changes** to verify nothing is broken. If build passes, the code is good.
+**After making changes, run `npm test && npm run build`** to verify nothing is broken.
 
 ## Architecture Map
 
@@ -396,7 +399,48 @@ All in `src/config/client.ts` → `whatsapp` section:
 - API routes use Next.js App Router conventions (`route.ts` with exported HTTP method functions)
 - Components use Tailwind CSS classes (no CSS modules)
 - Type imports use `import type { ... }` syntax
-- No test framework is configured — verify changes with `npm run build`
+- Tests use Vitest — test files are co-located with source (`*.test.ts`). See **Testing** section below for sync rules
+
+## Testing
+
+**Framework:** Vitest 4 with `@/*` path aliases (`vitest.config.ts`). Tests are co-located next to source files (`foo.ts` → `foo.test.ts`).
+
+### Run
+```bash
+npm test             # All tests (CI mode, exits with code)
+npm run test:watch   # Watch mode (re-runs on save)
+npm run test:coverage # With v8 coverage report
+```
+
+### Test Map — Source → Test File
+
+| Source file | Test file | What's tested |
+|-------------|-----------|---------------|
+| `src/lib/db/actions.ts` | `actions.test.ts` | `calculatePriorityScore` — zero-safety, quadratic growth, multipliers, rounding |
+| `src/lib/auth/tokens.ts` | `tokens.test.ts` | `generateActionToken`/`validateActionToken`, `generateOAuthState`/`validateOAuthState`, `generateTriggerToken`/`validateTriggerToken`, `validateCronToken` — HMAC round-trip, expiry, tampering |
+| `src/config/client.ts` | `client.test.ts` | `getAISystemPrompt`, `containsHighValueSignals`, `isPersonalEvent` — prompt assembly, keyword matching, case-insensitivity |
+| `src/services/ingestion.ts` | `ingestion.test.ts` | `isBlockedSender` — exact match, prefix, domain, subaddress, legitimate emails |
+| `src/lib/whatsapp/types.ts` | `types.test.ts` | `normalizePhoneNumber`, `phoneToThreadId` — stripping, `+` prefix, thread ID format |
+| `src/lib/db/counterparties.ts` | `counterparties.test.ts` | `isSameGmailAddress` — dot-insensitive, case-insensitive, trimming |
+| `src/lib/db/gdpr.ts` | `gdpr.test.ts` | `writeAuditLog` (never-throw), `deleteAllUserData` (FK-safe order, counts), `exportAllUserData` (structure), `enforceRetentionPolicy` (scrub + embedding delete) |
+| `src/lib/db/locks.ts` | `locks.test.ts` | `tryAcquireUserLock` (success, held, expired cleanup), `releaseUserLock` (idempotent) |
+| `src/services/agent.ts` | `agent.test.ts` | Pipeline lock acquire/release/fallback, user-not-found, no-credentials, fault isolation (each ingestion step fails independently) |
+
+### Keeping Tests in Sync — RULES
+
+1. **If you change a pure function's behavior** (scoring formula, token format, filter logic, keyword matching), **update or add tests in the corresponding test file**. The test map above tells you which file.
+
+2. **If you add a new pure/exported function** to any tested file, **add tests for it** in the existing test file.
+
+3. **If you add a new file with testable logic** (pure functions, deterministic behavior), **create a co-located `.test.ts` file** following the same pattern as the existing ones.
+
+4. **DB-dependent tests** mock Supabase via `vi.mock('../supabase/client')`. See `gdpr.test.ts` or `locks.test.ts` for the pattern. The mock returns a chainable query builder — no real DB needed.
+
+5. **Service-level tests** mock all imports (DB, external APIs) and test orchestration logic (error handling, fault isolation, lock behavior). See `agent.test.ts` for the pattern.
+
+6. **What NOT to test**: API routes (Next.js handler wiring), React components (no jsdom configured), AI prompt text (changes frequently, not deterministic).
+
+7. **Run `npm test` before every commit.** Tests must pass alongside `npm run build`.
 
 ## Security & Authentication
 
