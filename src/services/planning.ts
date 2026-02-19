@@ -218,16 +218,38 @@ export async function generateActionProposal(
   }
 }
 
+/**
+ * Process conversations in parallel with controlled concurrency.
+ * Each conversation involves an AI call (proposeAction) so we batch to
+ * avoid overwhelming the Gemini rate limit while still being much faster
+ * than fully serial processing.
+ */
+const PLANNING_CONCURRENCY = 5
+
 export async function generateActionsForConversations(
   conversationIds: string[]
 ): Promise<ActionProposal[]> {
   const actions: ActionProposal[] = []
-  for (const convId of conversationIds) {
-    const conversation = await getConversationById(convId)
-    if (!conversation) continue
-    const action = await generateActionProposal(conversation)
-    if (action) actions.push(action)
+
+  for (let i = 0; i < conversationIds.length; i += PLANNING_CONCURRENCY) {
+    const chunk = conversationIds.slice(i, i + PLANNING_CONCURRENCY)
+    const results = await Promise.allSettled(
+      chunk.map(async (convId) => {
+        const conversation = await getConversationById(convId)
+        if (!conversation) return null
+        return generateActionProposal(conversation)
+      })
+    )
+
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) {
+        actions.push(result.value)
+      } else if (result.status === 'rejected') {
+        console.error('[Planning] Parallel action generation failed:', result.reason)
+      }
+    }
   }
+
   return actions
 }
 

@@ -522,6 +522,49 @@ export interface Database {
           created_at?: string | null
         }
       }
+      audit_logs: {
+        Row: {
+          id: string
+          user_id: string | null
+          action: string
+          details: Json | null
+          ip_address: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id?: string | null
+          action: string
+          details?: Json | null
+          ip_address?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string | null
+          action?: string
+          details?: Json | null
+          ip_address?: string | null
+          created_at?: string
+        }
+      }
+      user_agent_locks: {
+        Row: {
+          user_id: string
+          locked_at: string
+          expires_at: string
+        }
+        Insert: {
+          user_id: string
+          locked_at?: string
+          expires_at: string
+        }
+        Update: {
+          user_id?: string
+          locked_at?: string
+          expires_at?: string
+        }
+      }
     }
     Views: {
       [_ in never]: never
@@ -548,6 +591,8 @@ export type Todo = Database['public']['Tables']['todos']['Row']
 export type Event = Database['public']['Tables']['events']['Row']
 export type Email = Database['public']['Tables']['emails']['Row']
 export type AgentError = Database['public']['Tables']['agent_errors']['Row']
+export type AuditLog = Database['public']['Tables']['audit_logs']['Row']
+export type UserAgentLock = Database['public']['Tables']['user_agent_locks']['Row']
 
 // Insert types
 export type UserInsert = Database['public']['Tables']['users']['Insert']

@@ -161,100 +161,124 @@ export async function ingestEmailsForUser(
   const emails = await fetchUnreadEmails(userId, maxEmails)
   const ingestedMessages: IngestedMessage[] = []
 
-  for (const email of emails) {
-    try {
-      // Check if already processed
-      if (await messageExists(userId, email.id)) {
-        continue
+  // Process emails in parallel batches — the AI classifyEmail() call is the
+  // bottleneck (~200-500ms each). Batching 5 at a time gives ~5x speedup
+  // while staying within Gemini rate limits.
+  const INGESTION_CONCURRENCY = 5
+
+  for (let i = 0; i < emails.length; i += INGESTION_CONCURRENCY) {
+    const chunk = emails.slice(i, i + INGESTION_CONCURRENCY)
+    const results = await Promise.allSettled(
+      chunk.map(email => processOneInboundEmail(email, userId, userEmail))
+    )
+
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) {
+        ingestedMessages.push(result.value)
+      } else if (result.status === 'rejected') {
+        console.error('[Ingest] Parallel email processing failed:', result.reason)
       }
-
-      // Extract sender info
-      const senderEmail = extractEmailAddress(email.from)
-      const senderName = extractName(email.from)
-
-      // Skip if sender is the user (outbound) — Gmail dot-insensitive
-      if (isSameGmailAddress(senderEmail, userEmail)) {
-        continue
-      }
-
-      // Hard-block known automated / no-reply senders before classification
-      if (isBlockedSender(senderEmail)) {
-        continue
-      }
-
-      // Classify the email
-      const classification = await classifyEmail(
-        email.subject,
-        email.body,
-        email.from
-      )
-
-      // Store non-actionable emails as a minimal record so we never re-classify them.
-      // No CP is created — we just need messageExists() to return true next run.
-      if (!classification.isActionable) {
-        const skippedId = uuidv4()
-        await createMessage({
-          id: skippedId,
-          user_id: userId,
-          cp_id: null,
-          external_id: email.id,
-          external_thread_id: email.threadId,
-          universal_message_id: email.id,
-          direction: 'inbound',
-          raw_text: '',
-          cleaned_text: null,
-          tag_primary: 'non_actionable',
-          tag_secondary: classification.category || null,
-          timestamp: email.date.toISOString(),
-          occurred_at: email.date.toISOString(),
-        })
-        continue
-      }
-
-      // Find or create the counterparty (null = user's own email, skip)
-      const cp = await findOrCreateCP(userId, senderEmail, senderName || undefined)
-      if (!cp) continue
-
-      // Create the message record
-      const messageId = uuidv4()
-      await createMessage({
-        id: messageId,
-        user_id: userId,
-        cp_id: cp.id,
-        external_id: email.id,
-        external_thread_id: email.threadId,
-        universal_message_id: email.id,
-        direction: 'inbound',
-        raw_text: email.body,
-        cleaned_text: email.body.slice(0, 5000),
-        tag_primary: classification.category,
-        tag_secondary: classification.priority,
-        timestamp: email.date.toISOString(),
-        occurred_at: email.date.toISOString(),
-      })
-
-      // Generate and save message embedding
-      try {
-        const embedding = await generateMessageEmbedding(email.body)
-        await saveMessageEmbedding(messageId, embedding)
-      } catch (error) {
-        console.error(`Failed to generate embedding for message ${messageId}:`, error)
-      }
-
-      ingestedMessages.push({
-        id: messageId,
-        email,
-        cpId: cp.id,
-        isActionable: classification.isActionable,
-        category: classification.category,
-        priority: classification.priority,
-      })
-    } catch (error) {
-      console.error(`Error processing email ${email.id}:`, error)
     }
   }
 
   return ingestedMessages
+}
+
+/**
+ * Process a single inbound email: dedup check → block check → classify → store.
+ * Extracted to enable parallel processing of independent emails.
+ */
+async function processOneInboundEmail(
+  email: EmailMessage,
+  userId: string,
+  userEmail: string
+): Promise<IngestedMessage | null> {
+  // Check if already processed
+  if (await messageExists(userId, email.id)) {
+    return null
+  }
+
+  // Extract sender info
+  const senderEmail = extractEmailAddress(email.from)
+  const senderName = extractName(email.from)
+
+  // Skip if sender is the user (outbound) — Gmail dot-insensitive
+  if (isSameGmailAddress(senderEmail, userEmail)) {
+    return null
+  }
+
+  // Hard-block known automated / no-reply senders before classification
+  if (isBlockedSender(senderEmail)) {
+    return null
+  }
+
+  // Classify the email
+  const classification = await classifyEmail(
+    email.subject,
+    email.body,
+    email.from
+  )
+
+  // Store non-actionable emails as a minimal record so we never re-classify them.
+  // No CP is created — we just need messageExists() to return true next run.
+  if (!classification.isActionable) {
+    const skippedId = uuidv4()
+    await createMessage({
+      id: skippedId,
+      user_id: userId,
+      cp_id: null,
+      external_id: email.id,
+      external_thread_id: email.threadId,
+      universal_message_id: email.id,
+      direction: 'inbound',
+      raw_text: '',
+      cleaned_text: null,
+      tag_primary: 'non_actionable',
+      tag_secondary: classification.category || null,
+      timestamp: email.date.toISOString(),
+      occurred_at: email.date.toISOString(),
+    })
+    return null
+  }
+
+  // Find or create the counterparty (null = user's own email, skip)
+  const cp = await findOrCreateCP(userId, senderEmail, senderName || undefined)
+  if (!cp) return null
+
+  // Create the message record
+  const messageId = uuidv4()
+  await createMessage({
+    id: messageId,
+    user_id: userId,
+    cp_id: cp.id,
+    external_id: email.id,
+    external_thread_id: email.threadId,
+    universal_message_id: email.id,
+    direction: 'inbound',
+    raw_text: email.body,
+    cleaned_text: email.body.slice(0, 5000),
+    tag_primary: classification.category,
+    tag_secondary: classification.priority,
+    timestamp: email.date.toISOString(),
+    occurred_at: email.date.toISOString(),
+  })
+
+  // Generate and save message embedding
+  try {
+    const embedding = await generateMessageEmbedding(email.body)
+    await saveMessageEmbedding(messageId, embedding)
+  } catch (error) {
+    console.error(`Failed to generate embedding for message ${messageId}:`, error)
+  }
+
+  return {
+    id: messageId,
+    email,
+    cpId: cp.id,
+    isActionable: classification.isActionable,
+    category: classification.category,
+    priority: classification.priority,
+  }
 }
 
 /**
@@ -277,63 +301,21 @@ export async function ingestOutboundEmails(
       after: since,
     })
 
-    for (const email of sentEmails) {
-      try {
-        // Skip if already processed
-        if (await messageExists(userId, email.id)) {
-          continue
+    // Process outbound emails in parallel batches
+    const OUTBOUND_CONCURRENCY = 5
+
+    for (let i = 0; i < sentEmails.length; i += OUTBOUND_CONCURRENCY) {
+      const chunk = sentEmails.slice(i, i + OUTBOUND_CONCURRENCY)
+      const results = await Promise.allSettled(
+        chunk.map(email => processOneOutboundEmail(email, userId, userEmail))
+      )
+
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value) {
+          ingested++
+        } else if (result.status === 'rejected') {
+          console.error('[Ingest] Parallel outbound processing failed:', result.reason)
         }
-
-        // Sender is the user — extract recipients
-        const senderEmail = extractEmailAddress(email.from)
-        if (!isSameGmailAddress(senderEmail, userEmail)) {
-          continue // Not from user, skip
-        }
-
-        // Get the first recipient as CP
-        if (!email.to || email.to.length === 0) continue
-        const recipientEmail = extractEmailAddress(email.to[0])
-        const recipientName = extractName(email.to[0])
-
-        // Skip if recipient is the user themselves
-        if (isSameGmailAddress(recipientEmail, userEmail)) continue
-
-        // Skip blocked senders (in case user replies to automated)
-        if (isBlockedSender(recipientEmail)) continue
-
-        // Find or create CP for the recipient (null = user's own email, skip)
-        const cp = await findOrCreateCP(userId, recipientEmail, recipientName || undefined)
-        if (!cp) continue
-
-        // Create the message record as outbound
-        const messageId = uuidv4()
-        await createMessage({
-          id: messageId,
-          user_id: userId,
-          cp_id: cp.id,
-          external_id: email.id,
-          external_thread_id: email.threadId,
-          universal_message_id: email.id,
-          direction: 'outbound',
-          raw_text: email.body,
-          cleaned_text: email.body.slice(0, 5000),
-          tag_primary: 'outbound',
-          tag_secondary: null,
-          timestamp: email.date.toISOString(),
-          occurred_at: email.date.toISOString(),
-        })
-
-        // Generate and save message embedding
-        try {
-          const embedding = await generateMessageEmbedding(email.body)
-          await saveMessageEmbedding(messageId, embedding)
-        } catch (error) {
-          console.error(`Failed to generate embedding for outbound message ${messageId}:`, error)
-        }
-
-        ingested++
-      } catch (error) {
-        console.error(`Error processing outbound email ${email.id}:`, error)
       }
     }
   } catch (error) {
@@ -341,4 +323,68 @@ export async function ingestOutboundEmails(
   }
 
   return ingested
+}
+
+/**
+ * Process a single outbound email: dedup check → store → embed.
+ * Extracted to enable parallel processing.
+ */
+async function processOneOutboundEmail(
+  email: EmailMessage,
+  userId: string,
+  userEmail: string
+): Promise<boolean> {
+  // Skip if already processed
+  if (await messageExists(userId, email.id)) {
+    return false
+  }
+
+  // Sender is the user — extract recipients
+  const senderEmail = extractEmailAddress(email.from)
+  if (!isSameGmailAddress(senderEmail, userEmail)) {
+    return false // Not from user, skip
+  }
+
+  // Get the first recipient as CP
+  if (!email.to || email.to.length === 0) return false
+  const recipientEmail = extractEmailAddress(email.to[0])
+  const recipientName = extractName(email.to[0])
+
+  // Skip if recipient is the user themselves
+  if (isSameGmailAddress(recipientEmail, userEmail)) return false
+
+  // Skip blocked senders (in case user replies to automated)
+  if (isBlockedSender(recipientEmail)) return false
+
+  // Find or create CP for the recipient (null = user's own email, skip)
+  const cp = await findOrCreateCP(userId, recipientEmail, recipientName || undefined)
+  if (!cp) return false
+
+  // Create the message record as outbound
+  const messageId = uuidv4()
+  await createMessage({
+    id: messageId,
+    user_id: userId,
+    cp_id: cp.id,
+    external_id: email.id,
+    external_thread_id: email.threadId,
+    universal_message_id: email.id,
+    direction: 'outbound',
+    raw_text: email.body,
+    cleaned_text: email.body.slice(0, 5000),
+    tag_primary: 'outbound',
+    tag_secondary: null,
+    timestamp: email.date.toISOString(),
+    occurred_at: email.date.toISOString(),
+  })
+
+  // Generate and save message embedding
+  try {
+    const embedding = await generateMessageEmbedding(email.body)
+    await saveMessageEmbedding(messageId, embedding)
+  } catch (error) {
+    console.error(`Failed to generate embedding for outbound message ${messageId}:`, error)
+  }
+
+  return true
 }

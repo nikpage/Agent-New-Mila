@@ -79,13 +79,24 @@ export async function trackLeadsForUser(userId: string): Promise<LeadTrackingRes
 
     result.conversationsScanned = conversations.length
 
-    for (const conversation of conversations) {
-      try {
-        await processConversationForLeadTracking(conversation, userId, result, settings)
-      } catch (error) {
-        result.errors.push(
-          `Conv ${conversation.id}: ${error instanceof Error ? error.message : 'Unknown error'}`
+    // Process conversations in parallel batches — each conversation is
+    // independent (different CPs, different actions) so safe to parallelize.
+    const LEAD_TRACKING_CONCURRENCY = 10
+
+    for (let i = 0; i < conversations.length; i += LEAD_TRACKING_CONCURRENCY) {
+      const chunk = conversations.slice(i, i + LEAD_TRACKING_CONCURRENCY)
+      const results = await Promise.allSettled(
+        chunk.map(conv =>
+          processConversationForLeadTracking(conv, userId, result, settings)
         )
+      )
+
+      for (const r of results) {
+        if (r.status === 'rejected') {
+          result.errors.push(
+            `Lead tracking: ${r.reason instanceof Error ? r.reason.message : 'Unknown error'}`
+          )
+        }
       }
     }
   } catch (error) {

@@ -257,16 +257,26 @@ export async function processMessagesForThreading(
 ): Promise<Map<string, ConversationThread>> {
   const conversations = new Map<string, ConversationThread>()
 
-  for (const message of messages) {
-    if (message.conversation_id) {
-      // Already assigned
-      const conv = await getConversationById(message.conversation_id)
-      if (conv) {
-        conversations.set(conv.id, conv)
-      }
-      continue
-    }
+  // Separate pre-assigned messages (cheap parallel DB lookups) from
+  // unassigned messages (must be serial to avoid duplicate conversation creation)
+  const preAssigned = messages.filter(m => m.conversation_id)
+  const unassigned = messages.filter(m => !m.conversation_id)
 
+  // Batch-fetch pre-assigned conversations in parallel
+  if (preAssigned.length > 0) {
+    const convResults = await Promise.allSettled(
+      preAssigned.map(m => getConversationById(m.conversation_id!))
+    )
+    for (const result of convResults) {
+      if (result.status === 'fulfilled' && result.value) {
+        conversations.set(result.value.id, result.value)
+      }
+    }
+  }
+
+  // Process unassigned messages serially (assignToConversation may create
+  // new conversations, so parallel processing could produce duplicates)
+  for (const message of unassigned) {
     const conversation = await assignToConversation(message)
     conversations.set(conversation.id, conversation)
   }
@@ -287,19 +297,18 @@ export async function getConversationContext(conversationId: string): Promise<{
 
   const messages = await getRecentMessages(conversationId, 50)
 
-  // Get unique participant CPs
+  // Get unique participant CPs — fetch in parallel
   const cpIds = new Set<string>()
   for (const msg of messages) {
     if (msg.cp_id) cpIds.add(msg.cp_id)
   }
 
-  const participants: string[] = []
-  for (const cpId of cpIds) {
-    const cp = await getCPById(cpId)
-    if (cp) {
-      participants.push(cp.name || cp.primary_identifier)
-    }
-  }
+  const cpResults = await Promise.all(
+    Array.from(cpIds).map(cpId => getCPById(cpId))
+  )
+  const participants: string[] = cpResults
+    .filter((cp): cp is NonNullable<typeof cp> => cp !== null)
+    .map(cp => cp.name || cp.primary_identifier)
 
   return { conversation, messages, participants }
 }

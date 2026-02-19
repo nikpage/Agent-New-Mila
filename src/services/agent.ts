@@ -11,6 +11,7 @@ import { trackLeadsForUser } from './lead-tracking'
 import { getUnprocessedMessages } from '@/lib/db/messages'
 import { getUserById } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
+import { tryAcquireUserLock, releaseUserLock } from '@/lib/db/locks'
 import type { ActionProposal } from '@/lib/supabase/types'
 
 export interface AgentRunResult {
@@ -30,14 +31,9 @@ export interface AgentRunResult {
 }
 
 /**
- * Per-user concurrency lock.
- * Prevents two simultaneous agent runs for the same user (e.g. cron + email-open
- * or double cron fire) which would cause duplicate messages, CPs, and actions.
- *
- * Key = userId, Value = true while running.
- * In-memory is fine: Vercel serverless can't share state across instances,
- * so the worst case is two cold-start instances both run — but that's far
- * better than the current situation where EVERY concurrent call runs.
+ * In-memory fallback lock — used when the DB-based lock table doesn't exist yet.
+ * Once the user_agent_locks migration has been applied, this is only reached
+ * if the DB insert itself throws (network error, etc.).
  */
 const runningUsers = new Map<string, true>()
 
@@ -45,24 +41,44 @@ const runningUsers = new Map<string, true>()
  * Run the full agent pipeline for a user
  */
 export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
-  // Per-user concurrency guard
+  const emptyResult: AgentRunResult = {
+    success: true,
+    emailsIngested: 0,
+    whatsappMessagesProcessed: 0,
+    calendarEventsSynced: 0,
+    calendarInvitationsDetected: 0,
+    messagesProcessed: 0,
+    conversationsUpdated: 0,
+    actionsGenerated: 0,
+    followUpsGenerated: 0,
+    coolingLeads: 0,
+    coldLeads: 0,
+    actions: [],
+    errors: ['Skipped — concurrent run already in progress'],
+  }
+
+  // --- Per-user concurrency guard (DB-level, works across Vercel instances) ---
+  let dbLockAcquired = false
+  let dbLockAvailable = true // false if the lock table doesn't exist yet
+
+  try {
+    dbLockAcquired = await tryAcquireUserLock(userId)
+  } catch {
+    // DB lock table may not exist yet — fall back to in-memory
+    dbLockAvailable = false
+    console.warn('[Agent] DB lock unavailable, falling back to in-memory lock')
+  }
+
+  if (!dbLockAcquired && dbLockAvailable) {
+    // DB lock exists but is held by another instance — skip
+    console.warn(`[Agent] Skipping — pipeline already running for ${userId} (cross-instance)`)
+    return emptyResult
+  }
+
+  // In-memory guard (primary lock when DB is unavailable, secondary when it is)
   if (runningUsers.has(userId)) {
     console.warn(`[Agent] Skipping — pipeline already running for ${userId}`)
-    return {
-      success: true,
-      emailsIngested: 0,
-      whatsappMessagesProcessed: 0,
-      calendarEventsSynced: 0,
-      calendarInvitationsDetected: 0,
-      messagesProcessed: 0,
-      conversationsUpdated: 0,
-      actionsGenerated: 0,
-      followUpsGenerated: 0,
-      coolingLeads: 0,
-      coldLeads: 0,
-      actions: [],
-      errors: ['Skipped — concurrent run already in progress'],
-    }
+    return emptyResult
   }
 
   runningUsers.set(userId, true)
@@ -104,37 +120,43 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       result.errors.push(`Purge: ${purgeError instanceof Error ? purgeError.message : 'Unknown error'}`)
     }
 
-    // Step 2: Ingest new emails (inbound)
-    try {
-      const ingestedMessages = await ingestEmailsForUser(userId)
-      result.emailsIngested = ingestedMessages.length
-    } catch (ingestError) {
-      console.error('[Agent] Email ingestion error:', ingestError)
-      result.errors.push(`Email ingestion: ${ingestError instanceof Error ? ingestError.message : 'Unknown error'}`)
+    // Steps 2, 2.1, 2.5 are INDEPENDENT ingestion steps — run in parallel.
+    // Inbound emails, outbound emails, and calendar sync don't depend on each other.
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000) // last 24 hours
+
+    const [inboundResult, outboundResult, calendarResult] = await Promise.allSettled([
+      ingestEmailsForUser(userId),
+      ingestOutboundEmails(userId, since),
+      ingestCalendarEvents(userId),
+    ])
+
+    // Collect inbound results
+    if (inboundResult.status === 'fulfilled') {
+      result.emailsIngested = inboundResult.value.length
+    } else {
+      console.error('[Agent] Email ingestion error:', inboundResult.reason)
+      result.errors.push(`Email ingestion: ${inboundResult.reason instanceof Error ? inboundResult.reason.message : 'Unknown error'}`)
     }
 
-    // Step 2.1: Ingest outbound emails (detect user-initiated meeting proposals)
-    try {
-      const since = new Date(Date.now() - 24 * 60 * 60 * 1000) // last 24 hours
-      const outboundCount = await ingestOutboundEmails(userId, since)
-      result.emailsIngested += outboundCount
-    } catch (outboundError) {
-      console.error('[Agent] Outbound email ingestion error:', outboundError)
-      result.errors.push(`Outbound ingestion: ${outboundError instanceof Error ? outboundError.message : 'Unknown error'}`)
+    // Collect outbound results
+    if (outboundResult.status === 'fulfilled') {
+      result.emailsIngested += outboundResult.value
+    } else {
+      console.error('[Agent] Outbound email ingestion error:', outboundResult.reason)
+      result.errors.push(`Outbound ingestion: ${outboundResult.reason instanceof Error ? outboundResult.reason.message : 'Unknown error'}`)
     }
 
-    // Step 2.5: Ingest calendar events and detect invitations
-    try {
-      const calendarResult = await ingestCalendarEvents(userId)
-      result.calendarEventsSynced = calendarResult.eventsSynced
-      result.calendarInvitationsDetected = calendarResult.invitationsDetected
-      result.actionsGenerated += calendarResult.actionsCreated
-      if (calendarResult.errors.length > 0) {
-        result.errors.push(...calendarResult.errors)
+    // Collect calendar results
+    if (calendarResult.status === 'fulfilled') {
+      result.calendarEventsSynced = calendarResult.value.eventsSynced
+      result.calendarInvitationsDetected = calendarResult.value.invitationsDetected
+      result.actionsGenerated += calendarResult.value.actionsCreated
+      if (calendarResult.value.errors.length > 0) {
+        result.errors.push(...calendarResult.value.errors)
       }
-    } catch (calendarError) {
-      console.error('[Agent] Calendar ingestion error:', calendarError)
-      result.errors.push(`Calendar ingestion: ${calendarError instanceof Error ? calendarError.message : 'Unknown error'}`)
+    } else {
+      console.error('[Agent] Calendar ingestion error:', calendarResult.reason)
+      result.errors.push(`Calendar ingestion: ${calendarResult.reason instanceof Error ? calendarResult.reason.message : 'Unknown error'}`)
     }
 
     // Step 3: Get all unprocessed messages (including newly ingested + WhatsApp)
@@ -182,7 +204,13 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     console.error('[Agent] Error:', error)
     result.errors.push(error instanceof Error ? error.message : 'Unknown error')
   } finally {
+    // Always release both locks
     runningUsers.delete(userId)
+    try {
+      await releaseUserLock(userId)
+    } catch {
+      console.error('[Agent] Failed to release DB lock for', userId)
+    }
   }
 
   return result
