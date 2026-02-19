@@ -19,18 +19,18 @@ export interface ModelChain {
 }
 
 export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
-  // Pre-filter / spam — cheapest, fastest model
+  // Pre-filter / spam — lite model (fast, cheap)
   preFilter: {
     primary: 'gemini-2.5-flash-lite',
-    fallback1: 'gemini-2.5-flash-lite',
-    fallback2: 'gemini-2.5-flash-lite',
+    fallback1: 'gemini-2.5-flash',
+    fallback2: 'gemini-2.5-flash',
   },
 
   // Classification — email category + priority
   classify: {
     primary: 'gemini-2.5-flash-lite',
-    fallback1: 'gemini-2.5-flash-lite',
-    fallback2: 'gemini-2.5-flash-lite',
+    fallback1: 'gemini-2.5-flash',
+    fallback2: 'gemini-2.5-flash',
   },
 
   // Threading — extractTopic, shouldJoinConversation
