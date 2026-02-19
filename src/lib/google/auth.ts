@@ -1,5 +1,6 @@
 import { google } from 'googleapis'
 import { getUserById, updateUserGoogleTokens, type GoogleTokens } from '../db/users'
+import { decryptTokens } from '../crypto'
 
 /**
  * In-memory OAuth token cache.
@@ -119,10 +120,25 @@ export async function getAuthenticatedClient(userId: string) {
 
   if (!tokens) {
     const user = await getUserById(userId)
-    if (!user?.google_oauth_tokens) {
+
+    // Try encrypted tokens first, fall back to plaintext
+    if (user?.encrypted_google_tokens) {
+      try {
+        tokens = decryptTokens(user.encrypted_google_tokens) as GoogleTokens
+      } catch (err) {
+        console.error('Failed to decrypt tokens for user', userId, '— falling back to plaintext:', err)
+        tokens = null as unknown as GoogleTokens
+      }
+    }
+
+    if (!tokens && user?.google_oauth_tokens) {
+      tokens = user.google_oauth_tokens as unknown as GoogleTokens
+    }
+
+    if (!tokens) {
       throw new Error('User has no Google OAuth tokens')
     }
-    tokens = user.google_oauth_tokens as unknown as GoogleTokens
+
     setCachedTokens(userId, tokens)
   }
 

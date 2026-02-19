@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getWhatsAppStatus } from '@/lib/whatsapp/sender'
 import { getUserSettings } from '@/lib/db/users'
+import { verifyApiKey } from '@/lib/auth/api'
 
 export const dynamic = 'force-dynamic'
 
@@ -10,6 +11,12 @@ export const dynamic = 'force-dynamic'
  * Used by the dashboard to show WA connection state.
  */
 export async function GET(request: NextRequest) {
+  // Verify API key
+  const authError = verifyApiKey(request)
+  if (authError) {
+    return authError
+  }
+
   const userId = request.nextUrl.searchParams.get('userId')
 
   if (!userId) {

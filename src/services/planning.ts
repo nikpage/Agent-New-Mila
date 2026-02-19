@@ -5,6 +5,7 @@ import {
 } from '@/lib/db/actions'
 import { getConversationById, getRecentMessages } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
+import { getLatestMessageFromCP } from '@/lib/db/messages'
 import { getUserSettings } from '@/lib/db/users'
 import { proposeMeeting } from './scheduling'
 import type {
@@ -151,11 +152,16 @@ export async function generateActionProposal(
       }
     }
 
-    const lastUpdate = conversation.last_updated
-      ? new Date(conversation.last_updated)
-      : new Date()
+    // Measure days since last INBOUND message from the counterparty,
+    // not conversation.last_updated (which resets on every summary rebuild).
+    const latestInbound = await getLatestMessageFromCP(conversation.user_id, cp.id)
+    const lastContactDate = latestInbound?.timestamp
+      ? new Date(latestInbound.timestamp)
+      : conversation.last_updated
+        ? new Date(conversation.last_updated)
+        : new Date()
     const daysIgnored = Math.floor(
-      (Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24)
+      (Date.now() - lastContactDate.getTime()) / (1000 * 60 * 60 * 24)
     )
 
     const priorityScore = calculatePriorityScore({

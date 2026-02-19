@@ -394,6 +394,7 @@ export interface Database {
           cp_id: string | null
           parent_event_id: string | null
           pre_block_group_id: string | null
+          google_event_id: string | null
           title: string | null
           description: string | null
           location: string | null
@@ -409,6 +410,7 @@ export interface Database {
           cp_id?: string | null
           parent_event_id?: string | null
           pre_block_group_id?: string | null
+          google_event_id?: string | null
           title?: string | null
           description?: string | null
           location?: string | null
@@ -424,6 +426,7 @@ export interface Database {
           cp_id?: string | null
           parent_event_id?: string | null
           pre_block_group_id?: string | null
+          google_event_id?: string | null
           title?: string | null
           description?: string | null
           location?: string | null

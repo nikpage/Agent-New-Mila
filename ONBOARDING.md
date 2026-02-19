@@ -135,7 +135,7 @@ The `qrCode` field contains the QR string. The user scans it with their phone's 
 curl http://localhost:3001/status/$UID_NIK
 
 # Also verify via the app
-curl "http://localhost:3000/api/whatsapp/status?userId=$UID_NIK"
+curl "http://localhost:3000/api/whatsapp/status?userId=$UID_NIK" -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local | cut -d'=' -f2-)"
 ```
 
 ### 6e. Enable WhatsApp in user settings
@@ -176,7 +176,7 @@ All commands below assume `$UID_NIK` is set and the app is running on `localhost
 | `/api/action/[id]/*` | Action Token | `?token=<hmac-token>` (from email links) |
 | `/api/superadmin/stats` | Query Param or Bearer | `?key=$SUPERADMIN_KEY` |
 | `/api/health` | None | — |
-| `/api/whatsapp/status` | None | `?userId=$UID_NIK` |
+| `/api/whatsapp/status` | API Key | `x-api-key: $MILA_USER_API_KEY` + `?userId=$UID_NIK` |
 
 ### WhatsApp Daemon (port 3001)
 

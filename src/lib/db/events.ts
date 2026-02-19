@@ -433,6 +433,73 @@ export function calculateEventScore(params: {
 }
 
 /**
+ * Upsert an event by its Google Calendar event ID.
+ * If an event with the given google_event_id + user_id exists, update it.
+ * If not, create a new event with google_event_id set.
+ */
+export async function upsertEventByGoogleId(
+  googleEventId: string,
+  userId: string,
+  updates: Partial<EventInsert>
+): Promise<Event> {
+  const supabase = getSupabaseAdmin()
+
+  // Check if an event with this google_event_id already exists for this user
+  const { data: existing, error: lookupError } = await supabase
+    .from('events')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('google_event_id', googleEventId)
+    .limit(1)
+
+  if (lookupError) {
+    throw new Error(`Failed to look up event by google_event_id: ${lookupError.message}`)
+  }
+
+  if (existing && existing.length > 0) {
+    // Update existing event
+    const existingEvent = existing[0]
+    const { data, error } = await supabase
+      .from('events')
+      .update({
+        ...updates,
+        // Never overwrite these fields on update
+        user_id: undefined,
+        id: undefined,
+        created_at: undefined,
+        google_event_id: undefined,
+      })
+      .eq('id', existingEvent.id)
+      .select()
+      .single()
+
+    if (error) {
+      throw new Error(`Failed to update event by google_event_id: ${error.message}`)
+    }
+
+    return data
+  }
+
+  // Create new event with google_event_id
+  const { data, error } = await supabase
+    .from('events')
+    .insert({
+      ...updates,
+      user_id: userId,
+      google_event_id: googleEventId,
+      created_at: new Date().toISOString(),
+    })
+    .select()
+    .single()
+
+  if (error) {
+    throw new Error(`Failed to create event with google_event_id: ${error.message}`)
+  }
+
+  return data
+}
+
+/**
  * Get all events that are children of a parent event (travel buffers, etc.)
  */
 export async function getChildEvents(parentEventId: string): Promise<Event[]> {

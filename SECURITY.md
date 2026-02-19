@@ -150,11 +150,12 @@ All secret comparisons use `crypto.timingSafeEqual`:
 
 ## ⚠️ KNOWN RISKS & MITIGATIONS
 
-### 🔴 HIGH RISK: OAuth Tokens in Plaintext
+### 🟡 MEDIUM RISK: OAuth Token Encryption Migration In Progress
 
 **Current State:**
-- Gmail/Calendar access tokens stored unencrypted in `users.google_oauth_tokens` (JSONB column)
-- `encrypted_google_tokens` column exists but `getAuthenticatedClient()` does not read it yet
+- Tokens now encrypted with AES-256-GCM and written to `users.encrypted_google_tokens`
+- Plaintext `users.google_oauth_tokens` still written (dual-write) for safe rollback
+- `getAuthenticatedClient()` reads encrypted first, falls back to plaintext
 - Refresh tokens valid until revoked (persistent access)
 
 **Impact if compromised:** CATASTROPHIC
@@ -389,11 +390,14 @@ All secret comparisons use `crypto.timingSafeEqual`:
 - [x] **Pipeline error isolation** — each step wrapped in try/catch; Gmail failure no longer kills threading/planning/lead-tracking
 - [x] **Non-actionable email loop** — classified emails now stored as minimal records to prevent re-classification every run
 - [x] **Timezone parsing hardened** — replaced fragile `toLocaleString` date parsing with `Intl.DateTimeFormat.formatToParts`
-
-### Before 10th Customer (CRITICAL)
-- [ ] **Encrypt OAuth tokens** (Supabase Vault or app-level) - 3 hours
-  - **Why:** Plaintext tokens = catastrophic if leaked
-  - **How:** Supabase Vault or AES encryption with `NEXTAUTH_SECRET`
+- [x] **OAuth token encryption** — AES-256-GCM via `src/lib/crypto.ts`, key derived from `NEXTAUTH_SECRET` via HKDF. Dual-write to both columns; reads encrypted first, falls back to plaintext.
+- [x] **Health endpoint hardened** — returns generic status messages, no env var names or raw DB errors
+- [x] **Sentry test endpoint removed** — `/api/sentry-test` deleted (was unauthenticated, could exhaust Sentry quota)
+- [x] **WhatsApp status endpoint auth** — `/api/whatsapp/status` now requires API key
+- [x] **Calendar invitation CP filter** — invitations attached to correct conversation (filtered by CP, not random `limit(1)`)
+- [x] **daysIgnored fix** — measures last inbound CP message, not `conversation.last_updated`
+- [x] **Settings merge** — `updateUserSettings` now merges with existing settings instead of overwriting
+- [x] **Calendar event dedup** — uses stable `google_event_id` instead of fragile `(start, end, title)` match
 
 ### Before 20th Customer — GDPR Compliance
 - [ ] **User data deletion endpoint** (Right to be Forgotten, GDPR Art. 17) - 4 hours

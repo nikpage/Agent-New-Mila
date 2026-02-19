@@ -1,6 +1,7 @@
 import { getSupabaseAdmin } from '../supabase/client'
 import type { User, UserInsert, UserSettings } from '../supabase/types'
 import { DEFAULT_USER_SETTINGS } from '../supabase/types'
+import { encryptTokens } from '../crypto'
 
 export interface GoogleTokens {
   access_token: string
@@ -87,16 +88,24 @@ export async function upsertUser(user: UserInsert): Promise<User> {
 }
 
 /**
- * Update user's Google OAuth tokens
+ * Update user's Google OAuth tokens.
+ * Dual-writes: plaintext (google_oauth_tokens) + encrypted (encrypted_google_tokens).
+ * This allows safe rollback — the plaintext column stays in sync until we remove it.
  */
 export async function updateUserGoogleTokens(
   userId: string,
   tokens: GoogleTokens
 ): Promise<void> {
   const supabase = getSupabaseAdmin()
+
+  const encrypted = encryptTokens(tokens)
+
   const { error } = await supabase
     .from('users')
-    .update({ google_oauth_tokens: tokens as unknown as Record<string, unknown> })
+    .update({
+      google_oauth_tokens: tokens as unknown as Record<string, unknown>,
+      encrypted_google_tokens: encrypted,
+    })
     .eq('id', userId)
 
   if (error) {
@@ -168,16 +177,22 @@ export async function getUsersDueBrief(
 }
 
 /**
- * Update user settings
+ * Update user settings (merges new settings with existing ones)
  */
 export async function updateUserSettings(
   userId: string,
   settings: Record<string, unknown>
 ): Promise<void> {
   const supabase = getSupabaseAdmin()
+
+  // Read current settings so we can merge rather than overwrite
+  const user = await getUserById(userId)
+  const existing = (user?.settings as Record<string, unknown>) || {}
+  const merged = { ...existing, ...settings }
+
   const { error } = await supabase
     .from('users')
-    .update({ settings })
+    .update({ settings: merged })
     .eq('id', userId)
 
   if (error) {

@@ -15,11 +15,13 @@ import {
   getEventsInRange,
   getEventById,
   updateEvent,
+  upsertEventByGoogleId,
 } from '@/lib/db/events'
 import { calculateEventScore } from '@/lib/db/events'
 import { getUserById } from '@/lib/db/users'
 import { getUserSettings } from '@/lib/db/users'
 import { getCPByIdentifier, findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
+import { addParticipant } from '@/lib/db/conversations'
 import { createAction, hasPendingAction, calculatePriorityScore } from '@/lib/db/actions'
 import { isPersonalEvent } from '@/config/client'
 import type { UserSettings } from '@/lib/supabase/types'
@@ -101,35 +103,15 @@ export async function ingestCalendarEvents(
 }
 
 /**
- * Sync a Google Calendar event to the local events table
+ * Sync a Google Calendar event to the local events table.
+ * Uses the stable Google event ID for deduplication instead of the fragile
+ * (start_time, end_time, title) match.
  */
 async function syncGoogleEventToLocal(
   userId: string,
   gcalEvent: CalendarEvent,
   timezone: string
 ): Promise<void> {
-  const supabase = getSupabaseAdmin()
-
-  // Check if event already exists locally (by matching time range and title)
-  const { data: existing } = await supabase
-    .from('events')
-    .select('id')
-    .eq('user_id', userId)
-    .eq('start_time', gcalEvent.startTime.toISOString())
-    .eq('end_time', gcalEvent.endTime.toISOString())
-    .eq('title', gcalEvent.summary)
-    .limit(1)
-
-  if (existing && existing.length > 0) {
-    // Event already synced, update status if changed
-    await updateEvent(existing[0].id, {
-      status: gcalEvent.status === 'cancelled' ? 'cancelled' : 'confirmed',
-      location: gcalEvent.location || null,
-      description: gcalEvent.description || null,
-    })
-    return
-  }
-
   // Find CP from attendees (if any)
   let cpId: string | null = null
   if (gcalEvent.attendees && gcalEvent.attendees.length > 0) {
@@ -154,16 +136,11 @@ async function syncGoogleEventToLocal(
     }
   }
 
-  // Create local event record
-  // User-created events get default weight = 100
-  const isUserCreated = gcalEvent.organizer?.email?.toLowerCase() === (await getUserById(userId))?.email?.toLowerCase()
-  const score = calculateEventScore({
-    weight: isUserCreated ? 100 : 50,
-    isUserCreated,
-  })
-
-  await createEvent({
-    user_id: userId,
+  // Upsert using the stable Google Calendar event ID.
+  // If the event already exists locally (matched by google_event_id + user_id),
+  // it will be updated with the latest values from Google Calendar.
+  // If it's new, a fresh record is created with google_event_id set.
+  await upsertEventByGoogleId(gcalEvent.id, userId, {
     cp_id: cpId,
     title: gcalEvent.summary,
     description: gcalEvent.description || null,
@@ -225,19 +202,33 @@ async function processInvitation(
 
   if ((count || 0) > 0) return false
 
-  // We need a conversation_id - check if there's an existing conversation with this CP
-  const { data: existingConv } = await supabase
-    .from('conversation_threads')
-    .select('id')
-    .eq('user_id', userId)
-    .limit(1)
+  // We need a conversation_id - find an existing conversation with this CP
+  // First, find thread IDs where this CP is a participant
+  const { data: cpThreads } = await supabase
+    .from('thread_participants')
+    .select('thread_id')
+    .eq('cp_id', cp.id)
 
-  // If no conversation exists, we need to create a minimal one for the action
-  let conversationId: string
-  if (existingConv && existingConv.length > 0) {
-    conversationId = existingConv[0].id
-  } else {
-    // Create a minimal conversation thread for this calendar invite
+  let conversationId: string | null = null
+
+  if (cpThreads && cpThreads.length > 0) {
+    // Find a conversation thread that belongs to this user AND has this CP as participant
+    const threadIds = cpThreads.map((t: { thread_id: string }) => t.thread_id)
+    const { data: existingConv } = await supabase
+      .from('conversation_threads')
+      .select('id')
+      .eq('user_id', userId)
+      .in('id', threadIds)
+      .order('last_updated', { ascending: false })
+      .limit(1)
+
+    if (existingConv && existingConv.length > 0) {
+      conversationId = existingConv[0].id
+    }
+  }
+
+  // If no conversation exists for this CP, create a new one and link the CP as participant
+  if (!conversationId) {
     const convId = uuidv4()
     await supabase
       .from('conversation_threads')
@@ -251,6 +242,7 @@ async function processInvitation(
         message_count: 0,
         messages_since_rebuild: 0,
       })
+    await addParticipant(convId, cp.id)
     conversationId = convId
   }
 

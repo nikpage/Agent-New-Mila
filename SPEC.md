@@ -240,10 +240,9 @@ Every AI prompt receives the user's business context via `getAISystemPrompt(sett
 | `GET /api/auth/connect` | None | Start Google OAuth flow |
 | `GET /api/auth/callback` | None | OAuth callback |
 | `GET /api/health` | None | Health check |
-| `GET /api/whatsapp/status` | None | WhatsApp daemon status |
+| `GET /api/whatsapp/status` | API Key | WhatsApp daemon status |
 | `GET /api/superadmin/stats` | Superadmin Key | System stats |
 | `GET /api/trigger/ingest` | Trigger Token (HMAC) | Tracking pixel — triggers agent run on email open |
-| `GET /api/sentry-test` | None | Debug endpoint — triggers test Sentry error |
 
 ## Security
 
@@ -252,7 +251,7 @@ Every AI prompt receives the user's business context via `getAISystemPrompt(sett
 - **Action Token** (HMAC-signed, time-limited) — protects action links in emails
 - **Superadmin Key** — protects admin dashboard
 - **RLS** — Supabase row-level security on all tables; API uses service key so MUST manually filter by `user_id`
-- **OAuth tokens** — migrating from plaintext JSONB to encrypted storage
+- **OAuth tokens** — AES-256-GCM encrypted (dual-write: plaintext + encrypted columns, reads encrypted first)
 
 ## Database
 
@@ -277,6 +276,6 @@ PostgreSQL via Supabase with pgvector extension for embeddings.
 - **WhatsApp group monitoring** — Baileys daemon skips group messages
 - **Offer multiplier wiring** — `planning.ts` doesn't yet pass `offerMultiplier` to `calculatePriorityScore()`
 - **Weight in proposals** — `weight` field not set during proposal generation
-- **OAuth token encryption** — tokens stored as plaintext JSONB; migration to `encrypted_google_tokens` column started but `getAuthenticatedClient` still reads plaintext only
+- **OAuth token encryption cleanup** — dual-write is active (plaintext + encrypted); plaintext column can be dropped once all users have refreshed tokens at least once
 - **GDPR compliance** — no data deletion endpoint, no data export, no audit logs, no retention policy
 - **Test framework** — no tests configured; `npm run build` is the verification method
