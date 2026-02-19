@@ -50,7 +50,7 @@ src/
 │   ├── api/agent/run/          # Main agent orchestration endpoint
 │   ├── api/action/[id]/        # Action CRUD + execute/draft/todo/blacklist
 │   ├── api/auth/               # OAuth connect + callback
-│   ├── api/cron/morning-brief/ # Daily 8 AM cron
+│   ├── api/cron/morning-brief/ # Every-30-min cron (per-user timezone briefs)
 │   ├── api/ingest/             # Manual email/calendar ingestion (+ /bulk)
 │   ├── api/health/             # Health check
 │   ├── api/whatsapp/status/    # WhatsApp daemon status proxy
@@ -73,14 +73,16 @@ src/
 │   ├── supabase/               # Client + types (types.ts = 593 lines)
 │   ├── ai/
 │   │   ├── gemini.ts           # AI functions (preFilter, classify, proposeAction, generateFinalDraft, etc.)
-│   │   ├── runner.ts           # runAITask() with 3-model fallback chain
-│   │   └── providers/          # gemini.ts, types.ts, index.ts — provider abstraction
+│   │   ├── runner.ts           # runAITask() with 3-model fallback + 429 retry
+│   │   └── providers/          # gemini.ts (multi-key rotation), types.ts, index.ts
+│   ├── qstash/
+│   │   └── client.ts           # QStash per-user brief scheduling (morning + afternoon)
 │   ├── whatsapp/
 │   │   ├── types.ts            # WAIncomingMessage, WASendRequest, normalizePhoneNumber, etc.
 │   │   ├── sender.ts           # sendWhatsAppMessage(), getWhatsAppStatus() — talks to daemon
 │   │   └── index.ts            # Barrel re-export
 │   ├── auth/
-│   │   ├── tokens.ts           # OAuth state, action tokens, cron validation
+│   │   ├── tokens.ts           # OAuth state, action tokens, cron validation, trigger tokens
 │   │   └── api.ts              # API key verification middleware
 │   └── holidays.ts             # Holiday calendar
 │
@@ -138,7 +140,7 @@ Instead of reading these files, use this index:
 
 | File | Contents |
 |------|----------|
-| `users.ts` | `getUserById`, `getUserByEmail`, `createUser`, `updateUser`, `getUserSettings`, `updateUserSettings`, `getUsersWithEmailEnabled` |
+| `users.ts` | `getUserById`, `getUserByEmail`, `upsertUser`, `getUserSettings`, `updateUserSettings`, `getUsersWithEmailEnabled`, `getUsersDueBrief`, `updateUserGoogleTokens`, `getUserGoogleTokens` |
 | `counterparties.ts` | `getCPById`, `getCPByIdentifier`, `createCP`, `updateCP`, `getCPsForUser`, `findOrCreateCP`, `isSameGmailAddress`, `purgeUserAsCp` |
 | `conversations.ts` | `getConversationById`, `createConversation`, `updateConversation`, `getConversationsForUser`, `addParticipant`, `getRecentMessages`, `findConversationByExternalThread` |
 | `messages.ts` | `getMessageById`, `createMessage`, `getMessagesForConversation`, `getUnprocessedMessages` |
@@ -199,7 +201,8 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 | **Travel** | `travel_mode`, `home_location`, `office_location` | driving |
 | **Priorities** | `offer_multiplier_seller`, `offer_multiplier_buyer`, `priority_multiplier_vip`, `kc_factor` | 1.5, 1.0, 2.0, 13 |
 | **AI Persona** | `ai_tone_user`, `ai_tone_cp`, `user_alias` | Professional, Polite, "User" |
-| **Misc** | `morning_brief_time`, `default_delegate_email`, `todo_auto_due_days` | 08:00, null, 1 |
+| **Briefs** | `morning_brief_time`, `afternoon_brief_time` | 08:00, 13:00 |
+| **Misc** | `default_delegate_email`, `todo_auto_due_days` | null, 1 |
 
 **Note:** `ai_tone_user`, `ai_tone_cp`, `user_alias` in user settings DB are NOT used. The AI persona is configured via `src/config/client.ts` → `ai` section instead.
 
@@ -267,20 +270,22 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 ## AI Model Configuration
 
 **Config:** `src/config/ai-models.ts` — 6 pipeline stages, each with 3-model fallback chain.
-**Runner:** `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, logs which model succeeded.
+**Runner:** `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, retries 429s with exponential backoff (1s, 2s, 4s), logs which model succeeded.
 
 | Stage | Purpose | Primary → Fallback1 → Fallback2 |
 |-------|---------|----------------------------------|
-| `preFilter` | Spam detection | `gemini-2.5-flash` → `2.0-flash` → `1.5-flash` |
-| `classify` | Email category + priority | same chain |
-| `threading` | extractTopic, shouldJoinConversation | same chain |
-| `analysis` | analyzeConversation | same chain |
-| `planning` | proposeAction (type, rationale, intent) | same chain |
-| `drafting` | generateFinalDraft, generateBriefHeadline | same chain |
+| `preFilter` | Spam detection | `gemini-2.5-flash-lite` → `2.5-flash` → `2.5-flash` |
+| `classify` | Email category + priority | `gemini-2.5-flash-lite` → `2.5-flash` → `2.5-flash` |
+| `threading` | extractTopic, shouldJoinConversation | `gemini-2.5-flash` → `2.5-flash` → `2.5-flash` |
+| `analysis` | analyzeConversation | same as threading |
+| `planning` | proposeAction (type, rationale, intent) | same as threading |
+| `drafting` | generateFinalDraft, generateBriefHeadline | same as threading |
+
+**Rate limit handling:** On 429/RESOURCE_EXHAUSTED errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
 
 **Embedding model:** `gemini-embedding-001` (768-dim, multilingual) — separate from chat, NO fallback chain.
 
-**Provider:** `src/lib/ai/providers/gemini.ts` — uses `@google/generative-ai` SDK with model caching.
+**Provider:** `src/lib/ai/providers/gemini.ts` — uses `@google/generative-ai` SDK with model caching. Supports **multi-key rotation** via `GEMINI_API_KEYS` (comma-separated) env var — round-robins across keys to spread rate-limit budget. Falls back to single `GEMINI_API_KEY` if not set.
 
 **Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()` and `generateFinalDraft()` prompts. Channel context (email vs WhatsApp) adjusts tone.
 
@@ -408,9 +413,31 @@ MILA_USER_API_KEY    # Unique per deployment (API protection)
 CRON_SECRET          # Protects cron endpoints
 NEXTAUTH_SECRET      # Token signing secret
 SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)
+GEMINI_API_KEYS      # Comma-separated Gemini keys for rotation (optional, falls back to GEMINI_API_KEY)
+QSTASH_TOKEN         # Upstash QStash token for per-user brief scheduling (optional)
 ```
 
 **SECURITY:** OAuth tokens migrating from `users.google_oauth_tokens` (plaintext jsonb) to `users.encrypted_google_tokens` (encrypted text). See `SECURITY.md`.
+
+## Morning/Afternoon Briefs
+
+### Cron Strategy
+- **Vercel cron** runs every 30 minutes (`*/30 * * * *` in `vercel.json`)
+- Each run calls `sendAllMorningBriefs()` which queries users whose configured brief time falls within the current 30-min window
+- `getUsersDueBrief(briefType, windowMinutes)` in `src/lib/db/users.ts` compares each user's `morning_brief_time`/`afternoon_brief_time` (in their timezone) against current time
+- Supports both `morning` and `afternoon` brief types via `?type=afternoon` query param
+
+### Per-User Scheduling (QStash)
+- **Optional upgrade**: `src/lib/qstash/client.ts` creates per-user QStash schedules that call the brief endpoint with `?userId=<id>` directly
+- `createBriefSchedules(userId, morningTime, afternoonTime, timezone)` → returns schedule IDs
+- `updateBriefSchedules()` / `deleteBriefSchedules()` for lifecycle management
+- Schedule IDs stored in user settings for cleanup
+- Requires `QSTASH_TOKEN` env var
+
+### Parallelized Sending
+- `sendAllMorningBriefs()` processes users in batches of 10 (`BRIEF_CONCURRENCY`)
+- Uses `Promise.allSettled()` for fault isolation — one user's failure doesn't block others
+- 5-minute function timeout (`maxDuration: 300`) handles ~100 users per invocation
 
 ## Error Monitoring (Sentry)
 - **Client-side:** Session replay + error tracking
