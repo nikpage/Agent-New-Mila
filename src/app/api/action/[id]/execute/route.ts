@@ -34,6 +34,14 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
+    // Idempotency: prevent double-execution (e.g. user double-clicks, network retry)
+    if (action.status !== 'pending' && action.status !== 'approved') {
+      return NextResponse.json(
+        { error: 'Action already executed', status: action.status },
+        { status: 409 }
+      )
+    }
+
     // Get user settings for AI context
     const settings = await getUserSettings(action.user_id)
 

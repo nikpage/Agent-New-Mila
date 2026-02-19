@@ -161,20 +161,16 @@ const actions = await supabase.from('action_proposals').select('*').eq('user_id'
 const actions = await supabase.from('action_proposals').select('*')
 ```
 
-## Per-Client Config (src/config/client.ts)
+## Per-User Config
 
-Single file customized per deployment. Contains:
-- **`client`** — name, company, email, phone, WhatsApp number
-- **`business`** — type, market, specialization, deal size range, high-value signals, low-priority signals
-- **`ai`** — assistant name, language, tone with user/counterparties, email signature, system context prompt
-- **`leads`** — cooling/cold/dead thresholds (days), max auto follow-ups, priority boost multipliers
-- **`whatsapp`** — enabled, session path, daemon port, blocked numbers, monitored groups
-- **`calendar`** — business/personal calendar IDs, personal event keywords
-- **`scoring`** — offer multipliers, VIP multiplier, KC factor
+All user configuration is stored in `users.settings` JSONB column. See `ONBOARDING.md` for the full settings reference. Configured via `scripts/configure-user.ts`.
 
-Exports: `clientConfig`, `getAISystemPrompt()`, `containsHighValueSignals(text)`, `isPersonalEvent(title)`.
+**`src/config/client.ts`** exports helper functions that take `UserSettings` as input:
+- `getAISystemPrompt(settings)` — builds the AI system prompt from user's business context
+- `containsHighValueSignals(text, settings)` — checks text against user's high-value keywords
+- `isPersonalEvent(title, settings)` — detects personal calendar events
 
-`getAISystemPrompt()` is injected into `proposeAction()` and `generateFinalDraft()` in `src/lib/ai/gemini.ts`.
+The `clientConfig` const object in this file is **legacy dead code** — not consumed at runtime. All runtime behavior reads from `UserSettings` via DB.
 
 ## Lead Tracking (src/services/lead-tracking.ts)
 
@@ -204,7 +200,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 | **Briefs** | `morning_brief_time`, `afternoon_brief_time` | 08:00, 13:00 |
 | **Misc** | `default_delegate_email`, `todo_auto_due_days` | null, 1 |
 
-**Note:** `ai_tone_user`, `ai_tone_cp`, `user_alias` in user settings DB are NOT used. The AI persona is configured via `src/config/client.ts` → `ai` section instead.
+**Note:** These settings are read at runtime via `getAISystemPrompt(settings)` in `src/config/client.ts`.
 
 ### Core Tables
 
@@ -246,7 +242,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 - `messages.thread_id` AND `messages.conversation_id` — both FK to `conversation_threads` (redundant)
 - `users.google_oauth_tokens` (jsonb) AND `users.encrypted_google_tokens` (text) — migration in progress
 - `conversation_threads.priority_score` — integer on thread vs numeric on action_proposals (different scales)
-- `users.settings.ai_tone_user/ai_tone_cp/user_alias` — unused, superseded by `src/config/client.ts`
+- `users.settings.ai_tone_user/ai_tone_cp/user_alias` — used at runtime via `getAISystemPrompt(settings)` in `client.ts`
 
 ## Priority Scoring
 

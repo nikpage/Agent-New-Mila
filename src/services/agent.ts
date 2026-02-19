@@ -97,11 +97,21 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     }
 
     // Step 0: The user is NOT a counterparty. Purge any bad rows.
-    await purgeUserAsCp(userId)
+    try {
+      await purgeUserAsCp(userId)
+    } catch (purgeError) {
+      console.error('[Agent] Purge error:', purgeError)
+      result.errors.push(`Purge: ${purgeError instanceof Error ? purgeError.message : 'Unknown error'}`)
+    }
 
     // Step 2: Ingest new emails (inbound)
-    const ingestedMessages = await ingestEmailsForUser(userId)
-    result.emailsIngested = ingestedMessages.length
+    try {
+      const ingestedMessages = await ingestEmailsForUser(userId)
+      result.emailsIngested = ingestedMessages.length
+    } catch (ingestError) {
+      console.error('[Agent] Email ingestion error:', ingestError)
+      result.errors.push(`Email ingestion: ${ingestError instanceof Error ? ingestError.message : 'Unknown error'}`)
+    }
 
     // Step 2.1: Ingest outbound emails (detect user-initiated meeting proposals)
     try {
@@ -128,22 +138,28 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     }
 
     // Step 3: Get all unprocessed messages (including newly ingested + WhatsApp)
-    const unprocessedMessages = await getUnprocessedMessages(userId)
-    result.messagesProcessed = unprocessedMessages.length
-    result.whatsappMessagesProcessed = unprocessedMessages.filter(
-      m => m.channel_id === 'whatsapp'
-    ).length
+    // Steps 3-5 depend on each other but are isolated from steps 2/2.5/6
+    try {
+      const unprocessedMessages = await getUnprocessedMessages(userId)
+      result.messagesProcessed = unprocessedMessages.length
+      result.whatsappMessagesProcessed = unprocessedMessages.filter(
+        m => m.channel_id === 'whatsapp'
+      ).length
 
-    // Step 4: Process messages into conversations
-    if (unprocessedMessages.length > 0) {
-      const conversations = await processMessagesForThreading(unprocessedMessages)
-      result.conversationsUpdated = conversations.size
+      // Step 4: Process messages into conversations
+      if (unprocessedMessages.length > 0) {
+        const conversations = await processMessagesForThreading(unprocessedMessages)
+        result.conversationsUpdated = conversations.size
 
-      // Step 5: Generate action proposals for updated conversations
-      const conversationIds = Array.from(conversations.keys())
-      const actions = await generateActionsForConversations(conversationIds)
-      result.actionsGenerated = actions.length
-      result.actions = actions
+        // Step 5: Generate action proposals for updated conversations
+        const conversationIds = Array.from(conversations.keys())
+        const actions = await generateActionsForConversations(conversationIds)
+        result.actionsGenerated += actions.length
+        result.actions = actions
+      }
+    } catch (processingError) {
+      console.error('[Agent] Message processing/threading/planning error:', processingError)
+      result.errors.push(`Processing: ${processingError instanceof Error ? processingError.message : 'Unknown error'}`)
     }
 
     // Step 6: Lead tracking — detect cooling/cold leads, create follow-up actions

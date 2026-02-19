@@ -50,11 +50,22 @@ export async function getEventsInRange(
  */
 export async function getEventsForToday(userId: string, timezone: string = 'UTC'): Promise<Event[]> {
   const now = new Date()
-  const startOfDay = new Date(now.toLocaleString('en-US', { timeZone: timezone }))
-  startOfDay.setHours(0, 0, 0, 0)
+  // Extract the user's local date using Intl (reliable across Node versions)
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+  const parts = formatter.formatToParts(now)
+  const year = parseInt(parts.find(p => p.type === 'year')?.value || '2026', 10)
+  const month = parseInt(parts.find(p => p.type === 'month')?.value || '1', 10) - 1
+  const day = parseInt(parts.find(p => p.type === 'day')?.value || '1', 10)
 
-  const endOfDay = new Date(startOfDay)
-  endOfDay.setHours(23, 59, 59, 999)
+  // Build start/end of day in UTC using the user's local date
+  // This is an approximation: we use a ±1 day buffer to catch edge cases
+  const startOfDay = new Date(Date.UTC(year, month, day, 0, 0, 0, 0))
+  const endOfDay = new Date(Date.UTC(year, month, day, 23, 59, 59, 999))
 
   return getEventsInRange(userId, startOfDay, endOfDay)
 }

@@ -52,13 +52,18 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     const events = await getEventsForToday(userId, user.email_timezone)
     const briefActions: BriefAction[] = []
 
-    for (const action of actions.slice(0, 10)) {
+    for (const action of actions) {
+      if (briefActions.length >= 10) break
+
       const [cp, conversation] = await Promise.all([
         getCPById(action.cp_id),
         getConversationById(action.conversation_id),
       ])
 
-      if (!cp || !conversation) continue
+      if (!cp || !conversation) {
+        console.warn(`[MorningBrief] Skipping orphaned action ${action.id} — missing cp=${action.cp_id} or conv=${action.conversation_id}`)
+        continue
+      }
 
       const token = generateActionToken(action.id, userId)
       const actionUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}`

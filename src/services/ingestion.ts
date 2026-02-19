@@ -189,8 +189,25 @@ export async function ingestEmailsForUser(
         email.from
       )
 
-      // Skip non-actionable emails entirely — no message stored without a CP
+      // Store non-actionable emails as a minimal record so we never re-classify them.
+      // No CP is created — we just need messageExists() to return true next run.
       if (!classification.isActionable) {
+        const skippedId = uuidv4()
+        await createMessage({
+          id: skippedId,
+          user_id: userId,
+          cp_id: null,
+          external_id: email.id,
+          external_thread_id: email.threadId,
+          universal_message_id: email.id,
+          direction: 'inbound',
+          raw_text: '',
+          cleaned_text: null,
+          tag_primary: 'non_actionable',
+          tag_secondary: classification.category || null,
+          timestamp: email.date.toISOString(),
+          occurred_at: email.date.toISOString(),
+        })
         continue
       }
 

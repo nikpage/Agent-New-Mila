@@ -145,9 +145,17 @@ export async function getUsersDueBrief(
       (briefType === 'morning' ? '08:00' : '13:00')
     const timezone = (settings?.timezone as string) || 'Europe/Prague'
 
-    // Get current HH:MM in user's timezone
-    const userNow = new Date(now.toLocaleString('en-US', { timeZone: timezone }))
-    const userMinutes = userNow.getHours() * 60 + userNow.getMinutes()
+    // Get current HH:MM in user's timezone using Intl (reliable across Node versions)
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    })
+    const parts = formatter.formatToParts(now)
+    const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '0', 10)
+    const minute = parseInt(parts.find(p => p.type === 'minute')?.value || '0', 10)
+    const userMinutes = hour * 60 + minute
 
     const [hours, minutes] = briefTime.split(':').map(Number)
     const briefMinutes = hours * 60 + minutes

@@ -10,9 +10,9 @@ Mila is not a chatbot. The user never "talks to" Mila. Instead, Mila watches all
 
 ## Business Model
 
-**Custom setup per client** — each deployment is configured for one business owner. Setup involves sitting with the client, understanding their business, and editing `src/config/client.ts` with their identity, business context, AI persona, and lead management thresholds.
+**Custom setup per client** — each user is configured during onboarding via `scripts/configure-user.ts`, which stores their identity, business context, AI persona, and lead management thresholds into the `users.settings` JSONB column.
 
-Each client gets their own Vercel deployment + Supabase project. There is no multi-tenant shared instance.
+**Deployment model:** Shared infrastructure — one Vercel deployment + one Supabase instance for all users. Data isolation is enforced via `user_id` filtering on all queries (service key bypasses RLS). See `SECURITY.md` for details.
 
 ## How It Works
 
@@ -111,33 +111,24 @@ Lead tracking actions get multiplied priority so they surface at the top of the 
 
 ### Thresholds
 
-All configurable in `src/config/client.ts`:
+Stored per-user in `users.settings` (see `ONBOARDING.md` > Lead Management):
 ```
-coolingThresholdDays: 2
-coldThresholdDays: 5
-deadThresholdDays: 14
-maxAutoFollowUps: 3
+cooling_threshold_days: 2
+cold_threshold_days: 5
+dead_threshold_days: 14
+max_auto_follow_ups: 3
 ```
 
-## Per-Client Configuration
+## Per-User Configuration
 
-`src/config/client.ts` is the single file customized during client setup. Contains:
+All per-user configuration is stored in the `users.settings` JSONB column and configured via `scripts/configure-user.ts`. See `ONBOARDING.md` for the full settings reference.
 
-| Section | What It Configures |
-|---------|--------------------|
-| `client` | Name, company, email, phone, WhatsApp number |
-| `business` | Market, specialization, typical deal size, high-value signals, low-priority signals |
-| `ai` | Assistant name, language, tone with user, tone with counterparties, email signature, full system context prompt |
-| `leads` | Cooling/cold/dead thresholds, max auto follow-ups, priority boost multipliers |
-| `whatsapp` | Enabled flag, session path, daemon port, blocked numbers, monitored groups |
-| `calendar` | Business calendar ID, personal calendar ID, personal event keywords |
-| `scoring` | Offer multipliers (seller/buyer), VIP multiplier, KC factor |
+`src/config/client.ts` contains helper functions that read from `UserSettings`:
+- `getAISystemPrompt(settings)` — assembles the system prompt from the user's business context, tone, and language settings
+- `containsHighValueSignals(text, settings)` — checks message text against the user's high-value keywords
+- `isPersonalEvent(title, settings)` — checks calendar event titles against personal keywords
 
-The `getAISystemPrompt()` function assembles the full context injected into every AI prompt — business description, market, deal range, tone instructions.
-
-`containsHighValueSignals(text)` checks message text against the client's high-value keywords.
-
-`isPersonalEvent(title)` checks calendar event titles against personal keywords (doctor, family, gym, etc.). Personal events block time but don't generate action proposals.
+The `clientConfig` object in that file is legacy and not consumed at runtime.
 
 ## Conversation Threading
 
@@ -200,7 +191,7 @@ All multipliers fall back to 1 if 0/null to prevent score collapse.
 | `planning` | Action proposal (type, rationale, intent) |
 | `drafting` | Final draft generation, morning brief headline |
 
-Current chain: `gemini-2.5-flash` -> `gemini-2.0-flash` -> `gemini-1.5-flash` for all stages.
+Current chain: `preFilter`/`classify` use `gemini-2.5-flash-lite` primary; all other stages use `gemini-2.5-flash`. Fallbacks currently repeat the same model (no cross-model redundancy).
 
 **Runner** (`src/lib/ai/runner.ts`): `runAITask(stage, prompt)` auto-cascades on failure, logs which model succeeded.
 
@@ -208,8 +199,8 @@ Current chain: `gemini-2.5-flash` -> `gemini-2.0-flash` -> `gemini-1.5-flash` fo
 
 ### Business Context Injection
 
-Every AI prompt receives the client's business context via `getAISystemPrompt()` from client config. This includes:
-- Who the client is and what they do
+Every AI prompt receives the user's business context via `getAISystemPrompt(settings)` (reads from `UserSettings` in DB). This includes:
+- Who the user is and what they do
 - Market and specialization
 - Typical deal size range
 - High-value signals to watch for
@@ -251,6 +242,8 @@ Every AI prompt receives the client's business context via `getAISystemPrompt()`
 | `GET /api/health` | None | Health check |
 | `GET /api/whatsapp/status` | None | WhatsApp daemon status |
 | `GET /api/superadmin/stats` | Superadmin Key | System stats |
+| `GET /api/trigger/ingest` | Trigger Token (HMAC) | Tracking pixel — triggers agent run on email open |
+| `GET /api/sentry-test` | None | Debug endpoint — triggers test Sentry error |
 
 ## Security
 
@@ -280,10 +273,10 @@ PostgreSQL via Supabase with pgvector extension for embeddings.
 
 ## What's Not Built Yet
 
-- **Multi-language support** — currently Czech only (hardcoded in prompts)
-- **WhatsApp group monitoring** — Baileys daemon skips group messages (TODO in code)
-- **Offer multiplier wiring** — `planning.ts` doesn't yet pass `offerMultiplier` from client config to `calculatePriorityScore()`
+- **Multi-language support** — currently Czech only (hardcoded in prompts, configurable via `ai_language` in user settings)
+- **WhatsApp group monitoring** — Baileys daemon skips group messages
+- **Offer multiplier wiring** — `planning.ts` doesn't yet pass `offerMultiplier` to `calculatePriorityScore()`
 - **Weight in proposals** — `weight` field not set during proposal generation
-- **Email encryption** — OAuth tokens migration from plaintext to encrypted is in progress
-- **User settings → AI tone wiring** — `ai_tone_user` / `ai_tone_cp` in user settings DB are NOT used; client config's `ai.toneWithUser` / `ai.toneWithCounterparties` are used instead
+- **OAuth token encryption** — tokens stored as plaintext JSONB; migration to `encrypted_google_tokens` column started but `getAuthenticatedClient` still reads plaintext only
+- **GDPR compliance** — no data deletion endpoint, no data export, no audit logs, no retention policy
 - **Test framework** — no tests configured; `npm run build` is the verification method

@@ -106,20 +106,20 @@ User clicks email link → Verifies token → Executes action → Done
 **Critical for shared database architecture**
 
 #### 7. OAuth Token Storage
-**Current state:** Plaintext in `users.google_tokens` JSONB column
+**Current state:** Plaintext in `users.google_oauth_tokens` JSONB column
 
 **Risk:** If `SUPABASE_SERVICE_KEY` leaks → all Gmail access compromised
 
 **Accepted for now:** Strong service key + Vercel env encryption + limited customer count (<20)
 
-#### 8. Health Endpoint Hardening
+#### 8. Health Endpoint (**NOT YET HARDENED**)
 **File:** `src/app/api/health/route.ts`
 
-- Returns generic "Configuration incomplete" instead of leaking env var names
-- Prevents reconnaissance attacks
+- **Current state:** Lists which specific env vars are present/absent by name and includes raw DB error messages
+- **TODO:** Return generic "Configuration incomplete" instead of leaking env var names
 
 #### 9. Error Monitoring
-**Sentry:** Client + server + edge runtime tracking
+**Sentry:** Client + server + edge runtime tracking. `sendDefaultPii: false` (no request bodies/headers sent). `tracesSampleRate: 0.1` (10% sampling).
 
 #### 10. Data Integrity: Atomic Counterparty Creation
 **File:** `src/lib/db/counterparties.ts`
@@ -153,7 +153,8 @@ All secret comparisons use `crypto.timingSafeEqual`:
 ### 🔴 HIGH RISK: OAuth Tokens in Plaintext
 
 **Current State:**
-- Gmail/Calendar access tokens stored unencrypted
+- Gmail/Calendar access tokens stored unencrypted in `users.google_oauth_tokens` (JSONB column)
+- `encrypted_google_tokens` column exists but `getAuthenticatedClient()` does not read it yet
 - Refresh tokens valid until revoked (persistent access)
 
 **Impact if compromised:** CATASTROPHIC
@@ -381,6 +382,13 @@ All secret comparisons use `crypto.timingSafeEqual`:
 - [x] **Timing-safe comparisons on all auth paths** — API key, cron, action tokens, OAuth state, trigger tokens
 - [x] **Atomic counterparty creation** — upsert-first eliminates findOrCreateCP race condition
 - [x] **OAuth token caching** — 4-min TTL eliminates redundant DB reads at scale
+
+### ✅ COMPLETED (2026-02-19)
+- [x] **Sentry PII leak fixed** — `sendDefaultPii: false` on server + edge; `tracesSampleRate` reduced from 1.0 to 0.1
+- [x] **Action execute idempotency** — returns 409 if action already completed (prevents double-send)
+- [x] **Pipeline error isolation** — each step wrapped in try/catch; Gmail failure no longer kills threading/planning/lead-tracking
+- [x] **Non-actionable email loop** — classified emails now stored as minimal records to prevent re-classification every run
+- [x] **Timezone parsing hardened** — replaced fragile `toLocaleString` date parsing with `Intl.DateTimeFormat.formatToParts`
 
 ### Before 10th Customer (CRITICAL)
 - [ ] **Encrypt OAuth tokens** (Supabase Vault or app-level) - 3 hours

@@ -226,11 +226,9 @@ All settings are stored in the `users.settings` JSONB column. Configured via `sc
 | `ai_language` | string | `"cs"` | Language code for drafts (e.g. "cs", "en", "de") |
 | `ai_email_signature` | string | `""` | Appended to email drafts |
 | `ai_system_context` | string | `""` | Custom system prompt injected into AI calls |
-| `ai_tone_user` | string | `"professional and concise"` | Tone when writing to the user (unused — see `client.ts`) |
-| `ai_tone_cp` | string | `"polite and formal"` | Tone when writing to counterparties (unused — see `client.ts`) |
-| `user_alias` | string | `"User"` | What Mila calls the user (unused — see `client.ts`) |
-
-> **Note:** `ai_tone_user`, `ai_tone_cp`, and `user_alias` exist in the DB schema but are **not currently used**. AI persona is configured via `src/config/client.ts` instead.
+| `ai_tone_user` | string | `"professional and concise"` | Tone when writing to the user |
+| `ai_tone_cp` | string | `"polite and formal"` | Tone when writing to counterparties |
+| `user_alias` | string | `"User"` | What Mila calls the user |
 
 ## Working Hours & Schedule
 
