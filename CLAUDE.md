@@ -51,6 +51,8 @@ src/
 │   ├── api/action/[id]/        # Action CRUD + execute/draft/todo/blacklist
 │   ├── api/auth/               # OAuth connect + callback
 │   ├── api/cron/morning-brief/ # Every-30-min cron (per-user timezone briefs)
+│   ├── api/gdpr/delete/        # GDPR Art. 17 — cascade-delete all user data
+│   ├── api/gdpr/export/        # GDPR Art. 15 — export all user data as JSON
 │   ├── api/ingest/             # Manual email/calendar ingestion (+ /bulk)
 │   ├── api/health/             # Health check
 │   ├── api/whatsapp/status/    # WhatsApp daemon status proxy
@@ -58,17 +60,17 @@ src/
 │   └── page.tsx                # Home/status dashboard
 │
 ├── services/                   # Business logic (orchestration layer)
-│   ├── agent.ts                # Main pipeline — 6-step orchestration
+│   ├── agent.ts                # Main pipeline — 6-step orchestration (parallel ingestion)
 │   ├── scheduling.ts           # Calendar slot finding (683 lines) ⚠️ LARGEST
-│   ├── planning.ts             # Action generation with channel detection
-│   ├── threading.ts            # Email/WA conversation grouping (306 lines)
-│   ├── ingestion.ts            # Email ingestion (225 lines)
+│   ├── planning.ts             # Action generation with channel detection (parallel batches of 5)
+│   ├── threading.ts            # Email/WA conversation grouping (parallel CP lookups)
+│   ├── ingestion.ts            # Email ingestion (parallel batches of 5)
 │   ├── calendar-ingestion.ts   # Calendar sync + personal event filtering
-│   ├── lead-tracking.ts        # Cooling/cold/dead lead detection + follow-ups
+│   ├── lead-tracking.ts        # Cooling/cold/dead lead detection (parallel batches of 10)
 │   └── morning-brief.ts        # Daily summary email (212 lines)
 │
 ├── lib/                        # Shared utilities & integrations
-│   ├── db/                     # Supabase CRUD — 9 files, ~1900 lines total
+│   ├── db/                     # Supabase CRUD — 11 files, ~2200 lines total
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
 │   ├── supabase/               # Client + types (types.ts = 593 lines)
 │   ├── ai/
@@ -106,12 +108,14 @@ src/
 ```
 Step 0: purgeUserAsCp — data hygiene
 Step 1: Verify user exists + has Google credentials
-Step 2: Ingest inbound + outbound emails from Gmail
-Step 2.5: Sync Google Calendar events, detect invitations, filter personal events
+Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
+  Step 2: Ingest inbound emails from Gmail
+  Step 2.1: Ingest outbound emails from Gmail
+  Step 2.5: Sync Google Calendar events, detect invitations, filter personal events
 Step 3: Get all unprocessed messages (email + WhatsApp)
 Step 4: Thread messages into conversations
-Step 5: Generate action proposals for updated conversations (channel-aware)
-Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads, create follow-ups
+Step 5: Generate action proposals for updated conversations (channel-aware, batched ×5)
+Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10)
 ```
 
 Result type includes: `emailsIngested`, `whatsappMessagesProcessed`, `calendarEventsSynced`, `calendarInvitationsDetected`, `messagesProcessed`, `conversationsUpdated`, `actionsGenerated`, `followUpsGenerated`, `coolingLeads`, `coldLeads`.
@@ -122,7 +126,7 @@ Result type includes: `emailsIngested`, `whatsappMessagesProcessed`, `calendarEv
 Never read all files in a directory sequentially. This bloats context and causes hangs.
 
 **Worst offenders (do NOT read all files in these):**
-- `src/lib/db/` — 9 files, ~1900 lines. Use the index below to pick the right file.
+- `src/lib/db/` — 11 files, ~2200 lines. Use the index below to pick the right file.
 - `src/services/` — 8 files, 2500+ lines. Read only the service relevant to the task.
 - `src/lib/google/` — 5 files, 1100+ lines. Read only the API you need.
 
@@ -148,6 +152,8 @@ Instead of reading these files, use this index:
 | `todos.ts` | `getTodoById`, `createTodo`, `updateTodo`, `getTodosForUser` |
 | `events.ts` | `getEventById`, `createEvent`, `updateEvent`, `getEventsForUser`, `getEventsInRange`, `getEventsForToday`, `calculateEventScore` |
 | `embeddings.ts` | `saveMessageEmbedding`, `searchSimilarMessages` |
+| `gdpr.ts` | `writeAuditLog`, `exportAllUserData`, `deleteAllUserData`, `enforceRetentionPolicy` |
+| `locks.ts` | `tryAcquireUserLock`, `releaseUserLock` |
 | `index.ts` | Barrel re-exports (do not read) |
 
 All db files follow the same pattern: import `getSupabaseAdmin` from `../supabase/client`, import types from `../supabase/types`, export async CRUD functions.
@@ -232,7 +238,15 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 ### Calendar
 
-**`events`** — id, user_id, cp_id, title, description, location, start_time, end_time, event_type (meeting/travel_buffer), status, parent_event_id (self-ref for travel buffers), pre_block_group_id, created_at
+**`events`** — id, user_id, cp_id, title, description, location, start_time, end_time, event_type (meeting/travel_buffer), status, parent_event_id (self-ref for travel buffers), pre_block_group_id, google_event_id, created_at
+
+### GDPR & Audit
+
+**`audit_logs`** — id, user_id (FK SET NULL — survives user deletion), action, details (jsonb), ip_address, created_at
+
+### Concurrency
+
+**`user_agent_locks`** — user_id (PK, FK CASCADE), locked_at, expires_at (10-min TTL auto-expiry)
 
 ### System
 
@@ -391,7 +405,7 @@ All in `src/config/client.ts` → `whatsapp` section:
 
 ### API Protection
 All API endpoints are protected by one of:
-1. **API Key** (`MILA_USER_API_KEY`) — For `/api/agent/run`, `/api/ingest`
+1. **API Key** (`MILA_USER_API_KEY`) — For `/api/agent/run`, `/api/ingest`, `/api/gdpr/*`
 2. **Cron Secret** (`CRON_SECRET`) — For `/api/cron/*`
 3. **Action Token** (HMAC-signed) — For `/api/action/[id]/*` (email links)
 4. **Superadmin Key** — For `/api/superadmin/*`
@@ -448,6 +462,70 @@ QSTASH_TOKEN         # Upstash QStash token for per-user brief scheduling (optio
 - **`SPEC.md`** — Full product specification
 - **`CLAUDE.md`** (this file) — Code architecture reference for AI coding assistants
 - **`SECURITY.md`** — Security architecture, risks, incident response
+- **`ONBOARDING.md`** — User setup, settings reference, API quick reference
+
+## GDPR Compliance
+
+### Endpoints
+- **`POST /api/gdpr/delete`** — Art. 17 Right to Erasure. Cascade-deletes all user data across 13 tables in FK-safe order. Body: `{ userId }`. Auth: API key.
+- **`GET /api/gdpr/export?userId=`** — Art. 15 Right of Access. Returns full data export as JSON. Auth: API key.
+
+### Implementation (`src/lib/db/gdpr.ts`)
+- `writeAuditLog(entry)` — writes to `audit_logs` table (never throws)
+- `exportAllUserData(userId)` — gathers data from all tables for one user
+- `deleteAllUserData(userId)` — FK-safe cascade: emails → embeddings → actions → participants → messages → todos → events → cp_states → conversations → cps → channels → errors → locks → user
+- `enforceRetentionPolicy(userId, days)` — scrubs `raw_text`/`cleaned_text` from messages older than retention window, deletes their embeddings. Preserves message metadata for conversation continuity.
+
+### Audit Logging
+All GDPR operations (export, delete) write to `audit_logs` before and after execution. The `user_id` FK uses `ON DELETE SET NULL` so audit entries survive user deletion.
+
+### Required Migration
+```sql
+CREATE TABLE audit_logs (
+  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+  action text NOT NULL,
+  details jsonb,
+  ip_address text,
+  created_at timestamptz DEFAULT now()
+);
+CREATE INDEX idx_audit_logs_user ON audit_logs(user_id);
+CREATE INDEX idx_audit_logs_action ON audit_logs(action);
+```
+
+## Concurrency Control
+
+### DB-Level Agent Lock
+Replaces the old in-memory `runningUsers` Map which only worked within a single Vercel serverless instance.
+
+**Implementation:** `src/lib/db/locks.ts`
+- `tryAcquireUserLock(userId)` — inserts row into `user_agent_locks` table; returns `false` if row already exists (lock held)
+- `releaseUserLock(userId)` — deletes the lock row
+- **Auto-expiry:** locks older than 10 minutes are cleaned up before acquire (handles crashed instances)
+- **Fallback:** if the `user_agent_locks` table doesn't exist yet (migration not applied), falls back to in-memory Map
+
+**Used in:** `src/services/agent.ts` → `runAgentForUser()`
+
+### Required Migration
+```sql
+CREATE TABLE user_agent_locks (
+  user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  locked_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL
+);
+```
+
+## Parallelism Architecture
+
+All services use **batched `Promise.allSettled`** for fault isolation — one item's failure doesn't block others.
+
+| Service | Pattern | Concurrency | Notes |
+|---------|---------|-------------|-------|
+| `agent.ts` | Steps 2/2.1/2.5 in parallel | 3 | Inbound, outbound, calendar are independent |
+| `planning.ts` | Conversations batched | 5 | Each involves an AI call (proposeAction) |
+| `ingestion.ts` | Emails batched (inbound + outbound) | 5 | classifyEmail AI call is the bottleneck |
+| `lead-tracking.ts` | Conversations batched | 10 | Independent conversations, DB-heavy |
+| `threading.ts` | Pre-assigned lookups + CP fetches | All | `Promise.all` for reads; serial for `assignToConversation` (prevents duplicate creation) |
 
 ## Superadmin
 - Dashboard at `/superadmin`

@@ -2,7 +2,7 @@
 
 This document outlines the security architecture, known risks, and mitigation strategies for Mila.
 
-**Last Updated:** 2026-02-18
+**Last Updated:** 2026-02-19
 **Architecture:** Event-driven email automation agent (NOT interactive SaaS)
 
 ---
@@ -86,15 +86,17 @@ User clicks email link → Verifies token → Executes action → Done
 
 **Previously:** Any UUID in `?uid=` would trigger a full agent pipeline — no auth at all.
 
-#### 5. Per-User Agent Concurrency Lock
-**File:** `src/services/agent.ts`
+#### 5. Per-User Agent Concurrency Lock (DB-Level)
+**Files:** `src/lib/db/locks.ts`, `src/services/agent.ts`
 
-- In-memory `Map<userId, true>` prevents two simultaneous pipeline runs for the same user
-- Second concurrent call returns immediately with `success: true` + `errors: ['Skipped — concurrent run already in progress']`
-- Lock releases in `finally` block (crash-safe)
+- **Primary:** DB-based lock via `user_agent_locks` table — works across ALL Vercel serverless instances
+- `tryAcquireUserLock(userId)` inserts a row with 10-minute expiry; returns `false` if row exists (lock held)
+- `releaseUserLock(userId)` deletes the row in `finally` block
+- Stale locks (from crashed instances) auto-expire: cleaned up before each acquire attempt
+- **Fallback:** In-memory `Map<userId, true>` if the lock table doesn't exist yet (migration not applied)
 - Prevents duplicate messages, CPs, and action proposals from race conditions (e.g. cron + email-open firing simultaneously)
 
-**Limitation:** In-memory lock per Vercel instance — two cold-start instances could still race, but this eliminates the most common case.
+**Previous limitation (resolved):** In-memory lock only worked per Vercel instance — two cold-start instances could race. DB lock eliminates this.
 
 #### 6. Row Level Security (RLS)
 **Location:** Supabase Database
@@ -136,7 +138,26 @@ User clicks email link → Verifies token → Executes action → Done
 - Cache invalidates on token refresh and on refresh failure
 - TTL (4 min) is shorter than refresh window (5 min before expiry) to ensure stale tokens are never served
 
-#### 12. Timing-Safe Comparisons (All Auth Paths)
+#### 12. GDPR Compliance (Art. 15, 17, 5)
+**Files:** `src/lib/db/gdpr.ts`, `src/app/api/gdpr/delete/route.ts`, `src/app/api/gdpr/export/route.ts`
+
+- **Right to Erasure (Art. 17):** `POST /api/gdpr/delete` cascade-deletes all user data across 13 tables in FK-safe order
+- **Right of Access (Art. 15):** `GET /api/gdpr/export?userId=` returns full data export as JSON
+- **Audit logging:** All GDPR operations logged to `audit_logs` table with `user_id`, `action`, `details`, `ip_address`
+- **Retention policy:** `enforceRetentionPolicy(userId, days)` scrubs old message PII while preserving conversation structure
+- **Audit trail survives deletion:** `audit_logs.user_id` FK uses `ON DELETE SET NULL`
+- Both endpoints protected by API key (`verifyApiKey`)
+
+#### 13. Parallelized Pipeline (Fault Isolation)
+**Files:** `src/services/agent.ts`, `planning.ts`, `ingestion.ts`, `lead-tracking.ts`, `threading.ts`
+
+- All parallel processing uses `Promise.allSettled()` — one item's failure does NOT block others
+- Agent pipeline steps 2/2.1/2.5 (inbound, outbound, calendar) run in parallel
+- Planning batches 5 conversations at a time (AI call per conversation)
+- Ingestion batches 5 emails at a time (AI classify call per email)
+- Lead tracking batches 10 conversations at a time
+
+#### 14. Timing-Safe Comparisons (All Auth Paths)
 **Files:** `src/lib/auth/tokens.ts`, `src/lib/auth/api.ts`
 
 All secret comparisons use `crypto.timingSafeEqual`:
@@ -399,35 +420,20 @@ All secret comparisons use `crypto.timingSafeEqual`:
 - [x] **Settings merge** — `updateUserSettings` now merges with existing settings instead of overwriting
 - [x] **Calendar event dedup** — uses stable `google_event_id` instead of fragile `(start, end, title)` match
 
-### Before 20th Customer — GDPR Compliance
-- [ ] **User data deletion endpoint** (Right to be Forgotten, GDPR Art. 17) - 4 hours
-  - **Why:** GDPR requires ability to delete all personal data on request
-  - **What:** Cascade delete: users → cps → conversations → messages → actions → events → embeddings → emails → todos
-  - **How:** `/api/superadmin/users/[id]/delete` with confirmation, or self-service via authenticated request
-  - **Note:** Must also revoke Google OAuth tokens and purge any cached data
+### ✅ COMPLETED (2026-02-19, batch 2)
+- [x] **GDPR data deletion** (Art. 17) — `POST /api/gdpr/delete` cascade-deletes all user data across 13 tables in FK-safe order
+- [x] **GDPR data export** (Art. 15) — `GET /api/gdpr/export?userId=` returns full user data as JSON
+- [x] **Per-user audit logs** — `audit_logs` table with `writeAuditLog()`, all GDPR operations logged with `user_id`, `action`, `details`, `ip_address`
+- [x] **Data retention policy** — `enforceRetentionPolicy(userId, days)` scrubs old message PII, deletes embeddings, preserves conversation structure
+- [x] **DB-level concurrency lock** — `user_agent_locks` table replaces in-memory Map; works across Vercel instances; 10-min auto-expiry for crash safety
+- [x] **Pipeline parallelism** — agent steps 2/2.1/2.5 run in parallel; planning (×5), ingestion (×5), lead-tracking (×10) all batched with `Promise.allSettled`
 
-- [ ] **User data export endpoint** (Right to Portability, GDPR Art. 20) - 3 hours
-  - **Why:** GDPR requires users can download their data in machine-readable format
-  - **What:** Export all user data as JSON: profile, conversations, messages, actions, events
-  - **How:** `/api/superadmin/users/[id]/export` returns ZIP with structured JSON
-
-- [ ] **Per-user audit logs** - 2 hours
-  - **Why:** Forensics for security incidents, GDPR accountability (Art. 5)
-  - **What:** Log `user_id`, `action`, `timestamp`, `ip_address`
-
-- [ ] **Data retention policy** - 1 hour
-  - **Why:** GDPR storage limitation (Art. 5) — don't keep data longer than needed
-  - **What:** Auto-purge completed actions older than 90 days, processed messages older than 180 days
-
+### Before 20th Customer
 - [ ] **Separate Supabase for high-value customers** - 4 hours
   - **Why:** Isolate blast radius, better performance
   - **When:** Enterprise customers with >100 users
 
 ### Before 500 Users — Scale Hardening
-- [ ] **Database-level concurrency lock** (replace in-memory) - 2 hours
-  - **Why:** In-memory lock only works per Vercel instance; Postgres advisory locks work globally
-  - **How:** `pg_advisory_xact_lock(hashtext(userId))` or Supabase-side lock table
-
 - [ ] **Calendar incremental sync** (sync tokens) - 3 hours
   - **Why:** Current full re-fetch of 14 days of events per user per run wastes Google API quota
   - **How:** Store `nextSyncToken` from Google Calendar API, pass on subsequent calls
@@ -464,6 +470,6 @@ The daemon (`scripts/whatsapp-daemon.ts`) uses `@whiskeysockets/baileys` and man
 
 ---
 
-**Document Version:** 3.0 (Security hardening + GDPR roadmap)
-**Last Review:** 2026-02-18
-**Next Review:** 2026-05-18 (quarterly)
+**Document Version:** 4.0 (GDPR compliance + DB locks + parallelism)
+**Last Review:** 2026-02-19
+**Next Review:** 2026-05-19 (quarterly)

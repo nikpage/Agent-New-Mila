@@ -164,6 +164,8 @@ All commands below assume `$UID_NIK` is set and the app is running on `localhost
 | **Manual ingest** | `curl -X POST http://localhost:3000/api/ingest -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\"}"` |
 | **Bulk ingest** | `curl -X POST http://localhost:3000/api/ingest/bulk -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\"}"` |
 | **Superadmin stats** | `curl "http://localhost:3000/api/superadmin/stats?key=$(grep '^SUPERADMIN_KEY=' .env.local \| cut -d'=' -f2-)"` |
+| **GDPR data export** | `curl "http://localhost:3000/api/gdpr/export?userId=$UID_NIK" -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)"` |
+| **GDPR data deletion** | `curl -X POST http://localhost:3000/api/gdpr/delete -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\"}"` |
 
 ### Auth Headers Summary
 
@@ -177,6 +179,8 @@ All commands below assume `$UID_NIK` is set and the app is running on `localhost
 | `/api/superadmin/stats` | Query Param or Bearer | `?key=$SUPERADMIN_KEY` |
 | `/api/health` | None | — |
 | `/api/whatsapp/status` | API Key | `x-api-key: $MILA_USER_API_KEY` + `?userId=$UID_NIK` |
+| `/api/gdpr/export` | API Key | `x-api-key: $MILA_USER_API_KEY` + `?userId=$UID_NIK` |
+| `/api/gdpr/delete` | API Key | `x-api-key: $MILA_USER_API_KEY` + body `{"userId":"..."}` |
 
 ### WhatsApp Daemon (port 3001)
 

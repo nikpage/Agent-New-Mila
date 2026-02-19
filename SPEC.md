@@ -23,13 +23,17 @@ Mila runs on a trigger — either a cron job (morning brief) or an API call (`/a
 ```
 Step 0: Purge user-as-counterparty (data hygiene)
 Step 1: Verify user + credentials
-Step 2: Ingest inbound + outbound emails from Gmail
-Step 2.5: Sync calendar events from Google Calendar, detect invitations
+Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
+  Step 2: Ingest inbound emails from Gmail (batched ×5)
+  Step 2.1: Ingest outbound emails from Gmail (batched ×5)
+  Step 2.5: Sync calendar events from Google Calendar, detect invitations
 Step 3: Get all unprocessed messages (email + WhatsApp)
 Step 4: Thread messages into conversations (Gmail thread ID → embedding similarity → AI tiebreak)
-Step 5: For each updated conversation → AI proposes an action (REPLY / SCHEDULE / WAIT / FILE)
-Step 6: Lead tracking — scan ALL conversations for cooling/cold/dead leads, create follow-up actions
+Step 5: For each updated conversation → AI proposes an action (batched ×5)
+Step 6: Lead tracking — scan ALL conversations for cooling/cold/dead leads (batched ×10)
 ```
+
+Concurrency: The pipeline uses a **DB-level lock** (`user_agent_locks` table) to prevent duplicate runs across Vercel serverless instances. Lock auto-expires after 10 minutes for crash safety.
 
 ### Action Types
 
@@ -243,6 +247,8 @@ Every AI prompt receives the user's business context via `getAISystemPrompt(sett
 | `GET /api/whatsapp/status` | API Key | WhatsApp daemon status |
 | `GET /api/superadmin/stats` | Superadmin Key | System stats |
 | `GET /api/trigger/ingest` | Trigger Token (HMAC) | Tracking pixel — triggers agent run on email open |
+| `POST /api/gdpr/delete` | API Key | GDPR Art. 17 — cascade-delete all user data |
+| `GET /api/gdpr/export` | API Key | GDPR Art. 15 — export all user data as JSON |
 
 ## Security
 
@@ -252,6 +258,8 @@ Every AI prompt receives the user's business context via `getAISystemPrompt(sett
 - **Superadmin Key** — protects admin dashboard
 - **RLS** — Supabase row-level security on all tables; API uses service key so MUST manually filter by `user_id`
 - **OAuth tokens** — AES-256-GCM encrypted (dual-write: plaintext + encrypted columns, reads encrypted first)
+- **GDPR** — data deletion, data export, audit logging, retention policy (see `SECURITY.md`)
+- **Concurrency** — DB-level agent lock prevents duplicate pipeline runs across Vercel instances
 
 ## Database
 
@@ -269,6 +277,8 @@ PostgreSQL via Supabase with pgvector extension for embeddings.
 - `emails` — outbound email send queue
 - `todos` — task items with due dates
 - `agent_errors` — error log for monitoring
+- `audit_logs` — GDPR audit trail (user_id FK SET NULL — survives user deletion)
+- `user_agent_locks` — DB-level per-user agent pipeline concurrency lock
 
 ## What's Not Built Yet
 
@@ -277,5 +287,4 @@ PostgreSQL via Supabase with pgvector extension for embeddings.
 - **Offer multiplier wiring** — `planning.ts` doesn't yet pass `offerMultiplier` to `calculatePriorityScore()`
 - **Weight in proposals** — `weight` field not set during proposal generation
 - **OAuth token encryption cleanup** — dual-write is active (plaintext + encrypted); plaintext column can be dropped once all users have refreshed tokens at least once
-- **GDPR compliance** — no data deletion endpoint, no data export, no audit logs, no retention policy
 - **Test framework** — no tests configured; `npm run build` is the verification method
