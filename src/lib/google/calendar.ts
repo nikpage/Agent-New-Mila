@@ -12,7 +12,17 @@ export interface CalendarEvent {
   organizer?: { email: string; name?: string }
   status: string
   htmlLink?: string
+  /** Private extended properties — only readable by this app */
+  extendedProperties?: Record<string, string>
 }
+
+/**
+ * Key used in extendedProperties.private to mark events created by Mila.
+ * Allows calendar ingestion to recognize and skip Mila-managed events
+ * even after a DB wipe (the Google Calendar event survives).
+ */
+export const MILA_MANAGED_KEY = 'milaManaged'
+export const MILA_BLOCK_GROUP_KEY = 'milaBlockGroupId'
 
 export interface CreateEventParams {
   summary: string
@@ -22,6 +32,8 @@ export interface CreateEventParams {
   endTime: Date
   attendees?: string[]
   sendUpdates?: 'all' | 'externalOnly' | 'none'
+  /** Private extended properties to tag on the GCal event */
+  privateExtendedProperties?: Record<string, string>
 }
 
 /**
@@ -117,6 +129,9 @@ function parseCalendarEvent(event: calendar_v3.Schema$Event): CalendarEvent | nu
       : undefined,
     status: event.status || 'confirmed',
     htmlLink: event.htmlLink || undefined,
+    extendedProperties: event.extendedProperties?.private
+      ? Object.fromEntries(Object.entries(event.extendedProperties.private))
+      : undefined,
   }
 }
 
@@ -143,6 +158,12 @@ export async function createCalendarEvent(
         dateTime: params.endTime.toISOString(),
       },
       attendees: params.attendees?.map(email => ({ email })),
+      extendedProperties: {
+        private: {
+          [MILA_MANAGED_KEY]: 'true',
+          ...params.privateExtendedProperties,
+        },
+      },
     },
   })
 
@@ -381,6 +402,12 @@ export async function createTentativeCalendarEvent(
       },
       status: params.status || 'tentative',
       transparency: 'opaque', // Show as busy
+      extendedProperties: {
+        private: {
+          [MILA_MANAGED_KEY]: 'true',
+          ...params.privateExtendedProperties,
+        },
+      },
     },
   })
 

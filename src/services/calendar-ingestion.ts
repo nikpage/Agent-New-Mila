@@ -8,6 +8,7 @@ import {
   getUpcomingCalendarEvents,
   getPendingInvitations,
   isIncomingInvitation,
+  MILA_MANAGED_KEY,
   type CalendarEvent,
 } from '@/lib/google/calendar'
 import {
@@ -68,6 +69,14 @@ export async function ingestCalendarEvents(
 
     for (const gcalEvent of gcalEvents) {
       try {
+        // Skip events created by Mila (holds, travel buffers, etc.)
+        // These are tagged with extendedProperties.private.milaManaged = "true"
+        // at creation time. Without this check, a DB wipe would cause Mila to
+        // re-import its own holds as plain meetings, creating duplicates.
+        if (gcalEvent.extendedProperties?.[MILA_MANAGED_KEY] === 'true') {
+          continue
+        }
+
         await syncGoogleEventToLocal(userId, gcalEvent, settings.timezone)
         result.eventsSynced++
       } catch (error) {

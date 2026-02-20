@@ -456,9 +456,9 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 #### Layer 3: Smoke Tests (10 tests, opt-in)
 **File:** `src/__tests__/smoke.test.ts`
 
-Real HTTP calls against a running instance. Skipped by default. Run with:
+Real HTTP calls against a running instance. Skipped by default. Reads `MILA_USER_API_KEY` and `CRON_SECRET` from `.env.local`. Run with:
 ```bash
-SMOKE_TEST=1 MILA_USER_API_KEY=xxx CRON_SECRET=xxx npm test -- src/__tests__/smoke.test.ts
+SMOKE_TEST=1 npm test -- src/__tests__/smoke.test.ts
 ```
 
 Test user: `podtwo@gmail.com` (`d1a403fd-121b-4dcc-96aa-0efa3af114a8`)

@@ -19,6 +19,7 @@ import {
   deleteCalendarEvent,
   confirmCalendarEvent,
   respondToInvitation,
+  MILA_BLOCK_GROUP_KEY,
   type CalendarEvent,
 } from '@/lib/google/calendar'
 import {
@@ -210,6 +211,8 @@ export async function blockSlotsForProposal(
   for (const slot of slots) {
     try {
       // Create tentative event in Google Calendar (no notifications)
+      // Tag with extendedProperties so Mila can recognize its own events
+      // even after a DB wipe — prevents duplicate blocker events.
       const gcalEvent = await createTentativeCalendarEvent(userId, {
         summary: holdTitle,
         description: `Tentative hold - awaiting confirmation from ${cpName}. Managed by Mila.`,
@@ -217,6 +220,9 @@ export async function blockSlotsForProposal(
         startTime: slot.start,
         endTime: slot.end,
         status: 'tentative',
+        privateExtendedProperties: {
+          [MILA_BLOCK_GROUP_KEY]: preBlockGroupId,
+        },
       })
 
       gcalEventIds.push(gcalEvent.id)
@@ -591,6 +597,9 @@ export async function proposeMeetingMultipleCPs(
       startTime: slot.start,
       endTime: slot.end,
       status: 'tentative',
+      privateExtendedProperties: {
+        [MILA_BLOCK_GROUP_KEY]: preBlockGroupId,
+      },
     })
 
     const localEvent = await createEvent({
