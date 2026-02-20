@@ -27,7 +27,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 **Mila** is an AI-powered executive assistant that ingests emails, WhatsApp messages, and calendar events, uses Gemini AI to propose actions (reply, schedule, follow up, delegate), tracks leads, and presents everything for user approval via morning brief emails.
 
 - **Stack**: Next.js 14 (App Router) / TypeScript 5.7 (strict) / Supabase / Tailwind CSS 3
-- **AI**: Google Generative AI (Gemini) via `@google/generative-ai`
+- **AI**: Google Gemini (primary) via `@google/generative-ai` + Anthropic Claude (fallback) via `@anthropic-ai/sdk`
 - **Deployment**: Vercel with cron jobs
 - **Monitoring**: Sentry error tracking (client + server + edge)
 - **Path alias**: `@/*` → `src/*`
@@ -79,7 +79,7 @@ src/
 │   ├── ai/
 │   │   ├── gemini.ts           # AI functions (preFilter, classify, proposeAction, generateFinalDraft, etc.)
 │   │   ├── runner.ts           # runAITask() with 3-model fallback + 429 retry
-│   │   └── providers/          # gemini.ts (multi-key rotation), types.ts, index.ts
+│   │   └── providers/          # gemini.ts (multi-key rotation), anthropic.ts, types.ts, index.ts
 │   ├── qstash/
 │   │   └── client.ts           # QStash per-user brief scheduling (morning + afternoon)
 │   ├── whatsapp/
@@ -287,18 +287,20 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 
 | Stage | Purpose | Primary → Fallback1 → Fallback2 |
 |-------|---------|----------------------------------|
-| `preFilter` | Spam detection | `gemini-2.5-flash-lite` → `2.5-flash` → `2.5-flash` |
-| `classify` | Email category + priority | `gemini-2.5-flash-lite` → `2.5-flash` → `2.5-flash` |
-| `threading` | extractTopic, shouldJoinConversation | `gemini-2.5-flash` → `2.5-flash` → `2.5-flash` |
-| `analysis` | analyzeConversation | same as threading |
-| `planning` | proposeAction (type, rationale, intent) | same as threading |
-| `drafting` | generateFinalDraft, generateBriefHeadline | same as threading |
+| `preFilter` | Spam detection | `gemini-2.5-flash-lite` → `gemini-2.5-flash` → `claude-haiku-4-5-20251001` |
+| `classify` | Email category + priority | `gemini-2.5-flash-lite` → `gemini-2.5-flash` → `claude-haiku-4-5-20251001` |
+| `threading` | extractTopic, shouldJoinConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
+| `analysis` | analyzeConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
+| `planning` | proposeAction (type, rationale, intent) | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
+| `drafting` | generateFinalDraft, generateBriefHeadline | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
 
 **Rate limit handling:** On 429/RESOURCE_EXHAUSTED errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
 
-**Embedding model:** `gemini-embedding-001` (768-dim, multilingual) — separate from chat, NO fallback chain.
+**Embedding model:** `gemini-embedding-001` (768-dim, multilingual) — separate from chat, NO fallback chain. Embedding failures are caught silently — the app works without them (threading falls back to Gmail thread ID matching).
 
-**Provider:** `src/lib/ai/providers/gemini.ts` — uses `@google/generative-ai` SDK with model caching. Supports **multi-key rotation** via `GEMINI_API_KEYS` (comma-separated) env var — round-robins across keys to spread rate-limit budget. Falls back to single `GEMINI_API_KEY` if not set.
+**Providers:**
+- `src/lib/ai/providers/gemini.ts` — `@google/generative-ai` SDK. Supports **multi-key rotation** via `GEMINI_API_KEYS` (comma-separated) — round-robins across keys. Falls back to single `GEMINI_API_KEY` if not set.
+- `src/lib/ai/providers/anthropic.ts` — `@anthropic-ai/sdk`. Uses `ANTHROPIC_API_KEY` env var.
 
 **Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()` and `generateFinalDraft()` prompts. Channel context (email vs WhatsApp) adjusts tone.
 
@@ -514,6 +516,7 @@ CRON_SECRET          # Protects cron endpoints
 NEXTAUTH_SECRET      # Token signing secret
 SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)
 GEMINI_API_KEYS      # Comma-separated Gemini keys for rotation (optional, falls back to GEMINI_API_KEY)
+ANTHROPIC_API_KEY    # Claude fallback models (required for fallback chain)
 QSTASH_TOKEN         # Upstash QStash token for per-user brief scheduling (optional)
 ```
 
