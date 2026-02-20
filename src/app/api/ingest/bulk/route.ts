@@ -38,7 +38,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid until date' }, { status: 400 })
   }
 
-  console.log(`[BulkIngest] Starting for user ${userId} since ${sinceDate.toISOString()}`)
+  console.log(`\n[BulkIngest] ========== Starting bulk ingestion ==========`)
+  console.log(`[BulkIngest] User:  ${userId}`)
+  console.log(`[BulkIngest] Since: ${sinceDate.toISOString()}`)
+  console.log(`[BulkIngest] Until: ${untilDate ? untilDate.toISOString() : 'now'}`)
+  console.log(`[BulkIngest] Max:   ${(maxTotal as number) || 500} emails`)
+  console.log(`[BulkIngest] Time:  ${new Date().toISOString()}`)
 
   // Stream NDJSON so the client sees progress and the connection stays alive
   const encoder = new TextEncoder()

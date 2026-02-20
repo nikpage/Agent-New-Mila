@@ -18,9 +18,16 @@ export async function GET(request: NextRequest) {
     const typeParam = request.nextUrl.searchParams.get('type')
     const briefType: BriefType = typeParam === 'afternoon' ? 'afternoon' : 'morning'
 
+    const start = Date.now()
+    console.log(`\n[Brief] ========== Starting ${briefType} brief ==========`)
+    console.log(`[Brief] Time: ${new Date().toISOString()}`)
+
     if (userId) {
-      console.log(`[Cron] Sending ${briefType} brief for user ${userId}`)
+      console.log(`[Brief] Mode: Single user — ${userId}`)
       const success = await sendMorningBrief(userId, briefType)
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1)
+      console.log(`[Brief] Result: ${success ? 'sent' : 'skipped (no actions or user disabled)'}`)
+      console.log(`[Brief] ========== Done (${elapsed}s) ==========\n`)
       return NextResponse.json({
         success,
         userId,
@@ -29,11 +36,13 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    console.log(`[Cron] Starting ${briefType} brief send`)
-
+    console.log(`[Brief] Mode: All due users`)
     const result = await sendAllMorningBriefs(briefType)
-
-    console.log(`[Cron] ${briefType} briefs sent: ${result.sent}, failed: ${result.failed}`)
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1)
+    console.log(`\n[Brief] ========== Done (${elapsed}s) ==========`)
+    console.log(`[Brief] Sent:   ${result.sent}`)
+    console.log(`[Brief] Failed: ${result.failed}`)
+    console.log(`[Brief] ==========================================\n`)
 
     return NextResponse.json({
       success: true,
@@ -41,7 +50,7 @@ export async function GET(request: NextRequest) {
       timestamp: new Date().toISOString(),
     })
   } catch (error) {
-    console.error('[Cron] Morning brief error:', error)
+    console.error('[Brief] FAILED:', error instanceof Error ? error.message : error)
     return NextResponse.json(
       { error: 'Morning brief failed' },
       { status: 500 }

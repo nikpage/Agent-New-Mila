@@ -38,18 +38,23 @@ export type BriefType = 'morning' | 'afternoon'
  */
 export async function sendMorningBrief(userId: string, briefType: BriefType = 'morning'): Promise<boolean> {
   try {
+    console.log(`[Brief] Loading user ${userId}`)
     const user = await getUserById(userId)
     if (!user || !user.email_enabled || user.email_unsubscribed) {
+      console.log(`[Brief] User ${userId}: skipped — ${!user ? 'not found' : user.email_unsubscribed ? 'unsubscribed' : 'email disabled'}`)
       return false
     }
 
     const actions = await getPendingActionsForBrief(userId)
+    console.log(`[Brief] User ${user.email || userId}: ${actions.length} pending actions`)
 
     if (actions.length === 0) {
+      console.log(`[Brief] User ${user.email || userId}: nothing to send`)
       return true
     }
 
     const events = await getEventsForToday(userId, user.email_timezone)
+    console.log(`[Brief] User ${user.email || userId}: ${events.length} events today`)
     const briefActions: BriefAction[] = []
 
     for (const action of actions) {
@@ -136,9 +141,10 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     })
 
     await markActionsNotified(briefActions.map(b => b.action.id))
+    console.log(`[Brief] User ${user.email || userId}: ${briefType} brief sent with ${briefActions.length} actions`)
     return true
   } catch (error) {
-    console.error(`[MorningBrief] FAILED for user ${userId}:`, error)
+    console.error(`[Brief] User ${userId}: FAILED —`, error instanceof Error ? error.message : error)
     return false
   }
 }
@@ -158,7 +164,7 @@ export async function sendAllMorningBriefs(
   windowMinutes: number = 30
 ): Promise<{ sent: number; failed: number }> {
   const users = await getUsersDueBrief(briefType, windowMinutes)
-  console.log(`[Brief] ${briefType}: ${users.length} user(s) due (window=${windowMinutes}m)`)
+  console.log(`[Brief] ${briefType}: found ${users.length} user(s) due within ${windowMinutes}-min window`)
   let sent = 0
   let failed = 0
 

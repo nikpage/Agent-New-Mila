@@ -26,6 +26,26 @@ const API_KEY = process.env.MILA_USER_API_KEY || ''
 const CRON_SECRET = process.env.CRON_SECRET || ''
 const TEST_USER_ID = 'd1a403fd-121b-4dcc-96aa-0efa3af114a8'
 
+// ---------------------------------------------------------------------------
+// Logging helpers
+// ---------------------------------------------------------------------------
+
+function logRequest(method: string, path: string) {
+  console.log(`\n  --> ${method} ${BASE_URL}${path}`)
+}
+
+function logResponse(status: number, body: unknown, durationMs: number) {
+  const bodyPreview = typeof body === 'string'
+    ? body.slice(0, 200)
+    : JSON.stringify(body, null, 2).slice(0, 300)
+  console.log(`  <-- ${status} (${durationMs}ms)`)
+  console.log(`      ${bodyPreview.split('\n').join('\n      ')}`)
+}
+
+function logResult(ok: boolean, description: string) {
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}: ${description}`)
+}
+
 // Helper for HTTP calls
 async function api(
   method: string,
@@ -35,7 +55,7 @@ async function api(
     body?: unknown
     timeout?: number
   } = {}
-): Promise<{ status: number; body: unknown }> {
+): Promise<{ status: number; body: unknown; durationMs: number }> {
   const url = `${BASE_URL}${path}`
   const headers: Record<string, string> = {
     'content-type': 'application/json',
@@ -52,9 +72,13 @@ async function api(
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   init.signal = controller.signal
 
+  logRequest(method, path)
+  const start = Date.now()
+
   try {
     const res = await fetch(url, init)
     clearTimeout(timer)
+    const durationMs = Date.now() - start
     let body: unknown
     const ct = res.headers.get('content-type') || ''
     if (ct.includes('json')) {
@@ -64,9 +88,12 @@ async function api(
     } else {
       body = await res.text()
     }
-    return { status: res.status, body }
+    logResponse(res.status, body, durationMs)
+    return { status: res.status, body, durationMs }
   } catch (err) {
     clearTimeout(timer)
+    const durationMs = Date.now() - start
+    console.log(`  <-- FAILED after ${durationMs}ms: ${err instanceof Error ? err.message : err}`)
     throw err
   }
 }
@@ -74,6 +101,16 @@ async function api(
 const describeSmoke = SMOKE ? describe : describe.skip
 
 describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
+
+  beforeAll(() => {
+    console.log('\n========================================')
+    console.log('  Smoke Tests')
+    console.log(`  Target: ${BASE_URL}`)
+    console.log(`  User:   ${TEST_USER_ID}`)
+    console.log(`  API key: ${API_KEY ? 'set' : 'MISSING'}`)
+    console.log(`  Cron secret: ${CRON_SECRET ? 'set' : 'MISSING'}`)
+    console.log('========================================\n')
+  })
 
   // -------------------------------------------------------------------------
   // Health check — no auth needed
@@ -84,6 +121,7 @@ describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
       const res = await api('GET', '/api/health')
       expect(res.status).toBe(200)
       expect(res.body).toHaveProperty('status', 'ok')
+      logResult(true, `Health check passed — server responded in ${res.durationMs}ms`)
     })
   })
 
@@ -98,6 +136,7 @@ describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
         body: { userId: TEST_USER_ID },
       })
       expect([401, 403]).toContain(res.status)
+      logResult(true, `No API key -> rejected with ${res.status}`)
     })
 
     it('POST /api/agent/run rejects with wrong API key', async () => {
@@ -106,11 +145,13 @@ describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
         body: { userId: TEST_USER_ID },
       })
       expect(res.status).toBe(403)
+      logResult(true, `Wrong API key -> rejected with 403`)
     })
 
     it('GET /api/cron/morning-brief rejects without token', async () => {
       const res = await api('GET', '/api/cron/morning-brief')
       expect(res.status).toBe(401)
+      logResult(true, `No cron token -> rejected with 401`)
     })
 
     it('GET /api/cron/morning-brief rejects with wrong token', async () => {
@@ -118,6 +159,7 @@ describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
         headers: { authorization: 'Bearer wrong-secret' },
       })
       expect(res.status).toBe(401)
+      logResult(true, `Wrong cron token -> rejected with 401`)
     })
   })
 
@@ -129,7 +171,7 @@ describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
 
     it('POST /api/agent/run — runs successfully for test user', async () => {
       if (!API_KEY) {
-        console.warn('Skipping: MILA_USER_API_KEY not set')
+        console.warn('  SKIPPED: MILA_USER_API_KEY not set')
         return
       }
 
@@ -148,12 +190,15 @@ describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
         expect(body).toHaveProperty('messagesProcessed')
         expect(body).toHaveProperty('conversationsUpdated')
         expect(body).toHaveProperty('actionsGenerated')
+        logResult(true, `Agent run completed — ${body.emailsIngested} emails, ${body.messagesProcessed} messages, ${body.actionsGenerated} actions (${res.durationMs}ms)`)
+      } else {
+        logResult(true, `Agent returned 500 (likely missing credentials) — acceptable for test user`)
       }
     })
 
     it('GET /api/cron/morning-brief — runs for test user', async () => {
       if (!CRON_SECRET) {
-        console.warn('Skipping: CRON_SECRET not set')
+        console.warn('  SKIPPED: CRON_SECRET not set')
         return
       }
 
@@ -165,11 +210,12 @@ describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
       expect(res.status).toBe(200)
       const body = res.body as Record<string, unknown>
       expect(body).toHaveProperty('userId', TEST_USER_ID)
+      logResult(true, `Morning brief completed — success=${body.success}, briefType=${body.briefType} (${res.durationMs}ms)`)
     })
 
     it('GET /api/gdpr/export — exports data for test user', async () => {
       if (!API_KEY) {
-        console.warn('Skipping: MILA_USER_API_KEY not set')
+        console.warn('  SKIPPED: MILA_USER_API_KEY not set')
         return
       }
 
@@ -179,11 +225,12 @@ describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
 
       // 200 = has data, 404 = user not found (both valid for test user)
       expect([200, 404]).toContain(res.status)
+      logResult(true, `GDPR export returned ${res.status} (${res.durationMs}ms)`)
     })
 
     it('GET /api/whatsapp/status — responds for test user', async () => {
       if (!API_KEY) {
-        console.warn('Skipping: MILA_USER_API_KEY not set')
+        console.warn('  SKIPPED: MILA_USER_API_KEY not set')
         return
       }
 
@@ -195,6 +242,7 @@ describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
       const body = res.body as Record<string, unknown>
       // Should at minimum report enabled status
       expect(body).toHaveProperty('enabled')
+      logResult(true, `WhatsApp status: enabled=${body.enabled} (${res.durationMs}ms)`)
     })
   })
 
@@ -207,6 +255,7 @@ describeSmoke('Layer 3: Smoke Tests (live HTTP)', () => {
     it('GET /api/trigger/ingest returns a GIF pixel', async () => {
       const res = await api('GET', '/api/trigger/ingest')
       expect(res.status).toBe(200)
+      logResult(true, `Trigger pixel returned 200 (${res.durationMs}ms)`)
     })
   })
 })

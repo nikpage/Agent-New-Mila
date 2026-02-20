@@ -93,6 +93,7 @@ async function phase1FetchAndStore(
   }
 
   onProgress({ phase: 1, step: 'user_resolved', userEmail })
+  console.log(`[BulkIngest] Phase 1: User resolved — ${userEmail}`)
 
   // Purge user-as-CP
   await purgeUserAsCp(userId)
@@ -222,7 +223,15 @@ async function phase1FetchAndStore(
     }
   }
 
-  console.log(`[BulkIngest] Phase 1 complete: ${stats.stored} stored, ${stats.skippedCategory} category, ${stats.skippedBlocked} blocked, ${stats.skippedPreFilter} pre-filter, ${stats.skippedDuplicate} duplicate`)
+  console.log(`\n[BulkIngest] Phase 1 complete:`)
+  console.log(`[BulkIngest]   Inbox fetched:  ${stats.inboxFetched}`)
+  console.log(`[BulkIngest]   Sent fetched:   ${stats.sentFetched}`)
+  console.log(`[BulkIngest]   Stored:         ${stats.stored}`)
+  console.log(`[BulkIngest]   Skipped:`)
+  console.log(`[BulkIngest]     Category:     ${stats.skippedCategory}`)
+  console.log(`[BulkIngest]     Blocked:      ${stats.skippedBlocked}`)
+  console.log(`[BulkIngest]     Pre-filter:   ${stats.skippedPreFilter}`)
+  console.log(`[BulkIngest]     Duplicate:    ${stats.skippedDuplicate}`)
   onProgress({ phase: 1, step: 'complete', ...stats })
   return stats
 }
@@ -267,7 +276,9 @@ async function phase2Thread(
   }
 
   const conversationIds = Array.from(allConversationIds)
-  console.log(`[BulkIngest] Phase 2 complete: ${totalProcessed} messages → ${conversationIds.length} conversations`)
+  console.log(`\n[BulkIngest] Phase 2 complete:`)
+  console.log(`[BulkIngest]   Messages threaded:    ${totalProcessed}`)
+  console.log(`[BulkIngest]   Conversations created: ${conversationIds.length}`)
   onProgress({ phase: 2, step: 'complete', messagesProcessed: totalProcessed, conversationsCreated: conversationIds.length })
 
   return {
@@ -290,7 +301,8 @@ async function phase3ProposeActions(
 
   const actions = await generateActionsForConversations(conversationIds)
 
-  console.log(`[BulkIngest] Phase 3 complete: ${actions.length} actions proposed`)
+  console.log(`\n[BulkIngest] Phase 3 complete:`)
+  console.log(`[BulkIngest]   Actions proposed: ${actions.length}`)
   onProgress({ phase: 3, step: 'complete', actionsProposed: actions.length })
   return { actionsProposed: actions.length }
 }
