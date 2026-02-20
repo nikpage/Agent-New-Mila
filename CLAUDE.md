@@ -412,11 +412,38 @@ npm run test:watch   # Watch mode (re-runs on save)
 npm run test:coverage # With v8 coverage report
 ```
 
-### Test Map — Source → Test File (77 tests)
+### Test Layers (179 tests + 10 smoke tests)
+
+Tests are organized in three layers. All three MUST pass before any commit.
+
+#### Layer 1: Route Protection (30 tests)
+**File:** `src/app/api/__tests__/route-protection.test.ts`
+
+Every API route is tested to verify it rejects unauthenticated/bad requests. Catches: accidentally removed auth checks, changed HTTP methods, broken request parsing.
+
+- API key routes: `/api/agent/run`, `/api/gdpr/delete`, `/api/gdpr/export`, `/api/ingest`, `/api/ingest/bulk`, `/api/whatsapp/status`
+- Cron routes: `/api/cron/morning-brief` (GET + POST)
+- Action token routes: `/api/action/[id]`, `/api/action/[id]/execute`, `/api/action/[id]/draft`, `/api/action/[id]/blacklist`, `/api/action/[id]/todo`
+- Superadmin: `/api/superadmin/stats`
+- Trigger pixel: `/api/trigger/ingest` — verifies it returns GIF but does NOT run agent with bad sig
+- Auth: `/api/auth/connect` (email validation), `/api/auth/callback` (state validation)
+
+#### Layer 2: Behavior Pinning (72 tests)
+
+**Catches unauthorized changes to scoring, thresholds, defaults, or business logic.**
+
+| File | Tests | What it pins |
+|------|-------|-------------|
+| `src/lib/supabase/defaults.test.ts` | 47 | Every single field in `DEFAULT_USER_SETTINGS` — exact values. Also pins field count (56) to catch added/removed fields. |
+| `src/services/lead-tracking.test.ts` | 12 | Lead thresholds (2/5/14 days), boost multipliers (1.5x/2.5x/3.75x), urgency/pain mappings, threshold ordering |
+| `src/services/scheduling.test.ts` | 9 | Meeting duration, buffer, working hours, working days, timezone, travel mode defaults |
+| `src/services/morning-brief.test.ts` | 4 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10) |
+
+#### Layer 2 (existing): Logic Tests (77 tests)
 
 | Source file | Test file | What's tested |
 |-------------|-----------|---------------|
-| `src/lib/auth/tokens.ts` | `tokens.test.ts` | 19 tests — HMAC round-trip, expiry, tampering, missing secret, malformed input. **Protects every approve/reject button in brief emails.** |
+| `src/lib/auth/tokens.ts` | `tokens.test.ts` | 20 tests — HMAC round-trip, expiry, tampering, missing secret, malformed input. **Protects every approve/reject button in brief emails.** |
 | `src/services/agent.ts` | `agent.test.ts` | 12 tests — Lock acquire/release/fallback, user-not-found, no-credentials, fault isolation (`Promise.allSettled` not `Promise.all`) |
 | `src/lib/db/actions.ts` | `actions.test.ts` | 9 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding |
 | `src/services/ingestion.ts` | `ingestion.test.ts` | 8 tests — `isBlockedSender`: exact/prefix/domain/subaddress matching, false-positive prevention (`mynotifications` ≠ `notifications`) |
@@ -426,37 +453,38 @@ npm run test:coverage # With v8 coverage report
 | `src/lib/db/gdpr.ts` | `gdpr.test.ts` | 4 tests — `writeAuditLog` never-throw contract, `deleteAllUserData` FK-safe ordering, missing lock table graceful handling |
 | `src/lib/db/locks.ts` | `locks.test.ts` | 2 tests — unique violation → `false` (error code `23505`), `releaseUserLock` filters by `user_id` |
 
-### What each test category catches
+#### Layer 3: Smoke Tests (10 tests, opt-in)
+**File:** `src/__tests__/smoke.test.ts`
 
-- **Pure function tests** (tokens, actions, ingestion, client, counterparties, whatsapp): No mocks. Test real logic. Catch regressions when formulas, matching rules, or crypto contracts change.
-- **Orchestration tests** (agent): Mock all dependencies. Test that the pipeline handles failure correctly — lock release on crash, fault isolation between steps, early exits.
-- **Structural constraint tests** (gdpr, locks): Mock Supabase. Test specific behavioral contracts — FK deletion order, never-throw guarantee, unique-violation branching.
+Real HTTP calls against a running instance. Skipped by default. Run with:
+```bash
+SMOKE_TEST=1 MILA_USER_API_KEY=xxx CRON_SECRET=xxx npm test -- src/__tests__/smoke.test.ts
+```
+
+Test user: `podtwo@gmail.com` (`d1a403fd-121b-4dcc-96aa-0efa3af114a8`)
+
+Tests: health check, auth rejection (live), agent run, morning brief, GDPR export, WhatsApp status, trigger pixel.
+
+Set `SMOKE_BASE_URL` to target prod (defaults to `http://localhost:3000`).
 
 ### When to update tests
 
 1. **You changed a function's behavior** → Update the test that pins the old behavior. If the test still passes after your change, the test wasn't covering what you changed — add a test that does.
 
-2. **You added a new exported function** to an already-tested file → Add tests in the existing `.test.ts` file.
+2. **You changed any default setting value** → Update `defaults.test.ts` with the new value AND the field count.
 
-3. **You created a new file with deterministic logic** (pure functions, formulas, matching rules, crypto) → Create a co-located `.test.ts` file.
+3. **You added a new API route** → Add auth rejection tests in `route-protection.test.ts`.
 
-4. **You changed orchestration flow** (error handling paths, parallel vs serial, lock behavior, retry logic) → Update or add tests in the relevant service test file.
+4. **You added a new exported function** to an already-tested file → Add tests in the existing `.test.ts` file.
+
+5. **You created a new file with deterministic logic** (pure functions, formulas, matching rules, crypto) → Create a co-located `.test.ts` file.
+
+6. **You changed orchestration flow** (error handling paths, parallel vs serial, lock behavior, retry logic) → Update or add tests in the relevant service test file.
 
 ### When NOT to add tests
 
 - **AI prompt text** — changes constantly, not deterministic, not testable by string matching
-- **API route wiring** — Next.js handler plumbing, not business logic
-- **React components** — no jsdom configured, and UI testing has different cost/benefit
-- **"Did you call the right Supabase method" tests** — these test code structure not behavior. If the only assertion is "mockFrom was called with table name X", the test catches nothing useful. Test the *behavioral outcome* of the DB call instead (error handling, return value branching, ordering constraints).
-
-### Test quality bar
-
-Every test must answer: **"What specific regression does this catch?"** If the answer is "it verifies the function doesn't crash with default mock data," delete it. Good tests pin down:
-- **Formulas** with hand-calculated expected values
-- **Branching logic** by simulating the condition that triggers each branch
-- **Error contracts** (never-throw, fallback behavior, lock release on failure)
-- **Security properties** (HMAC validation, token expiry, timing-safe comparison)
-- **Edge cases** that have bitten you or are easy to regress (prefix vs substring matching, zero-safety guards)
+- **"Did you call the right Supabase method" tests** — these test code structure not behavior. Test the *behavioral outcome* instead.
 
 ### Run `npm test` before every commit. Tests must pass alongside `npm run build`.
 
