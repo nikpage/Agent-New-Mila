@@ -17,6 +17,7 @@ import {
   GMAIL_SKIP_CATEGORIES,
 } from '@/lib/google/gmail'
 import { preFilterEmail } from '@/lib/ai/gemini'
+import { probeAIAvailability } from '@/lib/ai/runner'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists, getUnprocessedMessages } from '@/lib/db/messages'
 import { getUserById, upsertUser } from '@/lib/db/users'
@@ -339,6 +340,9 @@ export async function runBulkIngestion(
     },
     errors: [],
   }
+
+  // Probe AI availability once — skip Gemini for this run if it's geo-blocked
+  await probeAIAvailability()
 
   // Phase 1: Fetch & Store
   const p1 = await phase1FetchAndStore(userId, since, until, maxTotal, onProgress)

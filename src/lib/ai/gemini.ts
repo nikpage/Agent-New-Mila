@@ -5,12 +5,14 @@ import { getAISystemPrompt } from '@/config/client'
 /**
  * Pre-filter: Quick spam/junk detection using cheapest model.
  * Returns { relevant: true/false }. Gate before full classification.
+ * Stage: preFilter (gemini-2.5-flash-lite → claude-haiku)
  */
 export async function preFilterEmail(
   subject: string,
   body: string,
   from: string
 ): Promise<{ relevant: boolean }> {
+  console.log(`[AI:preFilterEmail] Running stage 'preFilter'`)
   const prompt = `Is this email from a real person requiring human attention? Answer ONLY with valid JSON: {"relevant": true} or {"relevant": false}
 
 Relevant: Business inquiry, question, meeting proposal, follow-up, negotiation, personal message, deal-related.
@@ -30,9 +32,14 @@ BODY: ${body.slice(0, 500)}`
   }
 }
 
+/**
+ * Analyze a conversation for summary, risks, next steps.
+ * Stage: analysis (gemini-2.5-flash → claude-sonnet)
+ */
 export async function analyzeConversation(
   messages: { direction: string; text: string; date: Date }[]
 ): Promise<ConversationSummary> {
+  console.log(`[AI:analyzeConversation] Running stage 'analysis'`)
   const messageText = messages
     .map(m => `[${m.direction}] ${m.date.toISOString().split('T')[0]}: ${m.text}`)
     .join('\n\n')
@@ -61,6 +68,7 @@ Be concise. Focus on actionable insights.`
 
 /**
  * Determine what action should be proposed (Intent Only - NO DRAFTS)
+ * Stage: planning (gemini-2.5-flash → claude-sonnet)
  */
 export async function proposeAction(
   conversationSummary: ConversationSummary,
@@ -79,6 +87,7 @@ export async function proposeAction(
   suggestedLocation?: string | null
   suggestedTime?: string | null
 }> {
+  console.log(`[AI:proposeAction] Running stage 'planning' for ${cpName || 'unknown CP'}`)
   const recentText = recentMessages
     .slice(-3)
     .map(m => `[${m.direction}]: ${m.text.slice(0, 500)}`)
@@ -151,6 +160,7 @@ Rules:
 
 /**
  * Generate the Final Draft (Just-In-Time)
+ * Stage: drafting (gemini-2.5-flash → claude-sonnet)
  */
 export async function generateFinalDraft(
   conversationContext: any,
@@ -161,6 +171,7 @@ export async function generateFinalDraft(
   cpName?: string,
   channel: 'email' | 'whatsapp' = 'email'
 ): Promise<{ subject: string; body: string }> {
+  console.log(`[AI:generateFinalDraft] Running stage 'drafting' for ${cpName || 'unknown CP'}`)
   const systemContext = getAISystemPrompt(settings)
   const isWhatsApp = channel === 'whatsapp'
   const toneInstruction = isWhatsApp
@@ -204,29 +215,43 @@ Respond with ONLY valid JSON:
   return JSON.parse(jsonMatch[0])
 }
 
-// ... (Keep extractTopic, shouldJoinConversation, generateBriefHeadline, classifyEmail - they are fine) ...
+/**
+ * Extract the topic of a conversation.
+ * Stage: threading (gemini-2.5-flash → claude-sonnet)
+ */
 export async function extractTopic(messages: { text: string }[]): Promise<string> {
+  console.log(`[AI:extractTopic] Running stage 'threading'`)
   const messageTexts = messages.slice(0, 5).map(m => m.text.slice(0, 300)).join('\n---\n')
   const prompt = `What is the main topic of this email conversation? Respond with ONLY a brief topic (3-7 words) in CZECH.\n\n${messageTexts}`
   const text = await runAITask('threading', prompt)
   return text.trim()
 }
 
+/**
+ * Decide whether a new message belongs to an existing conversation.
+ * Stage: threading (gemini-2.5-flash → claude-sonnet)
+ */
 export async function shouldJoinConversation(
   newMessage: { subject: string; body: string; from: string },
   existingConversation: { topic: string; summary: string; participants: string[] }
 ): Promise<boolean> {
+  console.log(`[AI:shouldJoinConversation] Running stage 'threading'`)
   const prompt = `Does this new email belong to the existing conversation?\n\nNEW EMAIL:\nFrom: ${newMessage.from}\nSubject: ${newMessage.subject}\nBody preview: ${newMessage.body.slice(0, 500)}\n\nEXISTING CONVERSATION:\nTopic: ${existingConversation.topic}\nSummary: ${existingConversation.summary}\nParticipants: ${existingConversation.participants.join(', ')}\n\nRespond with ONLY "yes" or "no".`
   const text = await runAITask('threading', prompt)
   const answer = text.toLowerCase().trim()
   return answer === 'yes' || answer.includes('yes')
 }
 
+/**
+ * Generate a morning brief headline.
+ * Stage: drafting (gemini-2.5-flash → claude-sonnet)
+ */
 export async function generateBriefHeadline(
   todayEvents: { title: string; time: string }[],
   pendingActions: { type: string; cpName: string; urgency: number }[],
   tomorrowHighlights?: string[]
 ): Promise<string> {
+  console.log(`[AI:generateBriefHeadline] Running stage 'drafting'`)
   const eventsText = todayEvents.length > 0 ? todayEvents.map(e => `${e.time}: ${e.title}`).join('\n') : 'No meetings scheduled'
   const actionsText = pendingActions.sort((a, b) => b.urgency - a.urgency).slice(0, 5).map(a => `${a.type} for ${a.cpName} (urgency: ${a.urgency})`).join('\n')
   const prompt = `Write a brief, personal executive assistant-style morning briefing headline (2-3 sentences) in CZECH.\n\nTODAY'S SCHEDULE:\n${eventsText}\n\nPENDING ACTIONS:\n${actionsText}\n\n${tomorrowHighlights ? `TOMORROW: ${tomorrowHighlights.join(', ')}` : ''}\n\nWrite as if you're a thoughtful executive assistant giving a quick morning status. Be warm but professional. Focus on what matters most today.`
@@ -234,6 +259,10 @@ export async function generateBriefHeadline(
   return text.trim()
 }
 
+/**
+ * Classify an email into category + priority.
+ * Stage: classify (gemini-2.5-flash-lite → claude-haiku)
+ */
 export async function classifyEmail(
   subject: string,
   body: string,
@@ -243,6 +272,7 @@ export async function classifyEmail(
   category: 'meeting_request' | 'question' | 'update' | 'confirmation' | 'newsletter' | 'spam' | 'other'
   priority: 'high' | 'medium' | 'low'
 }> {
+  console.log(`[AI:classifyEmail] Running stage 'classify'`)
   const prompt = `Classify this email.\n\nFROM: ${from}\nSUBJECT: ${subject}\nBODY: ${body.slice(0, 1000)}\n\nRespond with ONLY valid JSON:\n{\n  "isActionable": true/false (does this require user action?),\n  "category": "meeting_request" | "question" | "update" | "confirmation" | "newsletter" | "spam" | "other",\n  "priority": "high" | "medium" | "low"\n}\n\nNewsletters, automated emails, and spam are NOT actionable.`
   const text = await runAITask('classify', prompt)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
