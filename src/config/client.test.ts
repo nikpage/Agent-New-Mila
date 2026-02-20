@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getAISystemPrompt, containsHighValueSignals, isPersonalEvent } from './client'
+import { containsHighValueSignals, isPersonalEvent } from './client'
 import type { UserSettings } from '@/lib/supabase/types'
 
 /** Minimal UserSettings stub with only the fields these functions read */
@@ -71,38 +71,6 @@ function makeSettings(overrides: Partial<UserSettings> = {}): UserSettings {
     ...overrides,
   } as UserSettings
 }
-
-describe('getAISystemPrompt', () => {
-  it('includes user business context', () => {
-    const prompt = getAISystemPrompt(makeSettings())
-    expect(prompt).toContain('Test Corp')
-    expect(prompt).toContain('Luxury apartments')
-    expect(prompt).toContain('Prague residential')
-  })
-
-  it('includes deal size range', () => {
-    const prompt = getAISystemPrompt(makeSettings())
-    expect(prompt).toContain('3,000,000')
-    expect(prompt).toContain('25,000,000')
-    expect(prompt).toContain('CZK')
-  })
-
-  it('includes high-value signals', () => {
-    const prompt = getAISystemPrompt(makeSettings())
-    expect(prompt).toContain('penthouse')
-    expect(prompt).toContain('investment')
-  })
-
-  it('includes language setting', () => {
-    const prompt = getAISystemPrompt(makeSettings({ ai_language: 'cs' }))
-    expect(prompt).toContain('Czech')
-  })
-
-  it('includes tone with counterparties', () => {
-    const prompt = getAISystemPrompt(makeSettings())
-    expect(prompt).toContain('polite and formal')
-  })
-})
 
 describe('containsHighValueSignals', () => {
   const settings = makeSettings()

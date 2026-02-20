@@ -23,16 +23,7 @@ beforeEach(() => {
 })
 
 describe('tryAcquireUserLock', () => {
-  it('returns true when lock is acquired (insert succeeds)', async () => {
-    // delete (cleanup) + insert (acquire)
-    mockFrom.mockReturnValue(chainable({ data: null, error: null }))
-
-    const acquired = await tryAcquireUserLock('user-1')
-    expect(acquired).toBe(true)
-  })
-
   it('returns false when lock is held (insert fails with unique violation)', async () => {
-    const insertChain = chainable({ data: null, error: null })
     let callCount = 0
     mockFrom.mockImplementation(() => {
       callCount++
@@ -51,28 +42,10 @@ describe('tryAcquireUserLock', () => {
     const acquired = await tryAcquireUserLock('user-1')
     expect(acquired).toBe(false)
   })
-
-  it('cleans up expired locks before trying to acquire', async () => {
-    const deleteCalls: unknown[][] = []
-    mockFrom.mockImplementation(() => {
-      const chain = chainable()
-      const origDelete = chain.delete as ReturnType<typeof vi.fn>
-      chain['delete'] = vi.fn().mockImplementation((...args: unknown[]) => {
-        deleteCalls.push(args)
-        return origDelete(...args)
-      })
-      return chain
-    })
-
-    await tryAcquireUserLock('user-1')
-
-    // from('user_agent_locks') called at least once for the cleanup delete
-    expect(mockFrom).toHaveBeenCalledWith('user_agent_locks')
-  })
 })
 
 describe('releaseUserLock', () => {
-  it('deletes the lock row for the user', async () => {
+  it('deletes the lock row filtered by user_id', async () => {
     const deleteChain = chainable()
     mockFrom.mockReturnValue(deleteChain)
 
@@ -81,11 +54,5 @@ describe('releaseUserLock', () => {
     expect(mockFrom).toHaveBeenCalledWith('user_agent_locks')
     expect(deleteChain.delete).toHaveBeenCalled()
     expect(deleteChain.eq).toHaveBeenCalledWith('user_id', 'user-1')
-  })
-
-  it('is idempotent (no error if lock does not exist)', async () => {
-    mockFrom.mockReturnValue(chainable({ data: null, error: null }))
-
-    await expect(releaseUserLock('nonexistent-user')).resolves.toBeUndefined()
   })
 })

@@ -412,35 +412,53 @@ npm run test:watch   # Watch mode (re-runs on save)
 npm run test:coverage # With v8 coverage report
 ```
 
-### Test Map — Source → Test File
+### Test Map — Source → Test File (77 tests)
 
 | Source file | Test file | What's tested |
 |-------------|-----------|---------------|
-| `src/lib/db/actions.ts` | `actions.test.ts` | `calculatePriorityScore` — zero-safety, quadratic growth, multipliers, rounding |
-| `src/lib/auth/tokens.ts` | `tokens.test.ts` | `generateActionToken`/`validateActionToken`, `generateOAuthState`/`validateOAuthState`, `generateTriggerToken`/`validateTriggerToken`, `validateCronToken` — HMAC round-trip, expiry, tampering |
-| `src/config/client.ts` | `client.test.ts` | `getAISystemPrompt`, `containsHighValueSignals`, `isPersonalEvent` — prompt assembly, keyword matching, case-insensitivity |
-| `src/services/ingestion.ts` | `ingestion.test.ts` | `isBlockedSender` — exact match, prefix, domain, subaddress, legitimate emails |
-| `src/lib/whatsapp/types.ts` | `types.test.ts` | `normalizePhoneNumber`, `phoneToThreadId` — stripping, `+` prefix, thread ID format |
-| `src/lib/db/counterparties.ts` | `counterparties.test.ts` | `isSameGmailAddress` — dot-insensitive, case-insensitive, trimming |
-| `src/lib/db/gdpr.ts` | `gdpr.test.ts` | `writeAuditLog` (never-throw), `deleteAllUserData` (FK-safe order, counts), `exportAllUserData` (structure), `enforceRetentionPolicy` (scrub + embedding delete) |
-| `src/lib/db/locks.ts` | `locks.test.ts` | `tryAcquireUserLock` (success, held, expired cleanup), `releaseUserLock` (idempotent) |
-| `src/services/agent.ts` | `agent.test.ts` | Pipeline lock acquire/release/fallback, user-not-found, no-credentials, fault isolation (each ingestion step fails independently) |
+| `src/lib/auth/tokens.ts` | `tokens.test.ts` | 19 tests — HMAC round-trip, expiry, tampering, missing secret, malformed input. **Protects every approve/reject button in brief emails.** |
+| `src/services/agent.ts` | `agent.test.ts` | 12 tests — Lock acquire/release/fallback, user-not-found, no-credentials, fault isolation (`Promise.allSettled` not `Promise.all`) |
+| `src/lib/db/actions.ts` | `actions.test.ts` | 9 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding |
+| `src/services/ingestion.ts` | `ingestion.test.ts` | 8 tests — `isBlockedSender`: exact/prefix/domain/subaddress matching, false-positive prevention (`mynotifications` ≠ `notifications`) |
+| `src/config/client.ts` | `client.test.ts` | 10 tests — `containsHighValueSignals` + `isPersonalEvent`: keyword matching, case-insensitivity, empty inputs, empty keyword lists |
+| `src/lib/db/counterparties.ts` | `counterparties.test.ts` | 6 tests — `isSameGmailAddress`: dot/case-insensitive, domain dots, whitespace trimming |
+| `src/lib/whatsapp/types.ts` | `types.test.ts` | 6 tests — `normalizePhoneNumber`, `phoneToThreadId`: separator stripping, `+` prefix, thread ID format |
+| `src/lib/db/gdpr.ts` | `gdpr.test.ts` | 4 tests — `writeAuditLog` never-throw contract, `deleteAllUserData` FK-safe ordering, missing lock table graceful handling |
+| `src/lib/db/locks.ts` | `locks.test.ts` | 2 tests — unique violation → `false` (error code `23505`), `releaseUserLock` filters by `user_id` |
 
-### Keeping Tests in Sync — RULES
+### What each test category catches
 
-1. **If you change a pure function's behavior** (scoring formula, token format, filter logic, keyword matching), **update or add tests in the corresponding test file**. The test map above tells you which file.
+- **Pure function tests** (tokens, actions, ingestion, client, counterparties, whatsapp): No mocks. Test real logic. Catch regressions when formulas, matching rules, or crypto contracts change.
+- **Orchestration tests** (agent): Mock all dependencies. Test that the pipeline handles failure correctly — lock release on crash, fault isolation between steps, early exits.
+- **Structural constraint tests** (gdpr, locks): Mock Supabase. Test specific behavioral contracts — FK deletion order, never-throw guarantee, unique-violation branching.
 
-2. **If you add a new pure/exported function** to any tested file, **add tests for it** in the existing test file.
+### When to update tests
 
-3. **If you add a new file with testable logic** (pure functions, deterministic behavior), **create a co-located `.test.ts` file** following the same pattern as the existing ones.
+1. **You changed a function's behavior** → Update the test that pins the old behavior. If the test still passes after your change, the test wasn't covering what you changed — add a test that does.
 
-4. **DB-dependent tests** mock Supabase via `vi.mock('../supabase/client')`. See `gdpr.test.ts` or `locks.test.ts` for the pattern. The mock returns a chainable query builder — no real DB needed.
+2. **You added a new exported function** to an already-tested file → Add tests in the existing `.test.ts` file.
 
-5. **Service-level tests** mock all imports (DB, external APIs) and test orchestration logic (error handling, fault isolation, lock behavior). See `agent.test.ts` for the pattern.
+3. **You created a new file with deterministic logic** (pure functions, formulas, matching rules, crypto) → Create a co-located `.test.ts` file.
 
-6. **What NOT to test**: API routes (Next.js handler wiring), React components (no jsdom configured), AI prompt text (changes frequently, not deterministic).
+4. **You changed orchestration flow** (error handling paths, parallel vs serial, lock behavior, retry logic) → Update or add tests in the relevant service test file.
 
-7. **Run `npm test` before every commit.** Tests must pass alongside `npm run build`.
+### When NOT to add tests
+
+- **AI prompt text** — changes constantly, not deterministic, not testable by string matching
+- **API route wiring** — Next.js handler plumbing, not business logic
+- **React components** — no jsdom configured, and UI testing has different cost/benefit
+- **"Did you call the right Supabase method" tests** — these test code structure not behavior. If the only assertion is "mockFrom was called with table name X", the test catches nothing useful. Test the *behavioral outcome* of the DB call instead (error handling, return value branching, ordering constraints).
+
+### Test quality bar
+
+Every test must answer: **"What specific regression does this catch?"** If the answer is "it verifies the function doesn't crash with default mock data," delete it. Good tests pin down:
+- **Formulas** with hand-calculated expected values
+- **Branching logic** by simulating the condition that triggers each branch
+- **Error contracts** (never-throw, fallback behavior, lock release on failure)
+- **Security properties** (HMAC validation, token expiry, timing-safe comparison)
+- **Edge cases** that have bitten you or are easy to regress (prefix vs substring matching, zero-safety guards)
+
+### Run `npm test` before every commit. Tests must pass alongside `npm run build`.
 
 ## Security & Authentication
 
