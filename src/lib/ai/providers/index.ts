@@ -5,13 +5,11 @@
 
 import type { AIProvider } from './types'
 import { geminiProvider } from './gemini'
+import { anthropicProvider } from './anthropic'
 
 export function resolveProvider(modelName: string): AIProvider {
   if (modelName.startsWith('gemini-')) return geminiProvider
-
-  // Future providers:
-  // if (modelName.startsWith('gpt-')) return openaiProvider
-  // if (modelName.startsWith('claude-')) return anthropicProvider
+  if (modelName.startsWith('claude-')) return anthropicProvider
 
   throw new Error(`Unknown AI provider for model: ${modelName}`)
 }

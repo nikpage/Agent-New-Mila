@@ -1,7 +1,7 @@
 /**
  * AI Model Configuration
  * Maps each AI stage to a primary model + 2 fallbacks.
- * All Gemini for now — structure supports OpenAI/Anthropic later.
+ * Gemini primary, Claude (Anthropic) fallbacks.
  */
 
 export type AIStage =
@@ -23,41 +23,41 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
   preFilter: {
     primary: 'gemini-2.5-flash-lite',
     fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    fallback2: 'claude-haiku-4-5-20251001',
   },
 
   // Classification — email category + priority
   classify: {
     primary: 'gemini-2.5-flash-lite',
     fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    fallback2: 'claude-haiku-4-5-20251001',
   },
 
   // Threading — extractTopic, shouldJoinConversation
   threading: {
     primary: 'gemini-2.5-flash',
-    fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    fallback1: 'claude-sonnet-4-6',
+    fallback2: 'claude-haiku-4-5-20251001',
   },
 
   // Analysis — analyzeConversation
   analysis: {
     primary: 'gemini-2.5-flash',
-    fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    fallback1: 'claude-sonnet-4-6',
+    fallback2: 'claude-haiku-4-5-20251001',
   },
 
   // Planning — proposeAction
   planning: {
     primary: 'gemini-2.5-flash',
-    fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    fallback1: 'claude-sonnet-4-6',
+    fallback2: 'claude-haiku-4-5-20251001',
   },
 
   // Drafting — generateFinalDraft, generateBriefHeadline
   drafting: {
     primary: 'gemini-2.5-flash',
-    fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    fallback1: 'claude-sonnet-4-6',
+    fallback2: 'claude-haiku-4-5-20251001',
   },
 }
