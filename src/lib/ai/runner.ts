@@ -18,6 +18,11 @@ const MAX_RETRIES = 3
 /** When true, skip all gemini-* models in the chain. Set by probeAIAvailability(). */
 let geminiDisabled = false
 
+/** Check if Gemini is currently disabled (geo-block, auth failure, etc.). Used by embeddings. */
+export function isGeminiDisabled(): boolean {
+  return geminiDisabled
+}
+
 function isRateLimitError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   const msg = error.message.toLowerCase()

@@ -1,4 +1,13 @@
+/**
+ * Embedding Generation
+ * Uses Gemini embedding model (gemini-embedding-001, 768-dim, multilingual).
+ * No fallback chain — embeddings are Gemini-only. When Gemini is unavailable
+ * (geo-block, missing key), calls are skipped silently. The app works without
+ * embeddings: threading falls back to Gmail thread ID matching.
+ */
+
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { isGeminiDisabled } from '@/lib/ai/runner'
 
 let genAI: GoogleGenerativeAI | null = null
 
@@ -19,6 +28,10 @@ export const embeddings = {
 }
 
 export async function generateEmbedding(text: string): Promise<number[]> {
+  if (isGeminiDisabled()) {
+    throw new Error('[Embeddings] Skipped — Gemini unavailable (geo-block or missing key)')
+  }
+  console.log(`[Embeddings] Generating embedding via ${embeddings.model}`)
   const client = getEmbeddingClient()
   const model = client.getGenerativeModel({
     model: embeddings.model,
