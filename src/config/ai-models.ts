@@ -19,45 +19,45 @@ export interface ModelChain {
 }
 
 export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
-  // Pre-filter / spam — lite model (fast, cheap)
+  // Pre-filter / spam — cheapest, fastest model
   preFilter: {
-    primary: 'gemini-2.5-flash-lite',
-    fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    primary: 'gemini-2.5-flash',
+    fallback1: 'gemini-2.0-flash',
+    fallback2: 'gemini-2.0-flash',
   },
 
   // Classification — email category + priority
   classify: {
-    primary: 'gemini-2.5-flash-lite',
-    fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    primary: 'gemini-2.5-flash',
+    fallback1: 'gemini-2.0-flash',
+    fallback2: 'gemini-2.0-flash',
   },
 
   // Threading — extractTopic, shouldJoinConversation
   threading: {
     primary: 'gemini-2.5-flash',
-    fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    fallback1: 'gemini-2.0-flash',
+    fallback2: 'gemini-2.0-flash',
   },
 
   // Analysis — analyzeConversation
   analysis: {
     primary: 'gemini-2.5-flash',
-    fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    fallback1: 'gemini-2.0-flash',
+    fallback2: 'gemini-2.0-flash',
   },
 
   // Planning — proposeAction
   planning: {
     primary: 'gemini-2.5-flash',
-    fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    fallback1: 'gemini-2.0-flash',
+    fallback2: 'gemini-2.0-flash',
   },
 
   // Drafting — generateFinalDraft, generateBriefHeadline
   drafting: {
     primary: 'gemini-2.5-flash',
-    fallback1: 'gemini-2.5-flash',
-    fallback2: 'gemini-2.5-flash',
+    fallback1: 'gemini-2.0-flash',
+    fallback2: 'gemini-2.0-flash',
   },
 }
