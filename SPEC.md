@@ -129,7 +129,7 @@ All per-user configuration is stored in the `users.settings` JSONB column and co
 
 `src/config/client.ts` contains helper functions that read from `UserSettings`:
 - `getAISystemPrompt(settings)` — assembles the system prompt from the user's business context, tone, and language settings
-- `containsHighValueSignals(text, settings)` — checks message text against the user's high-value keywords
+- `containsHighValueSignals(text, settings)` — checks message text against the user's high-value keywords (used in planning + lead tracking)
 - `isPersonalEvent(title, settings)` — checks calendar event titles against personal keywords
 
 The `clientConfig` object in that file is legacy and not consumed at runtime.
@@ -172,7 +172,7 @@ When a new meeting conflicts with existing events:
 | Input | Scale | Source |
 |-------|-------|--------|
 | `dollarValue` | 0+ CZK | AI-assessed from conversation |
-| `offerMultiplier` | default 1 | Client config: seller (1.5) or buyer (1.0) |
+| `offerMultiplier` | default 1 | User settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
 | `urgency` | 1-10 | AI-assessed |
 | `painFactor` | 1-10 | AI-assessed relationship pain |
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
@@ -206,10 +206,12 @@ Current chain: `preFilter`/`classify` use `gemini-2.5-flash-lite` primary; all o
 Every AI prompt receives the user's business context via `getAISystemPrompt(settings)` (reads from `UserSettings` in DB). This includes:
 - Who the user is and what they do
 - Market and specialization
-- Typical deal size range
-- High-value signals to watch for
+- Typical deal size range (used as AI reference for `dollarValue` estimation in configured currency)
+- High-value signals to watch for (detected via `containsHighValueSignals`, flagged to AI in planning prompt)
 - Tone instructions
 - Channel context (email vs WhatsApp adjusts formality)
+
+The planning stage (`proposeAction`) also asks the AI to classify `dealType` (sale/purchase/rental/lease/consultation/other) which is written to `conversation_threads.deal_type`.
 
 ## Tech Stack
 

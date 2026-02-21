@@ -176,7 +176,7 @@ All user configuration is stored in `users.settings` JSONB column. See `ONBOARDI
 
 **`src/config/client.ts`** exports helper functions that take `UserSettings` as input:
 - `getAISystemPrompt(settings)` — builds the AI system prompt from user's business context
-- `containsHighValueSignals(text, settings)` — checks text against user's high-value keywords
+- `containsHighValueSignals(text, settings)` — checks text against user's high-value keywords (used in both planning and lead tracking)
 - `isPersonalEvent(title, settings)` — detects personal calendar events
 
 The `clientConfig` const object in this file is **legacy dead code** — not consumed at runtime. All runtime behavior reads from `UserSettings` via DB.
@@ -192,7 +192,7 @@ Runs as Step 6 of agent pipeline. Scans all conversations, detects stale leads:
 | Cold | 5-14 | Urgent follow-up (2.5x boost) |
 | Dead | 14+ | Last-chance contact (3.75x boost) |
 
-Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation. High-value conversations (matching `highValueSignals`) get additional 1.5x boost.
+Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation. High-value conversations (matching `highValueSignals`) get additional 1.5x boost in lead tracking and are flagged to the AI during planning for better dollar value estimation.
 
 ## Database Schema (actual columns from Supabase)
 
@@ -261,6 +261,13 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 - `conversation_threads.priority_score` — integer on thread vs numeric on action_proposals (different scales)
 - `users.settings.ai_tone_user/ai_tone_cp/user_alias` — used at runtime via `getAISystemPrompt(settings)` in `client.ts`
 
+### Deal Property Model
+- **`conversation_threads.deal_type`** — set by AI during planning (`proposeAction` → `planning.ts`). Values: `sale`, `purchase`, `rental`, `lease`, `consultation`, `other`, or `null`. Type: `DealType` in `types.ts`.
+- **`action_proposals.offer_multiplier`** — set during planning from user settings based on CP role. `cp.role === 'seller'` → `offer_multiplier_seller` (default 1.5), otherwise `offer_multiplier_buyer` (default 1.0). Flows into `calculatePriorityScore()`.
+- **`action_proposals.dollar_value`** — AI estimates in user's configured currency (from `typical_deal_size_currency`, default CZK). High-value signal detection (`containsHighValueSignals`) flags conversations for the AI to prioritize estimation.
+- **CP `role`** — typed as `CPRole`: `seller`, `buyer`, `landlord`, `tenant`, `agent`, `developer`, `other`, or `null`.
+- **`payload.action_metadata`** — includes `deal_type`, `offer_multiplier`, and `is_high_value` boolean for downstream consumers.
+
 ## Priority Scoring
 
 **Formula:** `(dollarValue × offerMultiplier × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
@@ -270,7 +277,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 | Input | Scale | Notes |
 |-------|-------|-------|
 | `dollarValue` | 0+ (CZK) | Deal/transaction value |
-| `offerMultiplier` | default 1 | From client config: seller (1.5) or buyer (1.0) |
+| `offerMultiplier` | default 1 | From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
 | `urgency` | 1-10 | AI-assessed, safe default 1 |
 | `painFactor` | 1-10 | AI-assessed relationship pain, safe default 1 |
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
@@ -278,7 +285,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/null (prevents score collapse).
 
-**Note:** `planning.ts` calls `calculatePriorityScore()` without `weight` or `offerMultiplier` — those are not yet wired into proposal generation.
+**Note:** `planning.ts` passes `offerMultiplier` (based on CP role) to `calculatePriorityScore()`. `weight` is not yet wired into proposal generation (defaults to 0).
 
 ## AI Model Configuration
 
@@ -302,7 +309,7 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 - `src/lib/ai/providers/gemini.ts` — `@google/generative-ai` SDK. Supports **multi-key rotation** via `GEMINI_API_KEYS` (comma-separated) — round-robins across keys. Falls back to single `GEMINI_API_KEY` if not set.
 - `src/lib/ai/providers/anthropic.ts` — `@anthropic-ai/sdk`. Uses `ANTHROPIC_API_KEY` env var.
 
-**Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()` and `generateFinalDraft()` prompts. Channel context (email vs WhatsApp) adjusts tone.
+**Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()` and `generateFinalDraft()` prompts. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates `dollarValue` in the user's configured currency with typical deal range as reference, and classifies `dealType`.
 
 ## Embeddings & Semantic Threading
 
@@ -355,7 +362,7 @@ When a new meeting conflicts with existing events:
 **Language:** Czech (configured in `src/config/client.ts` → `ai.language`)
 **Channel-aware tone:** Implemented — email gets formal tone + signature; WhatsApp gets short, conversational messages.
 
-Proposal phase stores only: `intent_cs`, `rationale_cs`, `missing_info`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`.
+Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `is_high_value`) is stored in `payload.action_metadata`.
 
 `generateFinalDraft()` in `src/lib/ai/gemini.ts` takes conversation context + intent + user notes + channel → returns `{ subject, body }`.
 
