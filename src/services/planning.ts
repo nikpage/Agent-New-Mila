@@ -9,12 +9,39 @@ import { getLatestMessageFromCP } from '@/lib/db/messages'
 import { getUserSettings } from '@/lib/db/users'
 import { proposeMeeting } from './scheduling'
 import { containsHighValueSignals } from '@/config/client'
+import {
+  VALID_DEAL_TYPES,
+} from '@/lib/supabase/types'
 import type {
   ActionProposal,
   ConversationThread,
   ConversationSummary,
+  DealType,
 } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
+
+/**
+ * Validate AI-returned dealType against known values.
+ * Returns null for invalid/unknown values instead of storing garbage.
+ */
+export function validateDealType(value: unknown): DealType {
+  if (typeof value !== 'string') return null
+  return (VALID_DEAL_TYPES as readonly string[]).includes(value)
+    ? (value as DealType)
+    : null
+}
+
+/**
+ * Select offer multiplier based on counterparty role.
+ * Sellers get higher multiplier (more commission value).
+ */
+export function selectOfferMultiplier(
+  cpRole: string | null,
+  sellerMultiplier: number,
+  buyerMultiplier: number
+): number {
+  return cpRole === 'seller' ? sellerMultiplier : buyerMultiplier
+}
 
 export async function generateActionProposal(
   conversation: ConversationThread
@@ -51,9 +78,10 @@ export async function generateActionProposal(
     // Get AI recommendation (Intent Only)
     const proposal = await proposeAction(summary, formattedMessages, cp.name, settings, channel)
 
-    // Write deal_type onto conversation thread if AI classified it
-    if (proposal.dealType) {
-      await updateConversation(conversation.id, { deal_type: proposal.dealType })
+    // Validate and write deal_type onto conversation thread if AI classified it
+    const dealType = validateDealType(proposal.dealType)
+    if (dealType) {
+      await updateConversation(conversation.id, { deal_type: dealType })
     }
 
     // Proactive Calendar: If SCHEDULE action, use full scheduling service
@@ -171,9 +199,9 @@ export async function generateActionProposal(
     )
 
     // Select offer multiplier based on counterparty role (seller earns more commission)
-    const offerMultiplier = cp.role === 'seller'
-      ? settings.offer_multiplier_seller
-      : settings.offer_multiplier_buyer
+    const offerMultiplier = selectOfferMultiplier(
+      cp.role, settings.offer_multiplier_seller, settings.offer_multiplier_buyer
+    )
 
     const priorityScore = calculatePriorityScore({
       dollarValue: proposal.dollarValue,
@@ -219,7 +247,7 @@ export async function generateActionProposal(
           dollar_value: proposal.dollarValue,
           offer_multiplier: offerMultiplier,
           pain_factor: proposal.painFactor,
-          deal_type: proposal.dealType || null,
+          deal_type: dealType,
           is_high_value: containsHighValueSignals(
             formattedMessages.map(m => m.text).join(' '),
             settings

@@ -36,7 +36,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (91 tests)
+npm test             # Run Vitest test suite (190 tests)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -421,7 +421,7 @@ npm run test:watch   # Watch mode (re-runs on save)
 npm run test:coverage # With v8 coverage report
 ```
 
-### Test Layers (179 tests + 10 smoke tests)
+### Test Layers (190 tests + 10 smoke tests)
 
 Tests are organized in three layers. All three MUST pass before any commit.
 
@@ -448,12 +448,13 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/services/scheduling.test.ts` | 9 | Meeting duration, buffer, working hours, working days, timezone, travel mode defaults |
 | `src/services/morning-brief.test.ts` | 4 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10) |
 
-#### Layer 2 (existing): Logic Tests (77 tests)
+#### Layer 2 (existing): Logic Tests (88 tests)
 
 | Source file | Test file | What's tested |
 |-------------|-----------|---------------|
 | `src/lib/auth/tokens.ts` | `tokens.test.ts` | 20 tests — HMAC round-trip, expiry, tampering, missing secret, malformed input. **Protects every approve/reject button in brief emails.** |
 | `src/services/agent.ts` | `agent.test.ts` | 12 tests — Lock acquire/release/fallback, user-not-found, no-credentials, fault isolation (`Promise.allSettled` not `Promise.all`) |
+| `src/services/planning.ts` | `planning.test.ts` | 11 tests — `validateDealType`: valid/invalid/hallucinated values, `selectOfferMultiplier`: seller/buyer/null role selection, `VALID_DEAL_TYPES`/`VALID_CP_ROLES` pinning, seller vs buyer priority score difference |
 | `src/lib/db/actions.ts` | `actions.test.ts` | 9 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding |
 | `src/services/ingestion.ts` | `ingestion.test.ts` | 8 tests — `isBlockedSender`: exact/prefix/domain/subaddress matching, false-positive prevention (`mynotifications` ≠ `notifications`) |
 | `src/config/client.ts` | `client.test.ts` | 10 tests — `containsHighValueSignals` + `isPersonalEvent`: keyword matching, case-insensitivity, empty inputs, empty keyword lists |
