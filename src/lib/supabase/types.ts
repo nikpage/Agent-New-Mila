@@ -607,6 +607,12 @@ export type EventInsert = Database['public']['Tables']['events']['Insert']
 export type ActionType = 'REPLY' | 'SCHEDULE' | 'WAIT' | 'FILE' | 'DELEGATE'
 export type ActionStatus = 'pending' | 'approved' | 'needs_revision' | 'completed' | 'dismissed'
 
+// Deal types — stored on conversation_threads.deal_type
+export type DealType = 'sale' | 'purchase' | 'rental' | 'lease' | 'consultation' | 'other' | null
+
+// Counterparty roles — stored on cps.role
+export type CPRole = 'seller' | 'buyer' | 'landlord' | 'tenant' | 'agent' | 'developer' | 'other' | null
+
 // User settings structure (stored in users.settings JSON column)
 export interface UserSettings {
   // Working Hours & Timezone

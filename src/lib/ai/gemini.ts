@@ -1,6 +1,6 @@
-import type { ConversationSummary, ActionType, UserSettings } from '../supabase/types'
+import type { ConversationSummary, ActionType, DealType, UserSettings } from '../supabase/types'
 import { runAITask } from './runner'
-import { getAISystemPrompt } from '@/config/client'
+import { getAISystemPrompt, containsHighValueSignals } from '@/config/client'
 
 /**
  * Pre-filter: Quick spam/junk detection using cheapest model.
@@ -84,6 +84,7 @@ export async function proposeAction(
   urgency: number
   dollarValue: number
   painFactor: number
+  dealType: DealType
   suggestedLocation?: string | null
   suggestedTime?: string | null
 }> {
@@ -98,9 +99,17 @@ export async function proposeAction(
     ? 'CHANNEL: WhatsApp — keep messages short, informal, no subject line needed.'
     : 'CHANNEL: Email — standard professional format.'
 
+  // Check if conversation contains high-value signals
+  const conversationText = recentMessages.map(m => m.text).join(' ')
+  const isHighValue = containsHighValueSignals(conversationText, settings)
+  const highValueNote = isHighValue
+    ? 'HIGH-VALUE DEAL DETECTED — this conversation matches high-value signals. Prioritize accordingly and estimate dollar value carefully.'
+    : ''
+
   const prompt = `${systemContext}
 
 ${channelNote}
+${highValueNote}
 
 You are Mila, a proactive executive assistant. Based on this conversation, determine what action to take.
 
@@ -139,8 +148,9 @@ Respond with ONLY valid JSON:
   "intent_cs": "PROACTIVE description in CZECH: what Mila HAS DONE + what she WILL DO on UDĚLAT. Include specific data points from conversation. Return null if WAIT/FILE.",
   "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
   "urgency": 1-10 (10 = needs immediate attention),
-  "dollarValue": estimated deal value in dollars (0 if unknown),
+  "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "painFactor": 1-10 (how much pain from ignoring this),
+  "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
   "suggestedLocation": "Physical meeting location if mentioned or clearly implied. null if not specified.",
   "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). null if no specific time mentioned."
 }

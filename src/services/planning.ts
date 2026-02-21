@@ -3,11 +3,12 @@ import {
   createAction,
   calculatePriorityScore,
 } from '@/lib/db/actions'
-import { getConversationById, getRecentMessages } from '@/lib/db/conversations'
+import { getConversationById, getRecentMessages, updateConversation } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
 import { getLatestMessageFromCP } from '@/lib/db/messages'
 import { getUserSettings } from '@/lib/db/users'
 import { proposeMeeting } from './scheduling'
+import { containsHighValueSignals } from '@/config/client'
 import type {
   ActionProposal,
   ConversationThread,
@@ -49,6 +50,11 @@ export async function generateActionProposal(
 
     // Get AI recommendation (Intent Only)
     const proposal = await proposeAction(summary, formattedMessages, cp.name, settings, channel)
+
+    // Write deal_type onto conversation thread if AI classified it
+    if (proposal.dealType) {
+      await updateConversation(conversation.id, { deal_type: proposal.dealType })
+    }
 
     // Proactive Calendar: If SCHEDULE action, use full scheduling service
     // Mila acts as a human assistant - finds best slots, blocks them IN USER'S CALENDAR ONLY,
@@ -164,11 +170,17 @@ export async function generateActionProposal(
       (Date.now() - lastContactDate.getTime()) / (1000 * 60 * 60 * 24)
     )
 
+    // Select offer multiplier based on counterparty role (seller earns more commission)
+    const offerMultiplier = cp.role === 'seller'
+      ? settings.offer_multiplier_seller
+      : settings.offer_multiplier_buyer
+
     const priorityScore = calculatePriorityScore({
       dollarValue: proposal.dollarValue,
       urgency: proposal.urgency,
       painFactor: proposal.painFactor,
       daysIgnored,
+      offerMultiplier,
     })
 
     // Create the action proposal with CLEAN columns
@@ -188,6 +200,7 @@ export async function generateActionProposal(
       rationale: proposal.rationale_cs, // Keep for backward compat if needed, or use English if you prefer logs in EN
       priority_score: priorityScore,
       dollar_value: proposal.dollarValue,
+      offer_multiplier: offerMultiplier,
       urgency: proposal.urgency,
       pain_factor: proposal.painFactor,
 
@@ -204,7 +217,13 @@ export async function generateActionProposal(
           action_type: proposal.actionType,
           urgency: proposal.urgency,
           dollar_value: proposal.dollarValue,
+          offer_multiplier: offerMultiplier,
           pain_factor: proposal.painFactor,
+          deal_type: proposal.dealType || null,
+          is_high_value: containsHighValueSignals(
+            formattedMessages.map(m => m.text).join(' '),
+            settings
+          ),
         },
         ...schedulingPayload,
       },
