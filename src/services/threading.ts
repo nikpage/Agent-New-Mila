@@ -201,7 +201,12 @@ function shouldRebuildSummary(conversation: ConversationThread): boolean {
 }
 
 /**
- * Rebuild the conversation summary using AI
+ * Rebuild the conversation summary using AI, then embed the summary.
+ *
+ * Order matters: summary first, then embed the summary text (not raw messages).
+ * The summary is a distilled semantic representation — exactly what embeddings
+ * need. Raw email text is polluted with signatures, quoted replies, disclaimers.
+ * If summary generation fails, we fall back to embedding cleaned message text.
  */
 export async function rebuildConversationSummary(
   conversation: ConversationThread
@@ -220,22 +225,12 @@ export async function rebuildConversationSummary(
     date: new Date(m.timestamp),
   }))
 
-  // Generate and save conversation embedding — independent of summary analysis
-  // so that embedding-based conversation matching works even if the AI summary fails.
-  try {
-    const messageTexts = formattedMessages.map(m => m.text)
-    const embedding = await generateConversationEmbedding(messageTexts)
-    await saveConversationEmbedding(conversation.id, embedding)
-  } catch (embeddingError) {
-    console.error(`[Threading] Failed to generate embedding for conversation ${conversation.id}:`, embeddingError)
-  }
-
-  // Generate AI summary — separate try/catch so embedding is not blocked by this
+  // Step 1: Generate AI summary
+  let summaryText: string | null = null
   try {
     const summary = await analyzeConversation(formattedMessages)
 
-    // Generate a text summary
-    const summaryText = `${summary.currentState}. ${summary.nextSteps.length > 0 ? 'Next: ' + summary.nextSteps[0] : ''}`
+    summaryText = `${summary.currentState}. ${summary.nextSteps.length > 0 ? 'Next: ' + summary.nextSteps[0] : ''}`
 
     await updateConversationSummary(
       conversation.id,
@@ -246,6 +241,17 @@ export async function rebuildConversationSummary(
     )
   } catch (error) {
     console.error('[Threading] Failed to rebuild conversation summary:', error)
+  }
+
+  // Step 2: Embed the summary (preferred) or cleaned message text (fallback).
+  // Summary is a distilled semantic signal — much better embedding input than
+  // raw email text with signatures, quoted replies, and disclaimers.
+  try {
+    const messageTexts = formattedMessages.map(m => m.text)
+    const embedding = await generateConversationEmbedding(messageTexts, summaryText || undefined)
+    await saveConversationEmbedding(conversation.id, embedding)
+  } catch (embeddingError) {
+    console.error(`[Threading] Failed to generate embedding for conversation ${conversation.id}:`, embeddingError)
   }
 }
 
