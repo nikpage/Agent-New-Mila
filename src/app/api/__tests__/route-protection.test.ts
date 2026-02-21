@@ -90,6 +90,7 @@ vi.mock('@/lib/db/conversations', () => ({
 vi.mock('@/lib/db/counterparties', () => ({
   getCPById: vi.fn().mockResolvedValue(null),
   blacklistCP: vi.fn().mockResolvedValue(null),
+  findOrCreateCP: vi.fn().mockResolvedValue(null),
 }))
 
 vi.mock('@/lib/db/gdpr', () => ({
@@ -170,11 +171,13 @@ vi.mock('@/lib/whatsapp/sender', () => ({
 
 vi.mock('@/lib/auth/tokens', () => ({
   validateActionToken: vi.fn().mockReturnValue(false),
+  validateBackfillToken: vi.fn().mockReturnValue(false),
   validateCronToken: vi.fn().mockReturnValue(false),
   validateOAuthState: vi.fn().mockReturnValue(null),
   validateTriggerToken: vi.fn().mockReturnValue(false),
   generateOAuthState: vi.fn().mockReturnValue('test-state'),
   generateActionToken: vi.fn().mockReturnValue('test-token'),
+  generateBackfillToken: vi.fn().mockReturnValue('test-sig'),
   generateTriggerToken: vi.fn().mockReturnValue('test-sig'),
 }))
 
@@ -187,7 +190,13 @@ vi.mock('@/components/action/action-card-template', () => ({
 }))
 
 vi.mock('@/config/theme', () => ({
-  theme: { colors: { background: '#fff', text: '#000', textMuted: '#666' } },
+  theme: {
+    colors: { background: '#fff', surface: '#fff', text: '#000', textMuted: '#666', border: '#eee', primary: '#1e3a8a', secondary: '#f3f4f6', accent: '#b45309', success: '#059669', warning: '#d97706', error: '#dc2626', successBg: '#ecfdf5', warningBg: '#fffbeb', errorBg: '#fef2f2' },
+    shadows: { card: 'none', hover: 'none', modal: 'none' },
+    borderRadius: { sm: '4px', md: '8px', lg: '12px', full: '9999px' },
+    typography: { fontFamily: 'sans-serif', sizes: { xs: '12px', sm: '14px', base: '16px', lg: '18px', xl: '20px', xxl: '24px' }, weights: { normal: 400, medium: 500, semibold: 600, bold: 700 } },
+    spacing: { xs: '4px', sm: '8px', md: '16px', lg: '24px', xl: '32px', xxl: '48px' },
+  },
 }))
 
 // ---------------------------------------------------------------------------
@@ -464,6 +473,27 @@ describe('Layer 1: Route Protection', () => {
       const { POST } = await import('@/app/api/auth/callback/route')
       const req = makeRequest('POST', '/api/auth/callback', {}, { code: 'test-code', state: 'bad-state' })
       const res = await POST(req)
+      expect(res.status).toBe(401)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Backfill report action route — signed token
+  // -------------------------------------------------------------------------
+
+  describe('Backfill action route (signed token)', () => {
+
+    it('GET /api/backfill/action — rejects without params', async () => {
+      const { GET } = await import('@/app/api/backfill/action/route')
+      const req = makeRequest('GET', '/api/backfill/action')
+      const res = await GET(req)
+      expect(res.status).toBe(400)
+    })
+
+    it('GET /api/backfill/action — rejects with bad signature', async () => {
+      const { GET } = await import('@/app/api/backfill/action/route')
+      const req = makeRequest('GET', '/api/backfill/action?uid=test&op=allow&target=test%40test.com&sig=bad-sig')
+      const res = await GET(req)
       expect(res.status).toBe(401)
     })
   })

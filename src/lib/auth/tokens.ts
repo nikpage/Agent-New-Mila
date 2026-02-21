@@ -175,6 +175,62 @@ export function validateTriggerToken(token: string, userId: string): boolean {
 }
 
 /**
+ * Generate a signed token for backfill report action links.
+ * Token format: timestamp.signature
+ * Encodes: userId + operation (allow/blacklist/add) + target (email/cpId/convId)
+ */
+export function generateBackfillToken(userId: string, operation: string, target: string): string {
+  const secret = process.env.NEXTAUTH_SECRET
+  if (!secret) throw new Error('NEXTAUTH_SECRET not configured')
+
+  const timestamp = Date.now().toString()
+  const payload = `backfill.${userId}.${operation}.${target}.${timestamp}`
+
+  const signature = createHmac('sha256', secret)
+    .update(payload)
+    .digest('hex')
+    .slice(0, 32)
+
+  return `${timestamp}.${signature}`
+}
+
+/**
+ * Validate a backfill report action token.
+ * Returns true if the HMAC matches and the token has not expired.
+ */
+export function validateBackfillToken(
+  token: string,
+  userId: string,
+  operation: string,
+  target: string,
+  maxAgeMs: number = 30 * 24 * 60 * 60 * 1000 // 30 days — report links live longer
+): boolean {
+  const secret = process.env.NEXTAUTH_SECRET
+  if (!secret) return false
+
+  const parts = token.split('.')
+  if (parts.length !== 2) return false
+
+  const [timestamp, signature] = parts
+
+  const tokenTime = parseInt(timestamp, 10)
+  if (isNaN(tokenTime) || Date.now() - tokenTime > maxAgeMs) return false
+
+  const payload = `backfill.${userId}.${operation}.${target}.${timestamp}`
+  const expectedSignature = createHmac('sha256', secret)
+    .update(payload)
+    .digest('hex')
+    .slice(0, 32)
+
+  if (signature.length !== expectedSignature.length) return false
+  try {
+    return timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))
+  } catch {
+    return false
+  }
+}
+
+/**
  * Validate cron authentication token
  * SECURITY: Only allows cron jobs when CRON_SECRET is properly configured
  */

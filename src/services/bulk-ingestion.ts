@@ -3,7 +3,11 @@
  * Historical email backfill in 3 phases:
  *   Phase 1: Fetch & store (paginated, pre-filter only, no embeddings)
  *   Phase 2: Thread conversations (chrono order, reuses existing threading)
- *   Phase 3: Propose actions (after all threading is done)
+ *   Phase 3: Generate & send backfill report email
+ *
+ * This is a HISTORICAL BACKFILL — all ingested emails are assumed to be
+ * already in the user's own process. No action proposals are generated.
+ * Instead, a Mila welcome report is sent summarizing what was found.
  *
  * Streams progress via onProgress callback so the HTTP response starts
  * immediately and keeps the connection alive on long runs.
@@ -23,35 +27,54 @@ import { createMessage, messageExists, getUnprocessedMessages } from '@/lib/db/m
 import { getUserById, upsertUser } from '@/lib/db/users'
 import { isBlockedSender } from './ingestion'
 import { processMessagesForThreading } from './threading'
-import { generateActionsForConversations } from './planning'
+import { generateAndSendBackfillReport } from './backfill-report'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
 import { v4 as uuidv4 } from 'uuid'
 
 export type ProgressCallback = (progress: Record<string, unknown>) => void
 
+// ─── Exported types for backfill-report.ts ──────────────────────────────────
+
+export interface FilteredSender {
+  email: string
+  name: string | null
+  count: number
+  reason: string
+}
+
+export interface BulkIngestionPhase1Result {
+  inboxFetched: number
+  sentFetched: number
+  skippedCategory: number
+  skippedBlocked: number
+  skippedPreFilter: number
+  skippedDuplicate: number
+  stored: number
+}
+
 export interface BulkIngestionResult {
-  phase1: {
-    inboxFetched: number
-    sentFetched: number
-    skippedCategory: number
-    skippedBlocked: number
-    skippedPreFilter: number
-    skippedDuplicate: number
-    stored: number
-  }
+  phase1: BulkIngestionPhase1Result
   phase2: {
     messagesProcessed: number
     conversationsCreated: number
   }
-  phase3: {
-    actionsProposed: number
+  report: {
+    sent: boolean
   }
+  errors: string[]
+}
+
+// ─── Phase 1: Fetch & Store ─────────────────────────────────────────────────
+
+interface Phase1InternalResult extends BulkIngestionPhase1Result {
+  filteredSenders: FilteredSender[]
   errors: string[]
 }
 
 /**
  * Phase 1: Fetch & Store
  * Paginated fetch from INBOX + SENT, pre-filter, store raw messages.
+ * Tracks filtered senders for the backfill report.
  */
 async function phase1FetchAndStore(
   userId: string,
@@ -59,8 +82,8 @@ async function phase1FetchAndStore(
   until: Date | undefined,
   maxTotal: number,
   onProgress: ProgressCallback
-): Promise<BulkIngestionResult['phase1'] & { errors: string[] }> {
-  const stats = {
+): Promise<Phase1InternalResult> {
+  const stats: Phase1InternalResult = {
     inboxFetched: 0,
     sentFetched: 0,
     skippedCategory: 0,
@@ -68,7 +91,20 @@ async function phase1FetchAndStore(
     skippedPreFilter: 0,
     skippedDuplicate: 0,
     stored: 0,
-    errors: [] as string[],
+    filteredSenders: [],
+    errors: [],
+  }
+
+  // Accumulate filtered senders for the report
+  const filteredMap = new Map<string, FilteredSender>()
+  const trackFiltered = (email: string, name: string | null, reason: string) => {
+    const key = email.toLowerCase()
+    const existing = filteredMap.get(key)
+    if (existing) {
+      existing.count++
+    } else {
+      filteredMap.set(key, { email: key, name, count: 1, reason })
+    }
   }
 
   // Get user email for direction detection
@@ -142,6 +178,8 @@ async function phase1FetchAndStore(
       // Skip Gmail categories (promotions, social, updates, forums)
       if (email.labels.some(l => GMAIL_SKIP_CATEGORIES.includes(l))) {
         stats.skippedCategory++
+        const senderAddr = extractEmailAddress(email.from)
+        trackFiltered(senderAddr, extractName(email.from), 'Kategorie Gmail')
         continue
       }
 
@@ -168,6 +206,7 @@ async function phase1FetchAndStore(
       // Blocked sender check (free)
       if (isBlockedSender(cpEmail)) {
         stats.skippedBlocked++
+        trackFiltered(cpEmail, cpName, 'Blokovaný odesílatel')
         continue
       }
 
@@ -176,6 +215,7 @@ async function phase1FetchAndStore(
         const filter = await preFilterEmail(email.subject, email.body, email.from)
         if (!filter.relevant) {
           stats.skippedPreFilter++
+          trackFiltered(cpEmail, cpName, 'Automatický / nerelevantní')
           continue
         }
       } catch (error) {
@@ -224,6 +264,10 @@ async function phase1FetchAndStore(
     }
   }
 
+  // Finalize filtered senders list, sorted by count desc
+  stats.filteredSenders = Array.from(filteredMap.values())
+    .sort((a, b) => b.count - a.count)
+
   console.log(`\n[BulkIngest] Phase 1 complete:`)
   console.log(`[BulkIngest]   Inbox fetched:  ${stats.inboxFetched}`)
   console.log(`[BulkIngest]   Sent fetched:   ${stats.sentFetched}`)
@@ -233,9 +277,12 @@ async function phase1FetchAndStore(
   console.log(`[BulkIngest]     Blocked:      ${stats.skippedBlocked}`)
   console.log(`[BulkIngest]     Pre-filter:   ${stats.skippedPreFilter}`)
   console.log(`[BulkIngest]     Duplicate:    ${stats.skippedDuplicate}`)
-  onProgress({ phase: 1, step: 'complete', ...stats })
+  console.log(`[BulkIngest]   Filtered senders: ${stats.filteredSenders.length} unique`)
+  onProgress({ phase: 1, step: 'complete', ...stats, filteredSenders: stats.filteredSenders.length })
   return stats
 }
+
+// ─── Phase 2: Thread ────────────────────────────────────────────────────────
 
 /**
  * Phase 2: Thread
@@ -289,29 +336,13 @@ async function phase2Thread(
   }
 }
 
-/**
- * Phase 3: Propose Actions
- * Run action generation on threaded conversations. No drafts.
- */
-async function phase3ProposeActions(
-  conversationIds: string[],
-  onProgress: ProgressCallback
-): Promise<BulkIngestionResult['phase3']> {
-  console.log(`[BulkIngest] Phase 3: Proposing actions for ${conversationIds.length} conversations`)
-  onProgress({ phase: 3, step: 'proposing', conversationCount: conversationIds.length })
-
-  const actions = await generateActionsForConversations(conversationIds)
-
-  console.log(`\n[BulkIngest] Phase 3 complete:`)
-  console.log(`[BulkIngest]   Actions proposed: ${actions.length}`)
-  onProgress({ phase: 3, step: 'complete', actionsProposed: actions.length })
-  return { actionsProposed: actions.length }
-}
+// ─── Main Pipeline ──────────────────────────────────────────────────────────
 
 /**
  * Run the full bulk ingestion pipeline.
  * Phase 1 completes entirely before Phase 2 starts.
  * Phase 2 completes entirely before Phase 3 starts.
+ * Phase 3 sends the backfill report (no action proposals).
  * Streams progress via onProgress callback.
  */
 export async function runBulkIngestion(
@@ -335,8 +366,8 @@ export async function runBulkIngestion(
       messagesProcessed: 0,
       conversationsCreated: 0,
     },
-    phase3: {
-      actionsProposed: 0,
+    report: {
+      sent: false,
     },
     errors: [],
   }
@@ -368,11 +399,22 @@ export async function runBulkIngestion(
     conversationsCreated: p2.conversationsCreated,
   }
 
-  // Phase 3: Propose Actions (after ALL threading done)
-  if (p2.conversationIds.length > 0) {
-    const p3 = await phase3ProposeActions(p2.conversationIds, onProgress)
-    result.phase3 = p3
-  }
+  // Phase 3: Generate & send backfill report (replaces action proposals)
+  console.log(`[BulkIngest] Phase 3: Generating backfill report`)
+  onProgress({ phase: 3, step: 'generating_report' })
+
+  const effectiveUntil = until || new Date()
+  const reportSent = await generateAndSendBackfillReport(
+    userId,
+    result.phase1,
+    p1.filteredSenders,
+    since,
+    effectiveUntil
+  )
+  result.report = { sent: reportSent }
+
+  console.log(`[BulkIngest] Phase 3 complete: report ${reportSent ? 'sent' : 'FAILED'}`)
+  onProgress({ phase: 3, step: 'complete', reportSent })
 
   return result
 }

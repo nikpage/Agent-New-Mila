@@ -29,9 +29,9 @@ export interface LeadTrackingResult {
   errors: string[]
 }
 
-type LeadStatus = 'active' | 'cooling' | 'cold' | 'dead'
+export type LeadStatus = 'active' | 'cooling' | 'cold' | 'dead'
 
-function getLeadStatus(daysSinceActivity: number, settings: UserSettings): LeadStatus {
+export function getLeadStatus(daysSinceActivity: number, settings: UserSettings): LeadStatus {
   if (daysSinceActivity >= settings.dead_threshold_days) return 'dead'
   if (daysSinceActivity >= settings.cold_threshold_days) return 'cold'
   if (daysSinceActivity >= settings.cooling_threshold_days) return 'cooling'
