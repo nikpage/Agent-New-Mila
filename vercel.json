@@ -1,10 +1,4 @@
 {
-  "crons": [
-    {
-      "path": "/api/cron/morning-brief",
-      "schedule": "*/30 * * * *"
-    }
-  ],
   "functions": {
     "src/app/api/cron/**/*.ts": {
       "maxDuration": 300

@@ -28,7 +28,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 
 - **Stack**: Next.js 14 (App Router) / TypeScript 5.7 (strict) / Supabase / Tailwind CSS 3
 - **AI**: Google Gemini (primary) via `@google/generative-ai` + Anthropic Claude (fallback) via `@anthropic-ai/sdk`
-- **Deployment**: Vercel with cron jobs
+- **Deployment**: Vercel (briefs scheduled via Upstash QStash)
 - **Monitoring**: Sentry error tracking (client + server + edge)
 - **Path alias**: `@/*` → `src/*`
 - **Full product spec**: See `SPEC.md`
@@ -53,7 +53,7 @@ src/
 │   ├── api/agent/run/          # Main agent orchestration endpoint
 │   ├── api/action/[id]/        # Action CRUD + execute/draft/todo/blacklist
 │   ├── api/auth/               # OAuth connect + callback
-│   ├── api/cron/morning-brief/ # Every-30-min cron (per-user timezone briefs)
+│   ├── api/cron/morning-brief/ # Brief endpoint (called by QStash per-user schedules)
 │   ├── api/gdpr/delete/        # GDPR Art. 17 — cascade-delete all user data
 │   ├── api/gdpr/export/        # GDPR Art. 15 — export all user data as JSON
 │   ├── api/ingest/             # Manual email/calendar ingestion (+ /bulk)
@@ -525,25 +525,20 @@ NEXTAUTH_SECRET      # Token signing secret
 SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)
 GEMINI_API_KEYS      # Comma-separated Gemini keys for rotation (optional, falls back to GEMINI_API_KEY)
 ANTHROPIC_API_KEY    # Claude fallback models (required for fallback chain)
-QSTASH_TOKEN         # Upstash QStash token for per-user brief scheduling (optional)
+QSTASH_TOKEN         # Upstash QStash token for per-user brief scheduling
 ```
 
 **SECURITY:** OAuth tokens migrating from `users.google_oauth_tokens` (plaintext jsonb) to `users.encrypted_google_tokens` (encrypted text). See `SECURITY.md`.
 
 ## Morning/Afternoon Briefs
 
-### Cron Strategy
-- **Vercel cron** runs every 30 minutes (`*/30 * * * *` in `vercel.json`)
-- Each run calls `sendAllMorningBriefs()` which queries users whose configured brief time falls within the current 30-min window
-- `getUsersDueBrief(briefType, windowMinutes)` in `src/lib/db/users.ts` compares each user's `morning_brief_time`/`afternoon_brief_time` (in their timezone) against current time
-- Supports both `morning` and `afternoon` brief types via `?type=afternoon` query param
-
-### Per-User Scheduling (QStash)
-- **Optional upgrade**: `src/lib/qstash/client.ts` creates per-user QStash schedules that call the brief endpoint with `?userId=<id>` directly
-- `createBriefSchedules(userId, morningTime, afternoonTime, timezone)` → returns schedule IDs
+### Scheduling via QStash (Upstash)
+- **No Vercel cron** — briefs are scheduled per-user via QStash (`src/lib/qstash/client.ts`)
+- `createBriefSchedules(userId, morningTime, afternoonTime, timezone)` → creates QStash schedules that call `/api/cron/morning-brief?userId=<id>` at each user's configured times
 - `updateBriefSchedules()` / `deleteBriefSchedules()` for lifecycle management
 - Schedule IDs stored in user settings for cleanup
 - Requires `QSTASH_TOKEN` env var
+- The `/api/cron/morning-brief` endpoint still exists as the target for QStash HTTP calls
 
 ### Parallelized Sending
 - `sendAllMorningBriefs()` processes users in batches of 10 (`BRIEF_CONCURRENCY`)
