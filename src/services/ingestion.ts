@@ -15,7 +15,7 @@ import { classifyEmail } from '@/lib/ai/gemini'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists } from '@/lib/db/messages'
 import { getUserById, upsertUser } from '@/lib/db/users'
-import { generateMessageEmbedding } from '@/lib/embeddings/generate'
+import { generateMessageEmbedding, cleanEmailText } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -256,7 +256,7 @@ async function processOneInboundEmail(
     universal_message_id: email.id,
     direction: 'inbound',
     raw_text: email.body,
-    cleaned_text: email.body.slice(0, 5000),
+    cleaned_text: cleanEmailText(email.body).slice(0, 5000),
     tag_primary: classification.category,
     tag_secondary: classification.priority,
     timestamp: email.date.toISOString(),
@@ -371,7 +371,7 @@ async function processOneOutboundEmail(
     universal_message_id: email.id,
     direction: 'outbound',
     raw_text: email.body,
-    cleaned_text: email.body.slice(0, 5000),
+    cleaned_text: cleanEmailText(email.body).slice(0, 5000),
     tag_primary: 'outbound',
     tag_secondary: null,
     timestamp: email.date.toISOString(),

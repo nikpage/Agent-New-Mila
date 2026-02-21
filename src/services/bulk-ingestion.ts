@@ -26,6 +26,7 @@ import { findOrCreateCP, isSameGmailAddress, normalizeGmailAddress } from '@/lib
 import { createMessage, messageExists, getUnprocessedMessages } from '@/lib/db/messages'
 import { getUserById, upsertUser } from '@/lib/db/users'
 import { isBlockedSender } from './ingestion'
+import { cleanEmailText } from '@/lib/embeddings/generate'
 import { processMessagesForThreading } from './threading'
 import { generateAndSendBackfillReport } from './backfill-report'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
@@ -238,7 +239,7 @@ async function phase1FetchAndStore(
         universal_message_id: email.id,
         direction,
         raw_text: email.body,
-        cleaned_text: email.body.slice(0, 5000),
+        cleaned_text: cleanEmailText(email.body).slice(0, 5000),
         tag_primary: 'bulk_import',
         tag_secondary: null,
         timestamp: email.date.toISOString(),
