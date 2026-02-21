@@ -36,7 +36,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (190 tests)
+npm test             # Run Vitest test suite (197 tests)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -148,7 +148,7 @@ Instead of reading these files, use this index:
 | File | Contents |
 |------|----------|
 | `users.ts` | `getUserById`, `getUserByEmail`, `upsertUser`, `getUserSettings`, `updateUserSettings`, `getUsersWithEmailEnabled`, `getUsersDueBrief`, `updateUserGoogleTokens`, `getUserGoogleTokens` |
-| `counterparties.ts` | `getCPById`, `getCPByIdentifier`, `createCP`, `updateCP`, `getCPsForUser`, `findOrCreateCP`, `isSameGmailAddress`, `purgeUserAsCp` |
+| `counterparties.ts` | `normalizeGmailAddress`, `isSameGmailAddress`, `getCPById`, `getCPByIdentifier`, `createCP`, `updateCP`, `getCPsForUser`, `findOrCreateCP`, `purgeUserAsCp` |
 | `conversations.ts` | `getConversationById`, `createConversation`, `updateConversation`, `getConversationsForUser`, `addParticipant`, `getRecentMessages`, `findConversationByExternalThread` |
 | `messages.ts` | `getMessageById`, `createMessage`, `getMessagesForConversation`, `getUnprocessedMessages` |
 | `actions.ts` | `getActionById`, `createAction`, `updateAction`, `getActionsForUser`, `calculatePriorityScore`, `hasPendingAction`, `getPendingActionsForBrief`, `markActionsNotified` |
@@ -421,7 +421,7 @@ npm run test:watch   # Watch mode (re-runs on save)
 npm run test:coverage # With v8 coverage report
 ```
 
-### Test Layers (190 tests + 10 smoke tests)
+### Test Layers (197 tests + 10 smoke tests)
 
 Tests are organized in three layers. All three MUST pass before any commit.
 
@@ -458,7 +458,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/lib/db/actions.ts` | `actions.test.ts` | 9 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding |
 | `src/services/ingestion.ts` | `ingestion.test.ts` | 8 tests — `isBlockedSender`: exact/prefix/domain/subaddress matching, false-positive prevention (`mynotifications` ≠ `notifications`) |
 | `src/config/client.ts` | `client.test.ts` | 10 tests — `containsHighValueSignals` + `isPersonalEvent`: keyword matching, case-insensitivity, empty inputs, empty keyword lists |
-| `src/lib/db/counterparties.ts` | `counterparties.test.ts` | 6 tests — `isSameGmailAddress`: dot/case-insensitive, domain dots, whitespace trimming |
+| `src/lib/db/counterparties.ts` | `counterparties.test.ts` | 11 tests — `isSameGmailAddress`: dot/case-insensitive, domain dots, whitespace trimming; `normalizeGmailAddress`: lowercasing, dot stripping, idempotency, missing `@` |
 | `src/lib/whatsapp/types.ts` | `types.test.ts` | 6 tests — `normalizePhoneNumber`, `phoneToThreadId`: separator stripping, `+` prefix, thread ID format |
 | `src/lib/db/gdpr.ts` | `gdpr.test.ts` | 4 tests — `writeAuditLog` never-throw contract, `deleteAllUserData` FK-safe ordering, missing lock table graceful handling |
 | `src/lib/db/locks.ts` | `locks.test.ts` | 2 tests — unique violation → `false` (error code `23505`), `releaseUserLock` filters by `user_id` |
