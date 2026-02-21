@@ -43,6 +43,7 @@ interface ReportConversation {
   id: string
   topic: string
   cpNames: string[]
+  primaryCpId: string | null
   messageCount: number
   lastActivity: Date
   leadStatus: LeadStatus
@@ -106,6 +107,9 @@ async function gatherReportData(
   // Get message counts per CP via single query
   const cpMessageCounts = await getMessageCountsPerCP(userId)
 
+  // Build a set of CP emails for deduplication against filtered senders
+  const cpEmails = new Set(allCPs.map(cp => cp.primary_identifier.toLowerCase()))
+
   // Build CP report data with lead status
   const counterparties: ReportCP[] = allCPs
     .map(cp => {
@@ -152,14 +156,15 @@ async function gatherReportData(
 
         // Get unique CP names from messages
         const cpIds = new Set(messages.filter(m => m.cp_id).map(m => m.cp_id!))
-        const cpNames = allCPs
-          .filter(cp => cpIds.has(cp.id))
-          .map(cp => cp.name || cp.primary_identifier)
+        const matchedCPs = allCPs.filter(cp => cpIds.has(cp.id))
+        const cpNames = matchedCPs.map(cp => cp.name || cp.primary_identifier)
+        const primaryCpId = matchedCPs[0]?.id || null
 
         const convData: ReportConversation = {
           id: conv.id,
           topic: conv.topic || 'Bez tématu',
           cpNames,
+          primaryCpId,
           messageCount: conv.message_count || messages.length,
           lastActivity,
           leadStatus: status,
@@ -231,10 +236,15 @@ async function gatherReportData(
     location: e.location || null,
   }))
 
+  // Dedup: remove filtered senders that are already known CPs
+  const dedupedFiltered = filteredSenders.filter(
+    s => !cpEmails.has(s.email.toLowerCase())
+  )
+
   return {
     userName,
     phase1,
-    filteredSenders,
+    filteredSenders: dedupedFiltered,
     counterparties,
     conversations,
     leads,
@@ -269,7 +279,9 @@ async function getMessageCountsPerCP(userId: string): Promise<Map<string, number
 // ─── URL Helpers ────────────────────────────────────────────────────────────
 
 function allowUrl(userId: string, email: string): string {
-  const sig = generateBackfillToken(userId, 'allow', encodeURIComponent(email))
+  // Sign with raw email — browser auto-decodes %40→@ from query params,
+  // so the token must match the decoded value.
+  const sig = generateBackfillToken(userId, 'allow', email)
   return `${APP_BASE_URL}/api/backfill/action?uid=${userId}&op=allow&target=${encodeURIComponent(email)}&sig=${sig}`
 }
 
@@ -283,6 +295,12 @@ function addToMilaUrl(userId: string, conversationId: string): string {
   return `${APP_BASE_URL}/api/backfill/action?uid=${userId}&op=add&target=${conversationId}&sig=${sig}`
 }
 
+function setRoleUrl(userId: string, cpId: string, role: string): string {
+  const target = `${cpId}:${role}`
+  const sig = generateBackfillToken(userId, 'setrole', target)
+  return `${APP_BASE_URL}/api/backfill/action?uid=${userId}&op=setrole&target=${encodeURIComponent(target)}&sig=${sig}`
+}
+
 // ─── HTML Generation ────────────────────────────────────────────────────────
 
 const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
@@ -291,6 +309,16 @@ const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
   cold: 'Studený',
   dead: 'Neaktivní',
 }
+
+const CP_ROLE_LABELS: Record<string, string> = {
+  buyer: 'kupující',
+  seller: 'prodávající',
+  tenant: 'nájemce',
+  agent: 'makléř',
+  other: 'jiný',
+}
+
+const QUICK_ROLES = ['buyer', 'seller', 'tenant', 'agent', 'other'] as const
 
 const LEAD_STATUS_COLORS: Record<LeadStatus, string> = {
   active: theme.colors.success,
@@ -436,7 +464,6 @@ function generateReportHtml(userId: string, data: BackfillReportData): string {
           <td style="padding:8px 12px;font-size:12px;font-weight:600;color:${theme.colors.textMuted};">KONTAKT</td>
           <td style="padding:8px 12px;font-size:12px;font-weight:600;color:${theme.colors.textMuted};text-align:center;">ZPRÁVY</td>
           <td style="padding:8px 12px;font-size:12px;font-weight:600;color:${theme.colors.textMuted};text-align:center;">ROLE</td>
-          <td style="padding:8px 12px;font-size:12px;font-weight:600;color:${theme.colors.textMuted};text-align:center;">STAV</td>
           <td style="padding:8px 12px;font-size:12px;font-weight:600;color:${theme.colors.textMuted};text-align:right;"></td>
         </tr>`
 
@@ -444,15 +471,19 @@ function generateReportHtml(userId: string, data: BackfillReportData): string {
     for (let i = 0; i < showCPs.length; i++) {
       const cp = showCPs[i]
       const borderStyle = i < showCPs.length - 1 ? `border-bottom:1px solid ${theme.colors.border};` : ''
-      const statusColor = LEAD_STATUS_COLORS[cp.leadStatus]
+      // Show role name if set, otherwise show quick-set links
+      const roleCell = cp.role
+        ? `<span style="font-size:13px;">${CP_ROLE_LABELS[cp.role] || cp.role}</span>`
+        : QUICK_ROLES.map(r =>
+            `<a href="${setRoleUrl(userId, cp.id, r)}" style="font-size:11px;color:${theme.colors.primaryLight};text-decoration:none;padding:1px 4px;">${CP_ROLE_LABELS[r]}</a>`
+          ).join('<span style="color:${theme.colors.border};">·</span>')
       html += `<tr>
         <td style="padding:10px 12px;${borderStyle}">
           <div style="font-size:14px;font-weight:500;">${escapeHtml(cp.name)}</div>
           <div style="font-size:12px;color:${theme.colors.textMuted};">${escapeHtml(cp.email)}</div>
         </td>
         <td style="padding:10px 12px;${borderStyle}text-align:center;font-weight:500;">${cp.messageCount}</td>
-        <td style="padding:10px 12px;${borderStyle}text-align:center;font-size:13px;color:${theme.colors.textMuted};">${cp.role || '—'}</td>
-        <td style="padding:10px 12px;${borderStyle}text-align:center;">${badge(LEAD_STATUS_LABELS[cp.leadStatus], statusColor)}</td>
+        <td style="padding:10px 12px;${borderStyle}text-align:center;">${roleCell}</td>
         <td style="padding:10px 12px;${borderStyle}text-align:right;">
           <a href="${blacklistUrl(userId, cp.id)}" style="font-size:12px;color:${theme.colors.textMuted};text-decoration:none;">Zablokovat</a>
         </td>
@@ -460,7 +491,7 @@ function generateReportHtml(userId: string, data: BackfillReportData): string {
     }
 
     if (counterparties.length > 20) {
-      html += `<tr><td colspan="5" style="padding:10px 12px;text-align:center;font-size:13px;color:${theme.colors.textMuted};">
+      html += `<tr><td colspan="4" style="padding:10px 12px;text-align:center;font-size:13px;color:${theme.colors.textMuted};">
         ...a ${counterparties.length - 20} dalších kontaktů
       </td></tr>`
     }
@@ -479,29 +510,22 @@ function generateReportHtml(userId: string, data: BackfillReportData): string {
     </td></tr>`
 
     for (const conv of showConvs) {
-      const statusColor = LEAD_STATUS_COLORS[conv.leadStatus]
       const ago = Math.floor((Date.now() - conv.lastActivity.getTime()) / (1000 * 60 * 60 * 24))
       const agoText = ago === 0 ? 'dnes' : ago === 1 ? 'včera' : `před ${ago} dny`
+      const stopFollowLink = conv.primaryCpId
+        ? `<a href="${blacklistUrl(userId, conv.primaryCpId)}" style="font-size:12px;color:${theme.colors.textMuted};text-decoration:none;margin-left:12px;">Přestat sledovat</a>`
+        : ''
       html += `<tr><td style="padding-bottom:16px;">
         <div style="background:${theme.colors.surface};border:1px solid ${theme.colors.border};border-radius:8px;overflow:hidden;">
           <div style="padding:16px 20px 8px 20px;">
-            <table width="100%" cellpadding="0" cellspacing="0" border="0">
-              <tr>
-                <td>
-                  <div style="font-size:16px;font-weight:600;color:${theme.colors.text};">${escapeHtml(conv.topic)}</div>
-                  <div style="font-size:13px;color:${theme.colors.textMuted};margin-top:2px;">
-                    ${escapeHtml(conv.cpNames.join(', '))} &middot; ${conv.messageCount} zpráv &middot; ${agoText}
-                  </div>
-                </td>
-                <td style="text-align:right;vertical-align:top;">
-                  ${badge(LEAD_STATUS_LABELS[conv.leadStatus], statusColor)}
-                </td>
-              </tr>
-            </table>
+            <div style="font-size:16px;font-weight:600;color:${theme.colors.text};">${escapeHtml(conv.topic)}</div>
+            <div style="font-size:13px;color:${theme.colors.textMuted};margin-top:2px;">
+              ${escapeHtml(conv.cpNames.join(', '))} &middot; ${conv.messageCount} zpráv &middot; ${agoText}
+            </div>
           </div>
           ${conv.summaryText ? `<div style="padding:4px 20px 12px 20px;font-size:14px;color:${theme.colors.textMuted};line-height:1.5;">${escapeHtml(conv.summaryText)}</div>` : ''}
           <div style="padding:12px 20px;border-top:1px solid ${theme.colors.border};">
-            ${linkButton(addToMilaUrl(userId, conv.id), 'Přidat do Mila', true)}
+            ${linkButton(addToMilaUrl(userId, conv.id), 'Přidat do Mila', true)}${stopFollowLink}
           </div>
         </div>
       </td></tr>`
