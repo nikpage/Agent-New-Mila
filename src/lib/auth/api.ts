@@ -25,7 +25,8 @@ function safeEqual(a: string, b: string): boolean {
  */
 export function verifyApiKey(request: NextRequest): NextResponse | null {
   const apiKey = request.headers.get('x-api-key')
-  const customerKey = process.env.MILA_USER_API_KEY
+  // Use bracket notation to prevent Next.js/SWC from inlining at compile time
+  const customerKey = process.env['MILA_USER_API_KEY']
 
   // If no key configured, allow in development, block in production
   if (!customerKey) {
@@ -41,6 +42,11 @@ export function verifyApiKey(request: NextRequest): NextResponse | null {
   }
 
   if (!apiKey) {
+    console.warn('[AUTH] Request missing x-api-key header', {
+      url: request.nextUrl.pathname,
+      hasAuth: !!request.headers.get('authorization'),
+      headerKeys: [...request.headers.keys()].join(', '),
+    })
     return NextResponse.json(
       { error: 'Missing x-api-key header' },
       { status: 401 }
@@ -48,7 +54,7 @@ export function verifyApiKey(request: NextRequest): NextResponse | null {
   }
 
   if (!safeEqual(apiKey, customerKey)) {
-    console.warn('[AUTH] Invalid API key attempt')
+    console.warn('[AUTH] Invalid API key attempt', { url: request.nextUrl.pathname })
     return NextResponse.json(
       { error: 'Invalid API key' },
       { status: 403 }

@@ -11,6 +11,14 @@ export async function GET(request: NextRequest) {
     const token = authHeader?.replace('Bearer ', '')
 
     if (!validateCronToken(token)) {
+      console.error('[Brief] Auth FAILED', {
+        hasAuthHeader: !!authHeader,
+        tokenLength: token?.length ?? 0,
+        hasCronSecret: !!process.env['CRON_SECRET'],
+        cronSecretLength: process.env['CRON_SECRET']?.length ?? 0,
+        method: request.method,
+        url: request.nextUrl.pathname,
+      })
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
