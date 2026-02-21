@@ -15,7 +15,7 @@
  */
 
 import { getUserById, getUserSettings } from '@/lib/db/users'
-import { getCPsForUser } from '@/lib/db/counterparties'
+import { getCPsForUser, normalizeGmailAddress } from '@/lib/db/counterparties'
 import { getConversationsForUser, getRecentMessages } from '@/lib/db/conversations'
 import { getUpcomingEvents } from '@/lib/db/events'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
@@ -108,7 +108,7 @@ async function gatherReportData(
   const cpMessageCounts = await getMessageCountsPerCP(userId)
 
   // Build a set of CP emails for deduplication against filtered senders
-  const cpEmails = new Set(allCPs.map(cp => cp.primary_identifier.toLowerCase()))
+  const cpEmails = new Set(allCPs.map(cp => normalizeGmailAddress(cp.primary_identifier)))
 
   // Build CP report data with lead status
   const counterparties: ReportCP[] = allCPs
@@ -238,7 +238,7 @@ async function gatherReportData(
 
   // Dedup: remove filtered senders that are already known CPs
   const dedupedFiltered = filteredSenders.filter(
-    s => !cpEmails.has(s.email.toLowerCase())
+    s => !cpEmails.has(normalizeGmailAddress(s.email))
   )
 
   return {

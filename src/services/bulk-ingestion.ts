@@ -22,7 +22,7 @@ import {
 } from '@/lib/google/gmail'
 import { preFilterEmail } from '@/lib/ai/gemini'
 import { probeAIAvailability } from '@/lib/ai/runner'
-import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
+import { findOrCreateCP, isSameGmailAddress, normalizeGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists, getUnprocessedMessages } from '@/lib/db/messages'
 import { getUserById, upsertUser } from '@/lib/db/users'
 import { isBlockedSender } from './ingestion'
@@ -98,7 +98,7 @@ async function phase1FetchAndStore(
   // Accumulate filtered senders for the report
   const filteredMap = new Map<string, FilteredSender>()
   const trackFiltered = (email: string, name: string | null, reason: string) => {
-    const key = email.toLowerCase()
+    const key = normalizeGmailAddress(email)
     const existing = filteredMap.get(key)
     if (existing) {
       existing.count++
@@ -117,12 +117,12 @@ async function phase1FetchAndStore(
       const emailFromGmail = await getUserEmail(userId)
       if (emailFromGmail) {
         await upsertUser({ ...user, email: emailFromGmail })
-        userEmail = emailFromGmail.toLowerCase()
+        userEmail = normalizeGmailAddress(emailFromGmail)
       } else {
         throw new Error(`User ${userId} has no email address`)
       }
     } else {
-      userEmail = user.email.toLowerCase()
+      userEmail = normalizeGmailAddress(user.email)
     }
   } catch (error) {
     stats.errors.push(`User setup: ${error instanceof Error ? error.message : 'Unknown'}`)

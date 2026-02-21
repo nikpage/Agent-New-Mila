@@ -7,8 +7,11 @@ import type { CP, CPInsert, CPState } from '../supabase/types'
  * first.last@pod.one === firstlast@pod.one === f.i.r.s.t.last@pod.one
  * Also: pod.one and podone are the same Google Workspace domain.
  * Strip dots from both parts so every variant matches.
+ *
+ * Use this for DB lookups and Set membership. Use `isSameGmailAddress` for
+ * two-value comparison.
  */
-function gmailNormalize(email: string): string {
+export function normalizeGmailAddress(email: string): string {
   const [local, domain] = email.toLowerCase().trim().split('@')
   if (!local || !domain) return email.toLowerCase().trim()
   return `${local.replace(/\./g, '')}@${domain.replace(/\./g, '')}`
@@ -16,7 +19,7 @@ function gmailNormalize(email: string): string {
 
 /** True if two emails refer to the same Gmail / Google Workspace mailbox. */
 export function isSameGmailAddress(a: string, b: string): boolean {
-  return gmailNormalize(a) === gmailNormalize(b)
+  return normalizeGmailAddress(a) === normalizeGmailAddress(b)
 }
 
 /**
@@ -94,7 +97,7 @@ export async function getCPByIdentifier(
     .from('cps')
     .select('*')
     .eq('user_id', userId)
-    .eq('primary_identifier', identifier.toLowerCase())
+    .eq('primary_identifier', normalizeGmailAddress(identifier))
     .single()
 
   if (error) {
@@ -130,10 +133,10 @@ export async function getCPsForUser(userId: string): Promise<CP[]> {
 export async function upsertCP(cp: CPInsert): Promise<CP> {
   const supabase = getSupabaseAdmin()
 
-  // Normalize the identifier
+  // Normalize the identifier (Gmail dot/case insensitive)
   const normalizedCP = {
     ...cp,
-    primary_identifier: cp.primary_identifier.toLowerCase(),
+    primary_identifier: normalizeGmailAddress(cp.primary_identifier),
   }
 
   // HARD GUARD: Never create a CP for the user's own email.
@@ -170,7 +173,7 @@ export async function findOrCreateCP(
   email: string,
   name?: string
 ): Promise<CP | null> {
-  const normalizedEmail = email.toLowerCase().trim()
+  const normalizedEmail = normalizeGmailAddress(email)
 
   // The user is not a CP. Silent return, no throw, no noise.
   const user = await getUserById(userId)
