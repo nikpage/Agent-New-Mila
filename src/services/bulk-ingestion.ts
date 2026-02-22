@@ -20,13 +20,14 @@ import {
   getUserEmail,
   GMAIL_SKIP_CATEGORIES,
 } from '@/lib/google/gmail'
-import { preFilterEmail } from '@/lib/ai/gemini'
+import { preFilterEmail, enrichMessage } from '@/lib/ai/gemini'
 import { probeAIAvailability } from '@/lib/ai/runner'
 import { findOrCreateCP, isSameGmailAddress, normalizeGmailAddress } from '@/lib/db/counterparties'
-import { createMessage, messageExists, getUnprocessedMessages } from '@/lib/db/messages'
+import { createMessage, messageExists, updateMessage, getUnprocessedMessages } from '@/lib/db/messages'
 import { getUserById, upsertUser } from '@/lib/db/users'
 import { isBlockedSender } from './ingestion'
-import { cleanMessageText } from '@/lib/embeddings/generate'
+import { cleanMessageText, generateMessageEmbedding } from '@/lib/embeddings/generate'
+import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { processMessagesForThreading } from './threading'
 import { generateAndSendBackfillReport } from './backfill-report'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
@@ -50,6 +51,9 @@ export interface BulkIngestionPhase1Result {
   skippedBlocked: number
   skippedPreFilter: number
   skippedDuplicate: number
+  preFilterFailOpen: number
+  enriched: number
+  enrichmentFailed: number
   stored: number
 }
 
@@ -91,6 +95,9 @@ async function phase1FetchAndStore(
     skippedBlocked: 0,
     skippedPreFilter: 0,
     skippedDuplicate: 0,
+    preFilterFailOpen: 0,
+    enriched: 0,
+    enrichmentFailed: 0,
     stored: 0,
     filteredSenders: [],
     errors: [],
@@ -220,8 +227,9 @@ async function phase1FetchAndStore(
           continue
         }
       } catch (error) {
-        // If pre-filter fails, let the email through (fail open)
-        console.error(`[BulkIngest] Pre-filter failed for ${email.id}, allowing:`, error)
+        // If pre-filter fails, let the email through (fail open) but track it
+        stats.preFilterFailOpen++
+        console.error(`[BulkIngest] Pre-filter failed for ${email.id}, allowing (fail-open #${stats.preFilterFailOpen}):`, error)
       }
 
       // Find or create CP
@@ -247,6 +255,20 @@ async function phase1FetchAndStore(
       })
 
       stats.stored++
+
+      // Enrich message: extract key info, save enriched text, embed it
+      try {
+        const cleanedText = cleanMessageText(email.body, 'email')
+        const enrichedText = await enrichMessage(cleanedText, 'email', direction as 'inbound' | 'outbound')
+        await updateMessage(messageId, { enriched_text: enrichedText })
+
+        const embedding = await generateMessageEmbedding(enrichedText, 'email')
+        await saveMessageEmbedding(messageId, embedding)
+        stats.enriched++
+      } catch (error) {
+        stats.enrichmentFailed++
+        console.error(`[BulkIngest] Enrichment failed for ${messageId}:`, error)
+      }
 
       // Stream progress every 5 emails
       if ((i + 1) % 5 === 0 || i === allEmails.length - 1) {
@@ -278,6 +300,13 @@ async function phase1FetchAndStore(
   console.log(`[BulkIngest]     Blocked:      ${stats.skippedBlocked}`)
   console.log(`[BulkIngest]     Pre-filter:   ${stats.skippedPreFilter}`)
   console.log(`[BulkIngest]     Duplicate:    ${stats.skippedDuplicate}`)
+  if (stats.preFilterFailOpen > 0) {
+    console.log(`[BulkIngest]     Pre-filter fail-open: ${stats.preFilterFailOpen} (AI unavailable, allowed through)`)
+  }
+  console.log(`[BulkIngest]   Enriched:       ${stats.enriched}`)
+  if (stats.enrichmentFailed > 0) {
+    console.log(`[BulkIngest]   Enrichment failed: ${stats.enrichmentFailed}`)
+  }
   console.log(`[BulkIngest]   Filtered senders: ${stats.filteredSenders.length} unique`)
   onProgress({ phase: 1, step: 'complete', ...stats, filteredSenders: stats.filteredSenders.length })
   return stats
@@ -361,6 +390,9 @@ export async function runBulkIngestion(
       skippedBlocked: 0,
       skippedPreFilter: 0,
       skippedDuplicate: 0,
+      preFilterFailOpen: 0,
+      enriched: 0,
+      enrichmentFailed: 0,
       stored: 0,
     },
     phase2: {
@@ -385,6 +417,9 @@ export async function runBulkIngestion(
     skippedBlocked: p1.skippedBlocked,
     skippedPreFilter: p1.skippedPreFilter,
     skippedDuplicate: p1.skippedDuplicate,
+    preFilterFailOpen: p1.preFilterFailOpen,
+    enriched: p1.enriched,
+    enrichmentFailed: p1.enrichmentFailed,
     stored: p1.stored,
   }
   result.errors.push(...p1.errors)

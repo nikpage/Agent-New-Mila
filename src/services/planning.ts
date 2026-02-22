@@ -219,12 +219,17 @@ export async function generateActionProposal(
       cp.role, settings.offer_multiplier_seller, settings.offer_multiplier_buyer
     )
 
+    // Clamp weight to 0-100 range, default 0 if AI omitted it
+    const weight = Math.max(0, Math.min(100, proposal.weight || 0))
+
     const priorityScore = calculatePriorityScore({
       dollarValue: proposal.dollarValue,
       urgency: proposal.urgency,
       painFactor: proposal.painFactor,
       daysIgnored,
       offerMultiplier,
+      kcFactor: settings.kc_factor,
+      weight,
     })
 
     // Create the action proposal with CLEAN columns
@@ -247,6 +252,7 @@ export async function generateActionProposal(
       offer_multiplier: offerMultiplier,
       urgency: proposal.urgency,
       pain_factor: proposal.painFactor,
+      weight,
 
       // NO DRAFTS
       draft_subject: null,
@@ -263,6 +269,7 @@ export async function generateActionProposal(
           dollar_value: proposal.dollarValue,
           offer_multiplier: offerMultiplier,
           pain_factor: proposal.painFactor,
+          weight,
           deal_type: dealType,
           is_high_value: containsHighValueSignals(
             formattedMessages.map(m => m.text).join(' '),

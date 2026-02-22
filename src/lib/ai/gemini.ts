@@ -120,6 +120,7 @@ export async function proposeAction(
   urgency: number
   dollarValue: number
   painFactor: number
+  weight: number
   dealType: DealType
   suggestedLocation?: string | null
   suggestedTime?: string | null
@@ -192,6 +193,7 @@ Respond with ONLY valid JSON:
   "urgency": 1-10 (10 = needs immediate attention),
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "painFactor": 1-10 (how much pain from ignoring this),
+  "weight": 0-100 (how immovable/fixed is this action? 100 = must happen regardless of other priorities, 0 = flexible. E.g. legal deadline = 90, casual follow-up = 5),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
   "suggestedLocation": "Physical meeting location if mentioned or clearly implied. null if not specified.",
   "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). null if no specific time mentioned."
@@ -329,5 +331,9 @@ export async function classifyEmail(
   const text = await runAITask('classify', prompt)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) return { isActionable: false, category: 'other', priority: 'low' }
-  return JSON.parse(jsonMatch[0])
+  try {
+    return JSON.parse(jsonMatch[0])
+  } catch {
+    return { isActionable: false, category: 'other', priority: 'low' }
+  }
 }
