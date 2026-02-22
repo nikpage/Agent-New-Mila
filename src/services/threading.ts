@@ -17,6 +17,7 @@ import { getCPById } from '@/lib/db/counterparties'
 import { analyzeConversation, extractTopic, shouldJoinConversation } from '@/lib/ai/gemini'
 import { generateConversationEmbedding, generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveConversationEmbedding, getConversationsWithEmbeddingsByCP } from '@/lib/db/embeddings'
+import { createTodo } from '@/lib/db/todos'
 import type { Message, ConversationThread } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -80,7 +81,7 @@ export async function assignToConversation(
   // new CPs join existing conversations only via Gmail thread ID (CC, reply-all).
   if (message.cp_id) {
     try {
-      const messageText = message.cleaned_text || message.raw_text || ''
+      const messageText = message.enriched_text || message.cleaned_text || message.raw_text || ''
       if (messageText.length > 0) {
         const messageEmbedding = await generateMessageEmbedding(messageText)
 
@@ -172,6 +173,28 @@ export async function assignToConversation(
   // Generate initial summary
   await rebuildConversationSummary(conversation)
 
+  // Thin conversation check: if the first message has barely any enriched
+  // content, create a ToDo asking the user for context. Only for genuinely
+  // empty new conversations where the AI couldn't extract anything useful.
+  const THIN_CONVERSATION_THRESHOLD = 100
+  const enrichedText = message.enriched_text || ''
+  if (enrichedText.length < THIN_CONVERSATION_THRESHOLD && message.cp_id) {
+    try {
+      const cp = await getCPById(message.cp_id)
+      const cpName = cp?.name || cp?.primary_identifier || 'neznámý kontakt'
+      await createTodo({
+        user_id: message.user_id,
+        cp_id: message.cp_id,
+        thread_id: conversation.id,
+        description: `Nová konverzace s ${cpName} — nedostatek kontextu. O čem se jedná?`,
+        status: 'pending',
+        due_date: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      })
+    } catch (todoError) {
+      console.error('[Threading] Failed to create thin-conversation ToDo:', todoError)
+    }
+  }
+
   return (await getConversationById(conversation.id))!
 }
 
@@ -203,32 +226,48 @@ function shouldRebuildSummary(conversation: ConversationThread): boolean {
 /**
  * Rebuild the conversation summary using AI, then embed the summary.
  *
- * Order matters: summary first, then embed the summary text (not raw messages).
- * The summary is a distilled semantic representation — exactly what embeddings
- * need. Raw email text is polluted with signatures, quoted replies, disclaimers.
- * If summary generation fails, we fall back to embedding cleaned message text.
+ * Uses enriched_text when available (pre-extracted facts), falls back to
+ * cleaned_text for older messages that haven't been enriched yet.
+ * Adaptive message count: enough messages to reach ~1500 chars of content.
+ *
+ * Order: summary first, then embed the summary text (not raw messages).
  */
 export async function rebuildConversationSummary(
   conversation: ConversationThread
 ): Promise<void> {
-  // Get all messages in the conversation
+  // Fetch more messages than we may need — adaptive selection below
   const messages = await getRecentMessages(conversation.id, 20)
 
   if (messages.length === 0) {
     return
   }
 
-  // Format messages for analysis
+  // Prefer enriched_text (pre-extracted facts), fall back to cleaned_text
   const formattedMessages = messages.map(m => ({
     direction: m.direction || 'UNKNOWN',
-    text: m.cleaned_text || m.raw_text || '',
+    text: m.enriched_text || m.cleaned_text || m.raw_text || '',
     date: new Date(m.timestamp),
   }))
+
+  // Adaptive selection: take enough messages to reach ~1500 chars of content,
+  // minimum 3, maximum all fetched. Short enrichments (WhatsApp) naturally
+  // include more messages; long enrichments (email) include fewer.
+  const MIN_MESSAGES = 3
+  const TARGET_CHARS = 1500
+  let charCount = 0
+  let selectedCount = 0
+  for (let i = formattedMessages.length - 1; i >= 0; i--) {
+    charCount += formattedMessages[i].text.length
+    selectedCount++
+    if (charCount >= TARGET_CHARS && selectedCount >= MIN_MESSAGES) break
+  }
+  selectedCount = Math.max(selectedCount, Math.min(MIN_MESSAGES, formattedMessages.length))
+  const selectedMessages = formattedMessages.slice(-selectedCount)
 
   // Step 1: Generate AI summary
   let summaryText: string | null = null
   try {
-    const summary = await analyzeConversation(formattedMessages)
+    const summary = await analyzeConversation(selectedMessages)
 
     summaryText = `${summary.currentState}. ${summary.nextSteps.length > 0 ? 'Next: ' + summary.nextSteps[0] : ''}`
 
@@ -243,11 +282,9 @@ export async function rebuildConversationSummary(
     console.error('[Threading] Failed to rebuild conversation summary:', error)
   }
 
-  // Step 2: Embed the summary (preferred) or cleaned message text (fallback).
-  // Summary is a distilled semantic signal — much better embedding input than
-  // raw email text with signatures, quoted replies, and disclaimers.
+  // Step 2: Embed the summary (preferred) or message text (fallback).
   try {
-    const messageTexts = formattedMessages.map(m => m.text)
+    const messageTexts = selectedMessages.map(m => m.text)
     const embedding = await generateConversationEmbedding(messageTexts, summaryText || undefined)
     await saveConversationEmbedding(conversation.id, embedding)
   } catch (embeddingError) {

@@ -36,7 +36,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (197 tests)
+npm test             # Run Vitest test suite (227 tests)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -77,7 +77,7 @@ src/
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
 │   ├── supabase/               # Client + types (types.ts = 593 lines)
 │   ├── ai/
-│   │   ├── gemini.ts           # AI functions (preFilter, classify, proposeAction, generateFinalDraft, etc.)
+│   │   ├── gemini.ts           # AI functions (preFilter, classify, enrichMessage, proposeAction, generateFinalDraft, etc.)
 │   │   ├── runner.ts           # runAITask() with 3-model fallback + 429 retry
 │   │   └── providers/          # gemini.ts (multi-key rotation), anthropic.ts, types.ts, index.ts
 │   ├── qstash/
@@ -112,12 +112,12 @@ src/
 Step 0: purgeUserAsCp — data hygiene
 Step 1: Verify user exists + has Google credentials
 Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
-  Step 2: Ingest inbound emails from Gmail
-  Step 2.1: Ingest outbound emails from Gmail
+  Step 2: Ingest inbound emails from Gmail (clean → enrich → embed enriched text)
+  Step 2.1: Ingest outbound emails from Gmail (clean → enrich → embed enriched text)
   Step 2.5: Sync Google Calendar events, detect invitations, filter personal events
 Step 3: Get all unprocessed messages (email + WhatsApp)
-Step 4: Thread messages into conversations
-Step 5: Generate action proposals for updated conversations (channel-aware, batched ×5)
+Step 4: Thread messages into conversations (uses enriched_text for embedding similarity)
+Step 5: Generate action proposals for updated conversations (channel-aware, adaptive context, batched ×5)
 Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10)
 ```
 
@@ -225,7 +225,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 **`conversation_threads`** — id, user_id, topic, summary_text, summary_json (jsonb), summary_confidence (numeric), summary_confidence_reason, messages_since_rebuild, message_count, state, deal_type, priority_score (integer), embedding (vector 768-dim), last_updated, created_at
 
-**`messages`** — id, user_id, cp_id, channel_id, thread_id, conversation_id, external_thread_id, universal_message_id, external_id, direction (inbound/outbound), raw_text, cleaned_text, message_type (enum), tag_primary, tag_secondary, timestamp, occurred_at
+**`messages`** — id, user_id, cp_id, channel_id, thread_id, conversation_id, external_thread_id, universal_message_id, external_id, direction (inbound/outbound), raw_text, cleaned_text, enriched_text, message_type (enum), tag_primary, tag_secondary, timestamp, occurred_at
 
 **`thread_participants`** — thread_id, cp_id, added_at
 
@@ -294,12 +294,13 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 
 | Stage | Purpose | Primary → Fallback1 → Fallback2 |
 |-------|---------|----------------------------------|
-| `preFilter` | Spam detection | `gemini-2.5-flash-lite` → `gemini-2.5-flash` → `claude-haiku-4-5-20251001` |
-| `classify` | Email category + priority | `gemini-2.5-flash-lite` → `gemini-2.5-flash` → `claude-haiku-4-5-20251001` |
-| `threading` | extractTopic, shouldJoinConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
-| `analysis` | analyzeConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
-| `planning` | proposeAction (type, rationale, intent) | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
-| `drafting` | generateFinalDraft, generateBriefHeadline | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
+| `preFilter` | Spam detection | `gemini-2.5-flash-lite` → `claude-haiku-4-5-20251001` |
+| `classify` | Email category + priority | `gemini-2.5-flash-lite` → `claude-haiku-4-5-20251001` |
+| `enrichment` | Per-message key info extraction | `gemini-2.5-flash-lite` → `gemini-2.5-flash` |
+| `threading` | extractTopic, shouldJoinConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` |
+| `analysis` | analyzeConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` |
+| `planning` | proposeAction (type, rationale, intent) | `gemini-2.5-flash` → `claude-sonnet-4-6` |
+| `drafting` | generateFinalDraft, generateBriefHeadline | `gemini-2.5-flash` → `claude-sonnet-4-6` |
 
 **Rate limit handling:** On 429/RESOURCE_EXHAUSTED errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
 
@@ -313,12 +314,17 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 
 ## Embeddings & Semantic Threading
 
-**Purpose:** Assign incoming messages to existing conversations when Gmail thread ID doesn't match.
+**Purpose:** Assign incoming messages to existing conversations when external thread ID doesn't match. Supports cross-channel matching (WhatsApp message finds its email conversation).
+
+**Per-message enrichment** (`enrichMessage` in `gemini.ts`):
+- Runs after cleaning, before threading. Extracts: who's involved, property/subject, message kind, deal numbers, core intent.
+- Saves to `messages.enriched_text` column. Embedding generated from enriched text (not raw body).
+- Stage: `enrichment` (gemini-2.5-flash-lite → gemini-2.5-flash). Cost-sensitive — runs per message.
 
 **Pipeline** (`src/services/threading.ts`):
-1. **Gmail thread ID match** (primary) — exact match on `external_thread_id`
-2. **Embedding similarity** (secondary) — cosine similarity against `conversation_threads.embedding` for same CP
-3. **New conversation** (fallback) — if nothing matches
+1. **External thread ID match** (primary) — exact match on `external_thread_id` (Gmail thread ID, Exchange conversation ID, `wa:+phone`)
+2. **Enriched embedding similarity** (secondary) — cosine similarity of enriched message embedding against conversation embeddings, same CP only
+3. **New conversation** (fallback) — if nothing matches. Creates thin-conversation ToDo if enrichment yielded < 100 chars.
 
 **Thresholds:**
 - `≥ 0.78` → auto-join conversation (no AI needed)
@@ -327,7 +333,13 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 
 **WhatsApp threading:** By phone number — `external_thread_id = wa:+phone`
 
-**Conversation embeddings** are regenerated on summary rebuild. Embedding failure doesn't block summary updates.
+**Conversation summaries** use enriched messages (adaptive count: enough to reach ~1500 chars). Falls back to cleaned_text for older un-enriched messages. Embedding generated from summary text.
+
+**Channel-aware cleaning** (`cleanMessageText` in `generate.ts`):
+- `email`/`email/gmail`: Full cleaning (signatures, quoted replies, disclaimers, tracking pixels)
+- `email/exchange`: Gmail base + Outlook-specific patterns (EXTERNAL EMAIL banners, From/Sent/To headers, aka.ms links)
+- `whatsapp`: Minimal — system messages and forwarded labels only
+- `cleanEmailText()` is a backward-compatible alias for `cleanMessageText(text, 'email')`
 
 ## Scheduling & Conflict Resolution
 
@@ -448,7 +460,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/services/scheduling.test.ts` | 9 | Meeting duration, buffer, working hours, working days, timezone, travel mode defaults |
 | `src/services/morning-brief.test.ts` | 4 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10) |
 
-#### Layer 2 (existing): Logic Tests (88 tests)
+#### Layer 2 (existing): Logic Tests (105 tests)
 
 | Source file | Test file | What's tested |
 |-------------|-----------|---------------|
@@ -459,6 +471,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/services/ingestion.ts` | `ingestion.test.ts` | 8 tests — `isBlockedSender`: exact/prefix/domain/subaddress matching, false-positive prevention (`mynotifications` ≠ `notifications`) |
 | `src/config/client.ts` | `client.test.ts` | 10 tests — `containsHighValueSignals` + `isPersonalEvent`: keyword matching, case-insensitivity, empty inputs, empty keyword lists |
 | `src/lib/db/counterparties.ts` | `counterparties.test.ts` | 11 tests — `isSameGmailAddress`: dot/case-insensitive, domain dots, whitespace trimming; `normalizeGmailAddress`: lowercasing, dot stripping, idempotency, missing `@` |
+| `src/lib/embeddings/generate.ts` | `generate.test.ts` | 30 tests — `cleanEmailText` (13 original), `cleanMessageText` channel-aware: Exchange (EXTERNAL banners, Outlook headers, aka.ms, Get Outlook), WhatsApp (system msgs, forwarded labels, no false stripping), backward-compatible alias, unknown channel fallback |
 | `src/lib/whatsapp/types.ts` | `types.test.ts` | 6 tests — `normalizePhoneNumber`, `phoneToThreadId`: separator stripping, `+` prefix, thread ID format |
 | `src/lib/db/gdpr.ts` | `gdpr.test.ts` | 4 tests — `writeAuditLog` never-throw contract, `deleteAllUserData` FK-safe ordering, missing lock table graceful handling |
 | `src/lib/db/locks.ts` | `locks.test.ts` | 2 tests — unique violation → `false` (error code `23505`), `releaseUserLock` filters by `user_id` |
@@ -602,13 +615,19 @@ Replaces the old in-memory `runningUsers` Map which only worked within a single 
 
 **Used in:** `src/services/agent.ts` → `runAgentForUser()`
 
-### Required Migration
+### Required Migrations
 ```sql
 CREATE TABLE user_agent_locks (
   user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   locked_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL
 );
+
+-- Per-message enrichment (enriched key info extracted by AI)
+ALTER TABLE messages ADD COLUMN enriched_text text;
+CREATE INDEX idx_messages_enriched_null
+  ON messages (user_id, created_at)
+  WHERE enriched_text IS NULL;
 ```
 
 ## Parallelism Architecture

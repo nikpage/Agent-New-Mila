@@ -33,6 +33,42 @@ BODY: ${body.slice(0, 500)}`
 }
 
 /**
+ * Enrich a single message: extract key information as structured free-text.
+ * Stage: enrichment (gemini-2.5-flash-lite → gemini-2.5-flash)
+ * Runs per-message after cleaning, before threading. Cost-sensitive — uses cheapest model.
+ */
+export async function enrichMessage(
+  cleanedText: string,
+  channel: 'email' | 'whatsapp',
+  direction: 'inbound' | 'outbound',
+  conversationContext?: string
+): Promise<string> {
+  console.log(`[AI:enrichMessage] Running stage 'enrichment' (${channel}/${direction})`)
+  const contextBlock = conversationContext
+    ? `\nRECENT CONVERSATION CONTEXT:\n${conversationContext}\n`
+    : ''
+
+  const prompt = `Extract key information from this message. Use the following as guidance for what to look for, but only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text.
+
+- Who's involved (all parties mentioned, who's in focus)
+- What property, subject matter, or topic, if any
+- What kind of message (meeting request, question, offer, info, personal, admin, legal, update...)
+- If deal-related: stage, key numbers (price, area, dates), commitments made
+- If personal/admin: what it's about, any time sensitivity, any action needed
+- What this message actually says or asks (the core intent)
+
+Channel: ${channel}
+Direction: ${direction}
+${contextBlock}
+MESSAGE:
+${cleanedText.slice(0, 3000)}
+
+Respond with ONLY the extracted information as concise structured text. No JSON. No markdown headers. Just the facts.`
+
+  return (await runAITask('enrichment', prompt)).trim()
+}
+
+/**
  * Analyze a conversation for summary, risks, next steps.
  * Stage: analysis (gemini-2.5-flash → claude-sonnet)
  */

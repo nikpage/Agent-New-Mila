@@ -48,7 +48,7 @@ export async function generateActionProposal(
 ): Promise<ActionProposal | null> {
   const summary = conversation.summary_json as unknown as ConversationSummary
 
-  const recentMessages = await getRecentMessages(conversation.id, 5)
+  const recentMessages = await getRecentMessages(conversation.id, 10)
 
   // Find CP from latest message — support both inbound AND outbound
   // Outbound: user sent an email to CP (e.g., proposing a meeting)
@@ -66,10 +66,26 @@ export async function generateActionProposal(
   const lastMessage = recentMessages[recentMessages.length - 1]
   const channel: 'email' | 'whatsapp' = lastMessage?.channel_id === 'whatsapp' ? 'whatsapp' : 'email'
 
-  const formattedMessages = recentMessages.map(m => ({
+  // Prefer enriched_text (pre-extracted facts), fall back to cleaned_text.
+  // Adaptive count: enough messages to reach ~2000 chars of enriched content,
+  // minimum 3, maximum 10. Short enrichments (WhatsApp) naturally include
+  // more messages; long enrichments (email) include fewer.
+  const allFormatted = recentMessages.map(m => ({
     direction: m.direction || 'UNKNOWN',
-    text: m.cleaned_text || m.raw_text || '',
+    text: m.enriched_text || m.cleaned_text || m.raw_text || '',
   }))
+
+  const PLANNING_TARGET_CHARS = 2000
+  const PLANNING_MIN_MESSAGES = 3
+  let planCharCount = 0
+  let planMsgCount = 0
+  for (let i = allFormatted.length - 1; i >= 0; i--) {
+    planCharCount += allFormatted[i].text.length
+    planMsgCount++
+    if (planCharCount >= PLANNING_TARGET_CHARS && planMsgCount >= PLANNING_MIN_MESSAGES) break
+  }
+  planMsgCount = Math.max(planMsgCount, Math.min(PLANNING_MIN_MESSAGES, allFormatted.length))
+  const formattedMessages = allFormatted.slice(-planMsgCount)
 
   try {
     // Get user settings for AI context

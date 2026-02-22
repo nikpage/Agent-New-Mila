@@ -27,14 +27,42 @@ export const embeddings = {
   language: 'multilingual',
 }
 
-// ─── Email Text Cleaning ────────────────────────────────────────────────────
+// ─── Message Text Cleaning ──────────────────────────────────────────────────
+
+export type MessageChannel = 'email' | 'email/gmail' | 'email/exchange' | 'whatsapp' | string
 
 /**
- * Strip email noise before embedding: quoted replies, forwarded headers,
- * signatures, legal disclaimers, tracking pixels, unsubscribe blocks.
+ * Channel-aware message cleaning. Strips noise before enrichment/embedding.
  * Deterministic — no AI cost.
+ *
+ * - email / email/gmail: Full email cleaning (signatures, quoted replies, disclaimers, tracking)
+ * - email/exchange: Gmail cleaning + Exchange-specific patterns (Outlook sigs, disclaimer banners, aka.ms links)
+ * - whatsapp: Minimal — strip system messages only (WA messages are already clean)
+ * - unknown: Universal cleaning only (collapse whitespace, strip tracking pixels)
  */
+export function cleanMessageText(text: string, channel: MessageChannel = 'email'): string {
+  if (channel === 'whatsapp') {
+    return cleanWhatsAppText(text)
+  }
+
+  // Email cleaning (Gmail base)
+  let cleaned = cleanEmailBase(text)
+
+  // Exchange-specific additions
+  if (channel === 'email/exchange') {
+    cleaned = cleanExchangeText(cleaned)
+  }
+
+  return cleaned.trim()
+}
+
+/** Backward-compatible alias */
 export function cleanEmailText(text: string): string {
+  return cleanMessageText(text, 'email')
+}
+
+/** Core email cleaning — Gmail patterns (also base for Exchange) */
+function cleanEmailBase(text: string): string {
   let cleaned = text
 
   // Remove forwarded-message headers (multilingual)
@@ -73,6 +101,51 @@ export function cleanEmailText(text: string): string {
     }
   }
 
+  return cleaned
+}
+
+/** Exchange/Outlook-specific noise on top of base email cleaning */
+function cleanExchangeText(text: string): string {
+  let cleaned = text
+
+  // Remove "EXTERNAL EMAIL" / "CAUTION: External" banners
+  cleaned = cleaned.replace(/^.{0,10}(EXTERNAL EMAIL|CAUTION:\s*External|POZOR:\s*Extern).*$/gim, '')
+
+  // Remove Outlook-style "From: ... Sent: ... To: ... Subject: ..." quoted reply headers
+  cleaned = cleaned.replace(/^From:\s+.+\nSent:\s+.+\nTo:\s+.+\n(Cc:\s+.+\n)?Subject:\s+.+$/gim, '')
+
+  // Remove aka.ms links (Microsoft service URLs in signatures/disclaimers)
+  cleaned = cleaned.replace(/https?:\/\/aka\.ms\/\S+/gi, '')
+
+  // Remove Microsoft disclaimer blocks ("Microsoft respects your privacy...")
+  cleaned = cleaned.replace(/^.{0,20}Microsoft respects your privacy[\s\S]{0,300}$/gim, '')
+
+  // Remove "Get Outlook for" app promotion lines
+  cleaned = cleaned.replace(/^Get Outlook for (iOS|Android|Windows|Mac).*$/gim, '')
+
+  // Collapse multiple blank lines again after Exchange-specific removal
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n')
+
+  return cleaned
+}
+
+/** WhatsApp cleaning — minimal, messages are already clean */
+function cleanWhatsAppText(text: string): string {
+  let cleaned = text
+
+  // Strip WhatsApp system messages
+  cleaned = cleaned.replace(/^.{0,5}Messages and calls are end-to-end encrypted.*$/gim, '')
+  cleaned = cleaned.replace(/^.{0,5}This message was deleted\.?$/gim, '')
+  cleaned = cleaned.replace(/^.{0,5}You deleted this message\.?$/gim, '')
+
+  // Strip forwarded labels
+  cleaned = cleaned.replace(/^\[?Forwarded\]?\s*/gim, '')
+  cleaned = cleaned.replace(/^\[?Přeposláno\]?\s*/gim, '')
+  cleaned = cleaned.replace(/^\[?Přeposlané?\]?\s*/gim, '')
+
+  // Collapse multiple blank lines
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n')
+
   return cleaned.trim()
 }
 
@@ -99,12 +172,13 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 
 /**
  * Generate embedding for a single message.
- * Cleans email noise (signatures, quoted replies) before embedding.
+ * Cleans channel-specific noise before embedding.
  */
 export async function generateMessageEmbedding(
-  messageText: string
+  messageText: string,
+  channel: MessageChannel = 'email'
 ): Promise<number[]> {
-  const cleaned = cleanEmailText(messageText)
+  const cleaned = cleanMessageText(messageText, channel)
   return generateEmbedding(cleaned || messageText)
 }
 
@@ -121,7 +195,7 @@ export async function generateConversationEmbedding(
     return generateEmbedding(summaryText)
   }
   // Fallback: clean each message and concatenate
-  const cleanedMessages = messages.map(m => cleanEmailText(m)).filter(m => m.length > 0)
+  const cleanedMessages = messages.map(m => cleanMessageText(m)).filter(m => m.length > 0)
   const conversationText = cleanedMessages.join('\n')
   return generateEmbedding(conversationText || messages.join('\n'))
 }

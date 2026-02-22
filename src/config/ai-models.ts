@@ -8,6 +8,7 @@
 export type AIStage =
   | 'preFilter'
   | 'classify'
+  | 'enrichment'
   | 'threading'
   | 'analysis'
   | 'planning'
@@ -31,6 +32,13 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
   classify: {
     primary: 'gemini-2.5-flash-lite',
     fallback1: 'claude-haiku-4-5-20251001',
+    fallback2: null,
+  },
+
+  // Enrichment — per-message key info extraction (runs per message, cost-sensitive)
+  enrichment: {
+    primary: 'gemini-2.5-flash-lite',
+    fallback1: 'gemini-2.5-flash',
     fallback2: null,
   },
 
