@@ -798,4 +798,7 @@ export interface ConversationSummary {
   risks: string[]
   nextSteps: string[]
   keyPoints: string[]
+  confidence: number | null
+  confidenceReason: string | null
+  dealType: string | null
 }

@@ -90,8 +90,16 @@ Respond with ONLY valid JSON in this exact format:
   "currentState": "Brief description of where this conversation/deal currently stands (in Czech)",
   "risks": ["Risk 1 (in Czech)", "Risk 2 (in Czech)"],
   "nextSteps": ["Next step 1 (in Czech)", "Next step 2 (in Czech)"],
-  "keyPoints": ["Key point 1 (in Czech)", "Key point 2 (in Czech)"]
+  "keyPoints": ["Key point 1 (in Czech)", "Key point 2 (in Czech)"],
+  "confidence": 0.75,
+  "confidenceReason": "Why you are this confident — e.g. 'Only 2 short messages, unclear deal stage' or 'Full conversation with clear progression and concrete numbers'",
+  "dealType": "sale"
 }
+
+FIELD RULES:
+- confidence: 0.0 to 1.0 — how confident you are in the summary's accuracy. Consider: message count, message clarity, how much context is available, whether the conversation is coherent.
+- confidenceReason: Explain WHY this confidence level — what evidence supports or limits your understanding. NOT how the analysis was done.
+- dealType: one of "sale", "purchase", "rental", "lease", "consultation", "other", or null if not a deal/transaction.
 
 Be concise. Focus on actionable insights.`
 
@@ -99,7 +107,16 @@ Be concise. Focus on actionable insights.`
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error('Failed to parse conversation analysis')
 
-  return JSON.parse(jsonMatch[0]) as ConversationSummary
+  const parsed = JSON.parse(jsonMatch[0])
+  return {
+    currentState: parsed.currentState || '',
+    risks: parsed.risks || [],
+    nextSteps: parsed.nextSteps || [],
+    keyPoints: parsed.keyPoints || [],
+    confidence: typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : null,
+    confidenceReason: typeof parsed.confidenceReason === 'string' ? parsed.confidenceReason : null,
+    dealType: typeof parsed.dealType === 'string' ? parsed.dealType : null,
+  } satisfies ConversationSummary
 }
 
 /**

@@ -6,6 +6,7 @@
 import {
   getConversationById,
   createConversation,
+  updateConversation,
   updateConversationSummary,
   incrementMessageCount,
   addParticipant,
@@ -18,6 +19,7 @@ import { analyzeConversation, extractTopic, shouldJoinConversation } from '@/lib
 import { generateConversationEmbedding, generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveConversationEmbedding, getConversationsWithEmbeddingsByCP } from '@/lib/db/embeddings'
 import { createTodo } from '@/lib/db/todos'
+import { validateDealType } from './planning'
 import type { Message, ConversationThread } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -275,9 +277,15 @@ export async function rebuildConversationSummary(
       conversation.id,
       summary,
       summaryText,
-      0.8, // confidence
-      'AI analysis'
+      summary.confidence ?? 0.5,
+      summary.confidenceReason || undefined
     )
+
+    // Set deal_type on the conversation if AI classified it
+    const dealType = validateDealType(summary.dealType)
+    if (dealType && conversation.deal_type !== dealType) {
+      await updateConversation(conversation.id, { deal_type: dealType })
+    }
   } catch (error) {
     console.error('[Threading] Failed to rebuild conversation summary:', error)
   }

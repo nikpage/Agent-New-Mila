@@ -78,8 +78,8 @@ function makeConversation(overrides: Partial<ConversationThread> = {}): Conversa
   return {
     id: TEST_CONV_ID, user_id: TEST_USER_ID, topic: 'Byt Vinohrady 3+kk',
     summary_text: 'Jan Novák má zájem o koupi bytu.',
-    summary_json: { currentState: 'Zájem projevil', nextSteps: ['Prohlídka'], keyFacts: ['8.5M CZK'] },
-    summary_confidence: 0.8, summary_confidence_reason: 'AI', messages_since_rebuild: 0,
+    summary_json: { currentState: 'Zájem projevil', nextSteps: ['Prohlídka'], keyPoints: ['8.5M CZK'], risks: [], confidence: 0.85, confidenceReason: 'Clear deal progression', dealType: 'sale' },
+    summary_confidence: 0.85, summary_confidence_reason: 'Clear deal progression', messages_since_rebuild: 0,
     message_count: 3, state: 'active', deal_type: 'sale', priority_score: 50,
     embedding: null, last_updated: new Date().toISOString(), created_at: new Date().toISOString(),
     ...overrides,
@@ -366,7 +366,8 @@ function resetMocks() {
   } as never)
   vi.mocked(extractTopic).mockResolvedValue('Byt Vinohrady 3+kk')
   vi.mocked(analyzeConversation).mockResolvedValue({
-    currentState: 'Zájem projevil', nextSteps: ['Prohlídka'], keyFacts: ['8.5M CZK'],
+    currentState: 'Zájem projevil', nextSteps: ['Prohlídka'], keyPoints: ['8.5M CZK'],
+    risks: [], confidence: 0.85, confidenceReason: 'Clear deal progression with concrete price', dealType: 'sale',
   } as never)
   vi.mocked(shouldJoinConversation).mockResolvedValue(false)
   vi.mocked(generateBriefHeadline).mockResolvedValue('Máte akční návrhy.')
