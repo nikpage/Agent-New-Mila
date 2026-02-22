@@ -65,6 +65,7 @@ export interface BulkIngestionResult {
   }
   report: {
     sent: boolean
+    error?: string
   }
   errors: string[]
 }
@@ -440,17 +441,20 @@ export async function runBulkIngestion(
   onProgress({ phase: 3, step: 'generating_report' })
 
   const effectiveUntil = until || new Date()
-  const reportSent = await generateAndSendBackfillReport(
+  const reportResult = await generateAndSendBackfillReport(
     userId,
     result.phase1,
     p1.filteredSenders,
     since,
     effectiveUntil
   )
-  result.report = { sent: reportSent }
+  result.report = reportResult
+  if (reportResult.error) {
+    result.errors.push(`Backfill report: ${reportResult.error}`)
+  }
 
-  console.log(`[BulkIngest] Phase 3 complete: report ${reportSent ? 'sent' : 'FAILED'}`)
-  onProgress({ phase: 3, step: 'complete', reportSent })
+  console.log(`[BulkIngest] Phase 3 complete: report ${reportResult.sent ? 'sent' : 'FAILED'}${reportResult.error ? ` — ${reportResult.error}` : ''}`)
+  onProgress({ phase: 3, step: 'complete', reportSent: reportResult.sent, reportError: reportResult.error })
 
   return result
 }

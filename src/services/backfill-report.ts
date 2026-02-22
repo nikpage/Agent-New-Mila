@@ -734,7 +734,7 @@ export async function generateAndSendBackfillReport(
   filteredSenders: FilteredSender[],
   since: Date,
   until: Date
-): Promise<boolean> {
+): Promise<{ sent: boolean; error?: string }> {
   try {
     console.log(`[BackfillReport] Gathering report data for user ${userId}`)
     const data = await gatherReportData(userId, phase1, filteredSenders, since, until)
@@ -753,10 +753,11 @@ export async function generateAndSendBackfillReport(
     })
 
     console.log(`[BackfillReport] Report sent to ${userEmail}`)
-    return true
+    return { sent: true }
   } catch (error) {
-    console.error(`[BackfillReport] Failed to send report for user ${userId}:`, error)
-    return false
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    console.error(`[BackfillReport] Failed to send report for user ${userId}:`, message, error)
+    return { sent: false, error: message }
   }
 }
 
