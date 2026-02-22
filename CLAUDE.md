@@ -36,7 +36,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (231 tests)
+npm test             # Run Vitest test suite (256 tests)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -57,6 +57,7 @@ src/
 │   ├── api/gdpr/delete/        # GDPR Art. 17 — cascade-delete all user data
 │   ├── api/gdpr/export/        # GDPR Art. 15 — export all user data as JSON
 │   ├── api/ingest/             # Manual email/calendar ingestion (+ /bulk)
+│   ├── api/backfill/action/    # Backfill report action handler (allow/blacklist/add/setrole)
 │   ├── api/health/             # Health check
 │   ├── api/whatsapp/status/    # WhatsApp daemon status proxy
 │   ├── action/[id]/            # Action detail + edit pages
@@ -66,8 +67,10 @@ src/
 │   ├── agent.ts                # Main pipeline — 6-step orchestration (parallel ingestion)
 │   ├── scheduling.ts           # Calendar slot finding (683 lines) ⚠️ LARGEST
 │   ├── planning.ts             # Action generation with channel detection (parallel batches of 5)
-│   ├── threading.ts            # Email/WA conversation grouping (parallel CP lookups)
+│   ├── threading.ts            # Email/WA conversation grouping (enriched embeddings + external thread ID)
 │   ├── ingestion.ts            # Email ingestion (parallel batches of 5)
+│   ├── bulk-ingestion.ts       # Historical backfill — 3-phase: fetch → thread → report
+│   ├── backfill-report.ts      # "Welcome to Mila" report email after bulk ingestion (772 lines)
 │   ├── calendar-ingestion.ts   # Calendar sync + personal event filtering
 │   ├── lead-tracking.ts        # Cooling/cold/dead lead detection (parallel batches of 10)
 │   └── morning-brief.ts        # Daily summary email (212 lines)
@@ -86,8 +89,10 @@ src/
 │   │   ├── types.ts            # WAIncomingMessage, WASendRequest, normalizePhoneNumber, etc.
 │   │   ├── sender.ts           # sendWhatsAppMessage(), getWhatsAppStatus() — talks to daemon
 │   │   └── index.ts            # Barrel re-export
+│   ├── embeddings/
+│   │   └── generate.ts         # cleanMessageText (channel-aware), cleanEmailText, generateMessageEmbedding
 │   ├── auth/
-│   │   ├── tokens.ts           # OAuth state, action tokens, cron validation, trigger tokens
+│   │   ├── tokens.ts           # OAuth state, action tokens, cron validation, trigger tokens, backfill tokens
 │   │   └── api.ts              # API key verification middleware
 │   └── holidays.ts             # Holiday calendar
 │
@@ -148,12 +153,12 @@ Instead of reading these files, use this index:
 | File | Contents |
 |------|----------|
 | `users.ts` | `getUserById`, `getUserByEmail`, `upsertUser`, `getUserSettings`, `updateUserSettings`, `getUsersWithEmailEnabled`, `getUsersDueBrief`, `updateUserGoogleTokens`, `getUserGoogleTokens` |
-| `counterparties.ts` | `normalizeGmailAddress`, `isSameGmailAddress`, `getCPById`, `getCPByIdentifier`, `createCP`, `updateCP`, `getCPsForUser`, `findOrCreateCP`, `purgeUserAsCp` |
+| `counterparties.ts` | `normalizeGmailAddress`, `isSameGmailAddress`, `getCPById`, `getCPByIdentifier`, `upsertCP`, `updateCP`, `blacklistCP`, `getCPsForUser`, `findOrCreateCP`, `purgeUserAsCp`, `getCPState`, `updateCPState` |
 | `conversations.ts` | `getConversationById`, `createConversation`, `updateConversation`, `getConversationsForUser`, `addParticipant`, `getRecentMessages`, `findConversationByExternalThread` |
 | `messages.ts` | `getMessageById`, `createMessage`, `getMessagesForConversation`, `getUnprocessedMessages` |
 | `actions.ts` | `getActionById`, `createAction`, `updateAction`, `getActionsForUser`, `calculatePriorityScore`, `hasPendingAction`, `getPendingActionsForBrief`, `markActionsNotified` |
 | `todos.ts` | `getTodoById`, `createTodo`, `updateTodo`, `getTodosForUser` |
-| `events.ts` | `getEventById`, `createEvent`, `updateEvent`, `getEventsForUser`, `getEventsInRange`, `getEventsForToday`, `calculateEventScore` |
+| `events.ts` | `getEventById`, `createEvent`, `updateEvent`, `deleteEvent`, `getEventsInRange`, `getEventsForToday`, `getUpcomingEvents`, `findConflicts`, `getLastEventLocation`, `findAvailableSlots`, `createHoldEvent`, `createTravelBuffer`, `cleanupTravelBuffers`, `confirmEvent`, `cancelEventWithCleanup`, `calculateEventScore`, `upsertEventByGoogleId`, `getChildEvents` |
 | `embeddings.ts` | `saveMessageEmbedding`, `searchSimilarMessages` |
 | `gdpr.ts` | `writeAuditLog`, `exportAllUserData`, `deleteAllUserData`, `enforceRetentionPolicy` |
 | `locks.ts` | `tryAcquireUserLock`, `releaseUserLock` |
@@ -382,6 +387,39 @@ Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_valu
 
 `generateFinalDraft()` in `src/lib/ai/gemini.ts` takes conversation context + intent + user notes + channel → returns `{ subject, body }`.
 
+## Bulk Ingestion & Backfill Report
+
+### Bulk Ingestion (`src/services/bulk-ingestion.ts`)
+Historical backfill — imports a user's email history and sets up Mila's understanding of their conversations.
+
+**Route:** `POST /api/ingest/bulk` (API key auth, 5-min timeout). Streams NDJSON progress events: `started`, `progress`, `done`, `error`.
+
+**3-phase pipeline:**
+1. **Phase 1 — Fetch & Store:** Paginates through INBOX + SENT. Skips blocked senders, Gmail categories (PROMOTIONS, SOCIAL, etc.), duplicates. Runs `preFilterEmail()` AI + `enrichMessage()` AI per email. Tracks: `inboxFetched`, `sentFetched`, `skippedCategory`, `skippedBlocked`, `skippedPreFilter`, `skippedDuplicate`, `enriched`, `enrichmentFailed`, `stored`.
+2. **Phase 2 — Thread:** Calls `processMessagesForThreading()` on all stored messages (chronological). Same threading logic as agent Step 4.
+3. **Phase 3 — Backfill Report:** Generates and sends a "Welcome to Mila" summary email.
+
+**Filtered senders** are tracked (email + count + reason) and passed to the backfill report for "Allow as Contact" links.
+
+### Backfill Report (`src/services/backfill-report.ts`)
+Generates a comprehensive HTML email sent from the user's Gmail to themselves. Sections:
+- **Inbox health:** totals, inbound/outbound ratio
+- **Filtered senders:** blocked/pre-filtered emails with "Allow as Contact" signed links
+- **Counterparties:** discovered contacts with message counts, deal stage, "Blacklist" links
+- **Conversations:** threads with summary, CP names, lead status, "Add to Mila" links
+- **Unanswered inbound:** emails from last 7 days with no outbound reply
+- **Calendar:** upcoming events (next 2 weeks)
+- **Leads:** cooling/cold/dead lead alerts
+
+### Backfill Action Handler (`src/app/api/backfill/action/route.ts`)
+Handles signed GET links from the report email. Operations:
+- `allow` — creates CP from a previously-filtered sender email
+- `blacklist` — blacklists an existing CP
+- `add` — generates action proposals for a conversation (enters Mila process)
+- `setrole` — sets a CP's role (e.g., `buyer`, `seller`)
+
+Authentication via HMAC-signed backfill tokens (`generateBackfillToken`/`validateBackfillToken` in `src/lib/auth/tokens.ts`). All operations are idempotent.
+
 ## WhatsApp Integration
 
 ### Architecture
@@ -437,11 +475,11 @@ npm run test:watch   # Watch mode (re-runs on save)
 npm run test:coverage # With v8 coverage report
 ```
 
-### Test Layers (201 tests + 10 smoke tests)
+### Test Layers (256 tests + 10 smoke tests)
 
-Tests are organized in three layers. All three MUST pass before any commit.
+Tests are organized in four layers. All must pass before any commit.
 
-#### Layer 1: Route Protection (30 tests)
+#### Layer 1: Route Protection (32 tests)
 **File:** `src/app/api/__tests__/route-protection.test.ts`
 
 Every API route is tested to verify it rejects unauthenticated/bad requests. Catches: accidentally removed auth checks, changed HTTP methods, broken request parsing.
@@ -451,6 +489,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 - Action token routes: `/api/action/[id]`, `/api/action/[id]/execute`, `/api/action/[id]/draft`, `/api/action/[id]/blacklist`, `/api/action/[id]/todo`
 - Superadmin: `/api/superadmin/stats`
 - Trigger pixel: `/api/trigger/ingest` — verifies it returns GIF but does NOT run agent with bad sig
+- Backfill: `/api/backfill/action` — rejects missing params and bad signatures
 - Auth: `/api/auth/connect` (email validation), `/api/auth/callback` (state validation)
 
 #### Layer 2: Behavior Pinning (72 tests)
@@ -464,14 +503,14 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/services/scheduling.test.ts` | 9 | Meeting duration, buffer, working hours, working days, timezone, travel mode defaults |
 | `src/services/morning-brief.test.ts` | 4 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10) |
 
-#### Layer 2 (existing): Logic Tests (105 tests)
+#### Layer 3: Logic Tests (127 tests)
 
 | Source file | Test file | What's tested |
 |-------------|-----------|---------------|
 | `src/lib/auth/tokens.ts` | `tokens.test.ts` | 20 tests — HMAC round-trip, expiry, tampering, missing secret, malformed input. **Protects every approve/reject button in brief emails.** |
 | `src/services/agent.ts` | `agent.test.ts` | 12 tests — Lock acquire/release/fallback, user-not-found, no-credentials, fault isolation (`Promise.allSettled` not `Promise.all`) |
 | `src/services/planning.ts` | `planning.test.ts` | 11 tests — `validateDealType`: valid/invalid/hallucinated values, `selectOfferMultiplier`: seller/buyer/null role selection, `VALID_DEAL_TYPES`/`VALID_CP_ROLES` pinning, seller vs buyer priority score difference |
-| `src/lib/db/actions.ts` | `actions.test.ts` | 13 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding, `kcFactor` normalization + zero-safety |
+| `src/lib/db/actions.ts` | `actions.test.ts` | 13 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding, `kcFactor` normalization + zero-safety, `weight` wiring |
 | `src/services/ingestion.ts` | `ingestion.test.ts` | 8 tests — `isBlockedSender`: exact/prefix/domain/subaddress matching, false-positive prevention (`mynotifications` ≠ `notifications`) |
 | `src/config/client.ts` | `client.test.ts` | 10 tests — `containsHighValueSignals` + `isPersonalEvent`: keyword matching, case-insensitivity, empty inputs, empty keyword lists |
 | `src/lib/db/counterparties.ts` | `counterparties.test.ts` | 11 tests — `isSameGmailAddress`: dot/case-insensitive, domain dots, whitespace trimming; `normalizeGmailAddress`: lowercasing, dot stripping, idempotency, missing `@` |
@@ -480,7 +519,16 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/lib/db/gdpr.ts` | `gdpr.test.ts` | 4 tests — `writeAuditLog` never-throw contract, `deleteAllUserData` FK-safe ordering, missing lock table graceful handling |
 | `src/lib/db/locks.ts` | `locks.test.ts` | 2 tests — unique violation → `false` (error code `23505`), `releaseUserLock` filters by `user_id` |
 
-#### Layer 3: Smoke Tests (10 tests, opt-in)
+#### Layer 4: Integration Tests (25 tests)
+
+**Verify that services wire together correctly — mock at boundaries (DB, AI, Google APIs) but let service code chain for real.**
+
+| File | Tests | What's tested |
+|------|-------|---------------|
+| `src/services/agent-pipeline.test.ts` | 5 | Agent pipeline data flow: emails → threading → planning, calendar + lead tracking aggregation, step 2 fault isolation, step 4-5 skip on empty, WhatsApp message counting |
+| `src/services/integration.test.ts` | 20 | **Planning:** conversation → AI → scored action in DB, blacklisted CP skipped, weight clamping. **Morning Brief:** action loading + CP enrichment + email send, unsubscribed skip, empty brief, 10-action cap, afternoon greeting, multi-user fault isolation. **Bulk Ingestion:** 3-phase pipeline (fetch → thread → report), blocked sender skip, category skip, early return on errors, enrichment tracking. **Ingestion → Threading:** classify + store + enrich, non-actionable skip, blocked sender skip, duplicate skip, external thread ID match, new conversation creation |
+
+#### Layer 5: Smoke Tests (10 tests, opt-in)
 **File:** `src/__tests__/smoke.test.ts`
 
 Real HTTP calls against a running instance. Skipped by default. Reads `MILA_USER_API_KEY` and `CRON_SECRET` from `.env.local`. Run with:
