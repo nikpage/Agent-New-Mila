@@ -102,6 +102,7 @@ The core anti-churn mechanism. Runs as Step 6 of every pipeline execution.
 4. For cooling/cold/dead leads:
    - Skips if there's already a pending action for that conversation
    - Skips if max auto follow-ups (3) already sent
+   - Applies `selectOfferMultiplier()` based on CP role (seller/buyer) and `kcFactor` from user settings
    - Creates a REPLY action proposal with boosted priority score
    - Writes follow-up intent in Czech
 
@@ -167,18 +168,19 @@ When a new meeting conflicts with existing events:
 
 ## Priority Scoring
 
-**Formula:** `(dollarValue * offerMultiplier * urgency) + (painFactor * (daysIgnored + 1)^2) + weight`
+**Formula:** `(dollarValue / kcFactor × offerMultiplier × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
 
 | Input | Scale | Source |
 |-------|-------|--------|
 | `dollarValue` | 0+ CZK | AI-assessed from conversation |
+| `kcFactor` | default 13 | `settings.kc_factor` — Fibonacci-based constant that normalizes raw CZK values so scores are comparable across deal sizes |
 | `offerMultiplier` | default 1 | User settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
 | `urgency` | 1-10 | AI-assessed |
 | `painFactor` | 1-10 | AI-assessed relationship pain |
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
-| `weight` | 0-100 | How immovable (100 = flight, concert) |
+| `weight` | 0-100 | AI-assessed immovability (100 = legal deadline, 0 = flexible follow-up) |
 
-All multipliers fall back to 1 if 0/null to prevent score collapse.
+All multipliers fall back to 1 if 0/null to prevent score collapse. `kcFactor` falls back to 1 if 0/null to prevent division by zero.
 
 ## AI Architecture
 
@@ -286,7 +288,4 @@ PostgreSQL via Supabase with pgvector extension for embeddings.
 
 - **Multi-language support** — currently Czech only (hardcoded in prompts, configurable via `ai_language` in user settings)
 - **WhatsApp group monitoring** — Baileys daemon skips group messages
-- **Offer multiplier wiring** — `planning.ts` doesn't yet pass `offerMultiplier` to `calculatePriorityScore()`
-- **Weight in proposals** — `weight` field not set during proposal generation
 - **OAuth token encryption cleanup** — dual-write is active (plaintext + encrypted); plaintext column can be dropped once all users have refreshed tokens at least once
-- **Test framework** — no tests configured; `npm run build` is the verification method

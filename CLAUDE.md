@@ -36,7 +36,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (227 tests)
+npm test             # Run Vitest test suite (231 tests)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -192,7 +192,7 @@ Runs as Step 6 of agent pipeline. Scans all conversations, detects stale leads:
 | Cold | 5-14 | Urgent follow-up (2.5x boost) |
 | Dead | 14+ | Last-chance contact (3.75x boost) |
 
-Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation. High-value conversations (matching `highValueSignals`) get additional 1.5x boost in lead tracking and are flagged to the AI during planning for better dollar value estimation.
+Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation. Uses `selectOfferMultiplier()` to apply seller/buyer role-based multiplier to follow-up priority scores. High-value conversations (matching `highValueSignals`) get additional 1.5x boost in lead tracking and are flagged to the AI during planning for better dollar value estimation.
 
 ## Database Schema (actual columns from Supabase)
 
@@ -266,26 +266,29 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 - **`action_proposals.offer_multiplier`** — set during planning from user settings based on CP role. `cp.role === 'seller'` → `offer_multiplier_seller` (default 1.5), otherwise `offer_multiplier_buyer` (default 1.0). Flows into `calculatePriorityScore()`.
 - **`action_proposals.dollar_value`** — AI estimates in user's configured currency (from `typical_deal_size_currency`, default CZK). High-value signal detection (`containsHighValueSignals`) flags conversations for the AI to prioritize estimation.
 - **CP `role`** — typed as `CPRole`: `seller`, `buyer`, `landlord`, `tenant`, `agent`, `developer`, `other`, or `null`.
-- **`payload.action_metadata`** — includes `deal_type`, `offer_multiplier`, and `is_high_value` boolean for downstream consumers.
+- **`payload.action_metadata`** — includes `deal_type`, `offer_multiplier`, `weight`, and `is_high_value` boolean for downstream consumers.
 
 ## Priority Scoring
 
-**Formula:** `(dollarValue × offerMultiplier × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
+**Formula:** `(dollarValue / kcFactor × offerMultiplier × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
 
 **Implementation:** `src/lib/db/actions.ts` → `calculatePriorityScore()`
 
 | Input | Scale | Notes |
 |-------|-------|-------|
 | `dollarValue` | 0+ (CZK) | Deal/transaction value |
+| `kcFactor` | default 13 | Fibonacci-based normalization constant from `settings.kc_factor`. Divides raw dollar value so scores are comparable across deal size scales. |
 | `offerMultiplier` | default 1 | From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
 | `urgency` | 1-10 | AI-assessed, safe default 1 |
 | `painFactor` | 1-10 | AI-assessed relationship pain, safe default 1 |
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
-| `weight` | 0-100 | How "movable". 100 = immovable. Default 0. |
+| `weight` | 0-100 | AI-assessed immovability (100 = legal deadline, 0 = flexible). Set during proposal generation. |
 
-Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/null (prevents score collapse).
+Safe defaults: `urgency`, `painFactor`, `offerMultiplier`, `kcFactor` fallback to 1 if 0/null (prevents score collapse / division by zero).
 
-**Note:** `planning.ts` passes `offerMultiplier` (based on CP role) to `calculatePriorityScore()`. `weight` is not yet wired into proposal generation (defaults to 0).
+**DO NOT REMOVE OR CHANGE** the `kcFactor` normalization or `weight` wiring without explicit user permission. These were deliberately connected in Feb 2025 to fix scoring bugs where raw CZK values dominated all other factors and AI-assessed immovability was silently discarded.
+
+**Wiring:** `planning.ts` passes `offerMultiplier` (from CP role), `kcFactor` (from user settings), and `weight` (from AI response) to `calculatePriorityScore()`. `lead-tracking.ts` also passes `offerMultiplier` and `kcFactor` for follow-up actions.
 
 ## AI Model Configuration
 
@@ -310,7 +313,7 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 - `src/lib/ai/providers/gemini.ts` — `@google/generative-ai` SDK. Supports **multi-key rotation** via `GEMINI_API_KEYS` (comma-separated) — round-robins across keys. Falls back to single `GEMINI_API_KEY` if not set.
 - `src/lib/ai/providers/anthropic.ts` — `@anthropic-ai/sdk`. Uses `ANTHROPIC_API_KEY` env var.
 
-**Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()` and `generateFinalDraft()` prompts. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates `dollarValue` in the user's configured currency with typical deal range as reference, and classifies `dealType`.
+**Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()` and `generateFinalDraft()` prompts. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates `dollarValue` and `weight` (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies `dealType`.
 
 ## Embeddings & Semantic Threading
 
@@ -320,6 +323,7 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 - Runs after cleaning, before threading. Extracts: who's involved, property/subject, message kind, deal numbers, core intent.
 - Saves to `messages.enriched_text` column. Embedding generated from enriched text (not raw body).
 - Stage: `enrichment` (gemini-2.5-flash-lite → gemini-2.5-flash). Cost-sensitive — runs per message.
+- Runs in **both** regular ingestion (`ingestion.ts`) **and** bulk historical ingestion (`bulk-ingestion.ts`). Bulk enrichment tracks success/failure counts (`enriched`, `enrichmentFailed` in `BulkIngestionPhase1Result`).
 
 **Pipeline** (`src/services/threading.ts`):
 1. **External thread ID match** (primary) — exact match on `external_thread_id` (Gmail thread ID, Exchange conversation ID, `wa:+phone`)
@@ -374,7 +378,7 @@ When a new meeting conflicts with existing events:
 **Language:** Czech (configured in `src/config/client.ts` → `ai.language`)
 **Channel-aware tone:** Implemented — email gets formal tone + signature; WhatsApp gets short, conversational messages.
 
-Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `is_high_value`) is stored in `payload.action_metadata`.
+Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`, `weight`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `weight`, `is_high_value`) is stored in `payload.action_metadata`.
 
 `generateFinalDraft()` in `src/lib/ai/gemini.ts` takes conversation context + intent + user notes + channel → returns `{ subject, body }`.
 
@@ -433,7 +437,7 @@ npm run test:watch   # Watch mode (re-runs on save)
 npm run test:coverage # With v8 coverage report
 ```
 
-### Test Layers (197 tests + 10 smoke tests)
+### Test Layers (201 tests + 10 smoke tests)
 
 Tests are organized in three layers. All three MUST pass before any commit.
 
@@ -467,7 +471,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/lib/auth/tokens.ts` | `tokens.test.ts` | 20 tests — HMAC round-trip, expiry, tampering, missing secret, malformed input. **Protects every approve/reject button in brief emails.** |
 | `src/services/agent.ts` | `agent.test.ts` | 12 tests — Lock acquire/release/fallback, user-not-found, no-credentials, fault isolation (`Promise.allSettled` not `Promise.all`) |
 | `src/services/planning.ts` | `planning.test.ts` | 11 tests — `validateDealType`: valid/invalid/hallucinated values, `selectOfferMultiplier`: seller/buyer/null role selection, `VALID_DEAL_TYPES`/`VALID_CP_ROLES` pinning, seller vs buyer priority score difference |
-| `src/lib/db/actions.ts` | `actions.test.ts` | 9 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding |
+| `src/lib/db/actions.ts` | `actions.test.ts` | 13 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding, `kcFactor` normalization + zero-safety |
 | `src/services/ingestion.ts` | `ingestion.test.ts` | 8 tests — `isBlockedSender`: exact/prefix/domain/subaddress matching, false-positive prevention (`mynotifications` ≠ `notifications`) |
 | `src/config/client.ts` | `client.test.ts` | 10 tests — `containsHighValueSignals` + `isPersonalEvent`: keyword matching, case-insensitivity, empty inputs, empty keyword lists |
 | `src/lib/db/counterparties.ts` | `counterparties.test.ts` | 11 tests — `isSameGmailAddress`: dot/case-insensitive, domain dots, whitespace trimming; `normalizeGmailAddress`: lowercasing, dot stripping, idempotency, missing `@` |

@@ -262,7 +262,7 @@ All settings are stored in the `users.settings` JSONB column. Configured via `sc
 | `offer_multiplier_seller` | number | `1.5` | Priority boost when user is selling |
 | `offer_multiplier_buyer` | number | `1.0` | Priority boost when user is buying |
 | `priority_multiplier_vip` | number | `2.0` | Multiplier for VIP contacts |
-| `kc_factor` | number | `13` | Fibonacci-based scoring constant |
+| `kc_factor` | number | `13` | Fibonacci-based constant that normalizes dollar values in priority scoring. Higher value = less impact of raw CZK on score. Used in `calculatePriorityScore()`. |
 | `default_delegate_email` | string\|null | `null` | Email to delegate tasks to |
 | `todo_auto_due_days` | number | `1` | Auto-set todo due date (days from now) |
 
