@@ -85,14 +85,16 @@ export async function POST(request: NextRequest) {
           job.errors,
         )
 
-        console.log(`[BulkIngest/Worker] ${step}: processed ${batchEmails.length}, stored: ${job.phase1Stats.stored}, total fetched: ${job[totalFetchedKey]}`)
+        console.log(`[BulkIngest/Worker] ${step}: batch=${batchEmails.length}, stored=${job.phase1Stats.stored}, enriched=${job.phase1Stats.enriched}, enrichFailed=${job.phase1Stats.enrichmentFailed}, skipped=${job.phase1Stats.skippedCategory + job.phase1Stats.skippedBlocked + job.phase1Stats.skippedPreFilter + job.phase1Stats.skippedDuplicate}, totalFetched=${job[totalFetchedKey]}`)
 
         const newRemaining = job.maxTotal - job[totalFetchedKey]
         if (batchResult.nextPageToken && newRemaining > 0) {
+          console.log(`[BulkIngest/Worker] ${step}: chaining next page, ${newRemaining} remaining`)
           await publishBulkIngestStep({ ...job, pageToken: batchResult.nextPageToken })
           return NextResponse.json({ ok: true, next: step, remaining: newRemaining })
         } else {
           const nextStep = step === 'phase1_inbox' ? 'phase1_sent' : 'phase2'
+          console.log(`[BulkIngest/Worker] ${step}: done, moving to ${nextStep}`)
           await publishBulkIngestStep({ ...job, step: nextStep, pageToken: undefined })
           return NextResponse.json({ ok: true, next: nextStep })
         }

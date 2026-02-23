@@ -166,6 +166,7 @@ export async function processEmailBatch(
       if (!cp) continue
 
       const messageId = uuidv4()
+      const cleanedText = cleanMessageText(email.body, 'email')
       await createMessage({
         id: messageId,
         user_id: userId,
@@ -175,7 +176,7 @@ export async function processEmailBatch(
         universal_message_id: email.id,
         direction,
         raw_text: email.body,
-        cleaned_text: email.body.slice(0, 5000),
+        cleaned_text: cleanedText.slice(0, 5000),
         tag_primary: 'bulk_import',
         tag_secondary: null,
         timestamp: email.date.toISOString(),
@@ -183,6 +184,21 @@ export async function processEmailBatch(
       })
 
       stats.stored++
+
+      // Enrich message: extract key info, save enriched text, embed it
+      try {
+        const enrichedText = await enrichMessage(cleanedText, 'email', direction as 'inbound' | 'outbound')
+        await updateMessage(messageId, { enriched_text: enrichedText })
+
+        const embedding = await generateMessageEmbedding(enrichedText, 'email')
+        await saveMessageEmbedding(messageId, embedding)
+        stats.enriched++
+      } catch (enrichError) {
+        stats.enrichmentFailed++
+        console.error(`[BulkIngest] Enrichment failed for ${messageId}:`, enrichError)
+      }
+
+      console.log(`[BulkIngest] Batch: stored ${stats.stored}, enriched ${stats.enriched}, skipped ${stats.skippedCategory + stats.skippedBlocked + stats.skippedPreFilter + stats.skippedDuplicate}`)
     } catch (error) {
       console.error(`[BulkIngest] Error processing email ${email.id}:`, error)
       errors.push(`Email ${email.id}: ${error instanceof Error ? error.message : 'Unknown'}`)

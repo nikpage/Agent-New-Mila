@@ -175,12 +175,12 @@ export async function assignToConversation(
   // Generate initial summary
   await rebuildConversationSummary(conversation)
 
-  // Thin conversation check: if the first message has barely any enriched
-  // content, create a ToDo asking the user for context. Only for genuinely
-  // empty new conversations where the AI couldn't extract anything useful.
+  // Thin conversation check: if the first message has enriched_text but it's
+  // very short, create a ToDo asking the user for context. Only fires when
+  // enrichment actually ran (enriched_text is non-null) but extracted almost
+  // nothing. Null enriched_text = not yet enriched, NOT thin.
   const THIN_CONVERSATION_THRESHOLD = 100
-  const enrichedText = message.enriched_text || ''
-  if (enrichedText.length < THIN_CONVERSATION_THRESHOLD && message.cp_id) {
+  if (message.enriched_text && message.enriched_text.length < THIN_CONVERSATION_THRESHOLD && message.cp_id) {
     try {
       const cp = await getCPById(message.cp_id)
       const cpName = cp?.name || cp?.primary_identifier || 'neznámý kontakt'
