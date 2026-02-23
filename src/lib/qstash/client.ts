@@ -81,6 +81,29 @@ export async function deleteBriefSchedules(
 }
 
 /**
+ * Publish a bulk ingest step to the worker endpoint via QStash.
+ * Used to chain Phase 1 batches and subsequent phases without exceeding Vercel timeout.
+ */
+export async function publishBulkIngestStep(payload: Record<string, unknown>): Promise<string> {
+  const client = getClient()
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  if (CRON_SECRET) {
+    headers['Authorization'] = `Bearer ${CRON_SECRET}`
+  }
+
+  const result = await client.publishJSON({
+    url: `${APP_BASE_URL}/api/ingest/bulk/worker`,
+    body: payload,
+    headers,
+  })
+
+  return result.messageId
+}
+
+/**
  * Update a user's brief schedules (delete old, create new).
  */
 export async function updateBriefSchedules(

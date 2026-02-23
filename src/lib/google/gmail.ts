@@ -354,6 +354,79 @@ export async function fetchEmailsPaginated(
 }
 
 /**
+ * Fetch a single page of emails for bulk ingestion.
+ * Returns messages and nextPageToken for resumable pagination via QStash.
+ */
+export interface EmailBatchResult {
+  messages: EmailMessage[]
+  nextPageToken?: string
+}
+
+export async function fetchEmailsBatch(
+  userId: string,
+  options: {
+    query?: string
+    after?: Date
+    before?: Date
+    maxResults?: number
+    pageToken?: string
+  }
+): Promise<EmailBatchResult> {
+  const gmail = await getGmailClient(userId)
+
+  let query = options.query || ''
+  if (options.after) {
+    query += ` after:${Math.floor(options.after.getTime() / 1000)}`
+  }
+  if (options.before) {
+    query += ` before:${Math.floor(options.before.getTime() / 1000)}`
+  }
+
+  const maxResults = options.maxResults || 50
+  const CONCURRENT = 5
+
+  const listResponse = await gmail.users.messages.list({
+    userId: 'me',
+    maxResults,
+    q: query.trim() || undefined,
+    pageToken: options.pageToken,
+  })
+
+  const msgIds = (listResponse.data.messages || [])
+    .filter(msg => msg.id)
+    .map(msg => msg.id!)
+
+  const messages: EmailMessage[] = []
+
+  for (let i = 0; i < msgIds.length; i += CONCURRENT) {
+    const batch = msgIds.slice(i, i + CONCURRENT)
+    const results = await Promise.allSettled(
+      batch.map(id =>
+        gmail.users.messages.get({
+          userId: 'me',
+          id,
+          format: 'full',
+        })
+      )
+    )
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        const parsed = parseGmailMessage(result.value.data)
+        if (parsed) messages.push(parsed)
+      } else {
+        console.error('Failed to fetch message:', result.reason)
+      }
+    }
+  }
+
+  return {
+    messages,
+    nextPageToken: listResponse.data.nextPageToken || undefined,
+  }
+}
+
+/**
  * Gmail category labels that indicate non-primary mail.
  * Messages with these labels are skipped during bulk ingestion.
  */

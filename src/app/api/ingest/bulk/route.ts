@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { runBulkIngestion } from '@/services/bulk-ingestion'
 import { verifyApiKey } from '@/lib/auth/api'
+import { getUserById } from '@/lib/db/users'
+import { purgeUserAsCp } from '@/lib/db/counterparties'
+import { publishBulkIngestStep } from '@/lib/qstash/client'
 
 export const maxDuration = 300
 
@@ -38,14 +41,64 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Invalid until date' }, { status: 400 })
   }
 
+  const effectiveMaxTotal = (maxTotal as number) || 500
+
   console.log(`\n[BulkIngest] ========== Starting bulk ingestion ==========`)
   console.log(`[BulkIngest] User:  ${userId}`)
   console.log(`[BulkIngest] Since: ${sinceDate.toISOString()}`)
   console.log(`[BulkIngest] Until: ${untilDate ? untilDate.toISOString() : 'now'}`)
-  console.log(`[BulkIngest] Max:   ${(maxTotal as number) || 500} emails`)
+  console.log(`[BulkIngest] Max:   ${effectiveMaxTotal} emails`)
   console.log(`[BulkIngest] Time:  ${new Date().toISOString()}`)
 
-  // Stream NDJSON so the client sees progress and the connection stays alive
+  // ── QStash path: split into batched worker steps ──────────────────────────
+  if (process.env['QSTASH_TOKEN']) {
+    try {
+      const user = await getUserById(userId as string)
+      if (!user?.email) {
+        return NextResponse.json({ error: 'User not found or has no email' }, { status: 404 })
+      }
+
+      await purgeUserAsCp(userId as string)
+
+      const job = {
+        userId: userId as string,
+        since: sinceDate.toISOString(),
+        until: untilDate?.toISOString(),
+        maxTotal: effectiveMaxTotal,
+        userEmail: user.email.toLowerCase(),
+        step: 'phase1_inbox' as const,
+        totalFetchedInbox: 0,
+        totalFetchedSent: 0,
+        phase1Stats: {
+          inboxFetched: 0,
+          sentFetched: 0,
+          skippedCategory: 0,
+          skippedBlocked: 0,
+          skippedPreFilter: 0,
+          skippedDuplicate: 0,
+          stored: 0,
+        },
+        filteredSenders: [] as { email: string; name: string | null; count: number; reason: string }[],
+        errors: [] as string[],
+      }
+
+      const messageId = await publishBulkIngestStep(job)
+      console.log(`[BulkIngest] Queued via QStash: ${messageId}`)
+
+      return NextResponse.json(
+        { started: true, mode: 'queued', qstashMessageId: messageId },
+        { status: 202 }
+      )
+    } catch (error) {
+      console.error('[BulkIngest] Failed to queue via QStash:', error)
+      return NextResponse.json(
+        { error: 'Failed to queue bulk ingestion', details: error instanceof Error ? error.message : 'Unknown' },
+        { status: 500 }
+      )
+    }
+  }
+
+  // ── Fallback: run synchronously with NDJSON streaming (local dev) ─────────
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     async start(controller) {
@@ -64,7 +117,7 @@ export async function POST(request: NextRequest) {
           userId as string,
           sinceDate,
           untilDate,
-          (maxTotal as number) || 500,
+          effectiveMaxTotal,
           (progress) => send({ event: 'progress', ...progress })
         )
 

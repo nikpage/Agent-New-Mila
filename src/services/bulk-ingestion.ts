@@ -25,6 +25,7 @@ import {
   getUserEmail,
   GMAIL_SKIP_CATEGORIES,
 } from '@/lib/google/gmail'
+import type { EmailMessage } from '@/lib/google/gmail'
 import { preFilterEmail, classifyEmail } from '@/lib/ai/gemini'
 import { probeAIAvailability } from '@/lib/ai/runner'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
@@ -74,6 +75,116 @@ export interface BulkIngestionResult {
     enrichmentFailed: number
   }
   errors: string[]
+}
+
+// ─── Shared Helpers (used by both runBulkIngestion and QStash worker) ────────
+
+/**
+ * Track a filtered sender in the accumulator array.
+ * Used across QStash hops to accumulate filtered sender data.
+ */
+export function trackFilteredSender(
+  senders: FilteredSender[],
+  email: string,
+  name: string | null,
+  reason: string
+): void {
+  const key = email.toLowerCase()
+  const existing = senders.find(s => s.email === key)
+  if (existing) {
+    existing.count++
+  } else {
+    senders.push({ email: key, name, count: 1, reason })
+  }
+}
+
+/**
+ * Process a batch of emails: dedup, filter, preFilter AI, store.
+ * Used by the QStash worker for Phase 1 batches.
+ * Mutates stats, filteredSenders, and errors in place.
+ */
+export async function processEmailBatch(
+  userId: string,
+  userEmail: string,
+  emails: EmailMessage[],
+  stats: BulkIngestionPhase1Result,
+  filteredSenders: FilteredSender[],
+  errors: string[],
+): Promise<void> {
+  for (const email of emails) {
+    try {
+      if (await messageExists(userId, email.id)) {
+        stats.skippedDuplicate++
+        continue
+      }
+
+      if (email.labels.some(l => GMAIL_SKIP_CATEGORIES.includes(l))) {
+        stats.skippedCategory++
+        const senderAddr = extractEmailAddress(email.from)
+        trackFilteredSender(filteredSenders, senderAddr, extractName(email.from), 'Kategorie Gmail')
+        continue
+      }
+
+      const senderEmail = extractEmailAddress(email.from)
+      const isOutbound = isSameGmailAddress(senderEmail, userEmail)
+      const direction = isOutbound ? 'outbound' : 'inbound'
+
+      let cpEmail: string
+      let cpName: string | null
+      if (isOutbound) {
+        if (!email.to || email.to.length === 0) continue
+        cpEmail = extractEmailAddress(email.to[0])
+        cpName = extractName(email.to[0])
+      } else {
+        cpEmail = senderEmail
+        cpName = extractName(email.from)
+      }
+
+      if (isSameGmailAddress(cpEmail, userEmail)) continue
+
+      if (isBlockedSender(cpEmail)) {
+        stats.skippedBlocked++
+        trackFilteredSender(filteredSenders, cpEmail, cpName, 'Blokovaný odesílatel')
+        continue
+      }
+
+      try {
+        const filter = await preFilterEmail(email.subject, email.body, email.from)
+        if (!filter.relevant) {
+          stats.skippedPreFilter++
+          trackFilteredSender(filteredSenders, cpEmail, cpName, 'Automatický / nerelevantní')
+          continue
+        }
+      } catch (error) {
+        console.error(`[BulkIngest] Pre-filter failed for ${email.id}, allowing:`, error)
+      }
+
+      const cp = await findOrCreateCP(userId, cpEmail, cpName || undefined)
+      if (!cp) continue
+
+      const messageId = uuidv4()
+      await createMessage({
+        id: messageId,
+        user_id: userId,
+        cp_id: cp.id,
+        external_id: email.id,
+        external_thread_id: email.threadId,
+        universal_message_id: email.id,
+        direction,
+        raw_text: email.body,
+        cleaned_text: email.body.slice(0, 5000),
+        tag_primary: 'bulk_import',
+        tag_secondary: null,
+        timestamp: email.date.toISOString(),
+        occurred_at: email.date.toISOString(),
+      })
+
+      stats.stored++
+    } catch (error) {
+      console.error(`[BulkIngest] Error processing email ${email.id}:`, error)
+      errors.push(`Email ${email.id}: ${error instanceof Error ? error.message : 'Unknown'}`)
+    }
+  }
 }
 
 // ─── Phase 1: Fetch & Store ─────────────────────────────────────────────────
@@ -300,7 +411,7 @@ async function phase1FetchAndStore(
  * Phase 2: Thread
  * Get all unprocessed messages (sorted chrono), run existing threading.
  */
-async function phase2Thread(
+export async function phase2Thread(
   userId: string,
   onProgress: ProgressCallback
 ): Promise<BulkIngestionResult['phase2'] & { conversationIds: string[] }> {
@@ -350,7 +461,7 @@ async function phase2Thread(
 
 // ─── Phase 4: Enrich ────────────────────────────────────────────────────────
 
-interface Phase4Result {
+export interface Phase4Result {
   enriched: number
   enrichmentFailed: number
   errors: string[]
@@ -367,7 +478,7 @@ interface Phase4Result {
  * This makes enrichment resumable — if the function is killed mid-run,
  * remaining messages still have tag_primary = 'bulk_import' and can be retried.
  */
-async function phase4Enrich(
+export async function phase4Enrich(
   userId: string,
   onProgress: ProgressCallback
 ): Promise<Phase4Result> {

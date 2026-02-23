@@ -334,6 +334,20 @@ describe('Layer 1: Route Protection', () => {
       const res = await POST(req)
       expect(res.status).toBe(401)
     })
+
+    it('POST /api/ingest/bulk/worker — rejects without cron token', async () => {
+      const { POST } = await import('@/app/api/ingest/bulk/worker/route')
+      const req = makeRequest('POST', '/api/ingest/bulk/worker', {}, { step: 'phase1_inbox', userId: 'test' })
+      const res = await POST(req)
+      expect(res.status).toBe(401)
+    })
+
+    it('POST /api/ingest/bulk/worker — rejects with bad cron token', async () => {
+      const { POST } = await import('@/app/api/ingest/bulk/worker/route')
+      const req = makeRequest('POST', '/api/ingest/bulk/worker', { authorization: 'Bearer wrong-token' }, { step: 'phase1_inbox', userId: 'test' })
+      const res = await POST(req)
+      expect(res.status).toBe(401)
+    })
   })
 
   // -------------------------------------------------------------------------
