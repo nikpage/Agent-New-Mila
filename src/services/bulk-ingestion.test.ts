@@ -19,6 +19,7 @@ vi.mock('@/lib/ai/gemini', () => ({
     category: 'question',
     priority: 'medium',
   }),
+  enrichMessage: vi.fn().mockResolvedValue('Enriched: key facts extracted'),
 }))
 
 vi.mock('@/lib/ai/runner', () => ({
@@ -86,7 +87,7 @@ vi.mock('./backfill-report', () => ({
 }))
 
 import { runBulkIngestion } from './bulk-ingestion'
-import { classifyEmail } from '@/lib/ai/gemini'
+import { classifyEmail, enrichMessage } from '@/lib/ai/gemini'
 import { updateMessage } from '@/lib/db/messages'
 import { generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
@@ -216,8 +217,11 @@ describe('runBulkIngestion — Phase 4 enrichment', () => {
       tag_secondary: 'high',
     })
 
-    // Embedding generated and saved
-    expect(generateMessageEmbedding).toHaveBeenCalledWith('Meeting tomorrow?')
+    // enrichMessage called for messages without enriched_text
+    expect(enrichMessage).toHaveBeenCalledWith('Meeting tomorrow?', 'email', 'inbound')
+
+    // Embedding generated from enriched text (not raw)
+    expect(generateMessageEmbedding).toHaveBeenCalledWith('Enriched: key facts extracted', 'email')
     expect(saveMessageEmbedding).toHaveBeenCalledWith('msg-1', expect.any(Array))
   })
 
@@ -251,10 +255,13 @@ describe('runBulkIngestion — Phase 4 enrichment', () => {
     expect(result.enrichment.enriched).toBe(1)
     expect(result.enrichment.enrichmentFailed).toBe(0)
 
-    // updateMessage was still called
+    // updateMessage was still called for both classification and enrichment
     expect(updateMessage).toHaveBeenCalledWith('msg-1', {
       tag_primary: 'question',
       tag_secondary: 'medium',
+    })
+    expect(updateMessage).toHaveBeenCalledWith('msg-1', {
+      enriched_text: 'Enriched: key facts extracted',
     })
   })
 

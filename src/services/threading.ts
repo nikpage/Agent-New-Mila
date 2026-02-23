@@ -179,8 +179,10 @@ export async function assignToConversation(
   // very short, create a ToDo asking the user for context. Only fires when
   // enrichment actually ran (enriched_text is non-null) but extracted almost
   // nothing. Null enriched_text = not yet enriched, NOT thin.
+  // Skip for bulk_import messages — bulk historical import shouldn't flood todos.
   const THIN_CONVERSATION_THRESHOLD = 100
-  if (message.enriched_text && message.enriched_text.length < THIN_CONVERSATION_THRESHOLD && message.cp_id) {
+  const isBulkImport = message.tag_primary === 'bulk_import'
+  if (!isBulkImport && message.enriched_text && message.enriched_text.length < THIN_CONVERSATION_THRESHOLD && message.cp_id) {
     try {
       const cp = await getCPById(message.cp_id)
       const cpName = cp?.name || cp?.primary_identifier || 'neznámý kontakt'

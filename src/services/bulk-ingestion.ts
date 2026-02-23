@@ -114,10 +114,15 @@ export async function processEmailBatch(
   filteredSenders: FilteredSender[],
   errors: string[],
 ): Promise<void> {
-  for (const email of emails) {
+  const totalEmails = emails.length
+  console.log(`[BulkIngest] Batch start: ${totalEmails} emails to process`)
+
+  for (let i = 0; i < totalEmails; i++) {
+    const email = emails[i]
     try {
       if (await messageExists(userId, email.id)) {
         stats.skippedDuplicate++
+        console.log(`[BulkIngest] [${i + 1}/${totalEmails}] SKIP duplicate: ${email.id}`)
         continue
       }
 
@@ -125,6 +130,7 @@ export async function processEmailBatch(
         stats.skippedCategory++
         const senderAddr = extractEmailAddress(email.from)
         trackFilteredSender(filteredSenders, senderAddr, extractName(email.from), 'Kategorie Gmail')
+        console.log(`[BulkIngest] [${i + 1}/${totalEmails}] SKIP category: ${email.id} from ${senderAddr}`)
         continue
       }
 
@@ -148,6 +154,7 @@ export async function processEmailBatch(
       if (isBlockedSender(cpEmail)) {
         stats.skippedBlocked++
         trackFilteredSender(filteredSenders, cpEmail, cpName, 'Blokovaný odesílatel')
+        console.log(`[BulkIngest] [${i + 1}/${totalEmails}] SKIP blocked: ${cpEmail}`)
         continue
       }
 
@@ -156,10 +163,11 @@ export async function processEmailBatch(
         if (!filter.relevant) {
           stats.skippedPreFilter++
           trackFilteredSender(filteredSenders, cpEmail, cpName, 'Automatický / nerelevantní')
+          console.log(`[BulkIngest] [${i + 1}/${totalEmails}] SKIP pre-filter: ${email.id} from ${cpEmail}`)
           continue
         }
       } catch (error) {
-        console.error(`[BulkIngest] Pre-filter failed for ${email.id}, allowing:`, error)
+        console.error(`[BulkIngest] [${i + 1}/${totalEmails}] Pre-filter failed for ${email.id}, allowing:`, error)
       }
 
       const cp = await findOrCreateCP(userId, cpEmail, cpName || undefined)
@@ -195,15 +203,17 @@ export async function processEmailBatch(
         stats.enriched++
       } catch (enrichError) {
         stats.enrichmentFailed++
-        console.error(`[BulkIngest] Enrichment failed for ${messageId}:`, enrichError)
+        console.error(`[BulkIngest] [${i + 1}/${totalEmails}] Enrichment failed for ${messageId}:`, enrichError)
       }
 
-      console.log(`[BulkIngest] Batch: stored ${stats.stored}, enriched ${stats.enriched}, skipped ${stats.skippedCategory + stats.skippedBlocked + stats.skippedPreFilter + stats.skippedDuplicate}`)
+      console.log(`[BulkIngest] [${i + 1}/${totalEmails}] ${direction} ${email.id} → stored=${stats.stored} enriched=${stats.enriched} failed=${stats.enrichmentFailed} skipped=${stats.skippedCategory + stats.skippedBlocked + stats.skippedPreFilter + stats.skippedDuplicate}`)
     } catch (error) {
-      console.error(`[BulkIngest] Error processing email ${email.id}:`, error)
+      console.error(`[BulkIngest] [${i + 1}/${totalEmails}] Error processing email ${email.id}:`, error)
       errors.push(`Email ${email.id}: ${error instanceof Error ? error.message : 'Unknown'}`)
     }
   }
+
+  console.log(`[BulkIngest] Batch done: stored=${stats.stored} enriched=${stats.enriched} enrichFailed=${stats.enrichmentFailed} skipped=${stats.skippedCategory + stats.skippedBlocked + stats.skippedPreFilter + stats.skippedDuplicate}`)
 }
 
 // ─── Phase 1: Fetch & Store ─────────────────────────────────────────────────
@@ -572,10 +582,23 @@ export async function phase4Enrich(
         tag_secondary: classification.priority,
       })
 
-      // Generate and save embedding (non-fatal if it fails)
+      // Enrich message if Phase 1 didn't (enriched_text still null)
+      let enrichedText = msg.enriched_text
+      if (!enrichedText && bodyText) {
+        try {
+          const direction = (msg.direction as 'inbound' | 'outbound') || 'inbound'
+          enrichedText = await enrichMessage(bodyText, 'email', direction)
+          await updateMessage(msg.id, { enriched_text: enrichedText })
+        } catch (enrichErr) {
+          console.error(`[BulkIngest] Phase 4: enrichMessage failed for ${msg.id}:`, enrichErr)
+        }
+      }
+
+      // Generate and save embedding from enriched text (preferred) or body (fallback)
       try {
-        if (bodyText) {
-          const embedding = await generateMessageEmbedding(bodyText)
+        const embeddingSource = enrichedText || bodyText
+        if (embeddingSource) {
+          const embedding = await generateMessageEmbedding(embeddingSource, 'email')
           await saveMessageEmbedding(msg.id, embedding)
         }
       } catch (embError) {
@@ -584,6 +607,10 @@ export async function phase4Enrich(
       }
 
       result.enriched++
+
+      if ((i + 1) % 10 === 0) {
+        console.log(`[BulkIngest] Phase 4: ${i + 1}/${messages.length} enriched=${result.enriched} failed=${result.enrichmentFailed}`)
+      }
     } catch (error) {
       console.error(`[BulkIngest] Phase 4: Enrichment failed for ${msg.id}:`, error)
       result.enrichmentFailed++
