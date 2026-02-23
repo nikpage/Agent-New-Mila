@@ -1,13 +1,18 @@
 /**
  * Bulk Ingestion Service
- * Historical email backfill in 3 phases:
+ * Historical email backfill in 4 phases:
  *   Phase 1: Fetch & store (paginated, pre-filter only, no embeddings)
  *   Phase 2: Thread conversations (chrono order, reuses existing threading)
  *   Phase 3: Generate & send backfill report email
+ *   Phase 4: Enrich stored messages (classify + embed) — runs AFTER report
  *
  * This is a HISTORICAL BACKFILL — all ingested emails are assumed to be
  * already in the user's own process. No action proposals are generated.
  * Instead, a Mila welcome report is sent summarizing what was found.
+ *
+ * Phase 4 runs after the report so the user gets their backfill summary
+ * even if enrichment exceeds Vercel's maxDuration. Enrichment is resumable:
+ * unenriched messages keep tag_primary = 'bulk_import' and can be retried.
  *
  * Streams progress via onProgress callback so the HTTP response starts
  * immediately and keeps the connection alive on long runs.
@@ -20,11 +25,14 @@ import {
   getUserEmail,
   GMAIL_SKIP_CATEGORIES,
 } from '@/lib/google/gmail'
-import { preFilterEmail } from '@/lib/ai/gemini'
+import { preFilterEmail, classifyEmail } from '@/lib/ai/gemini'
 import { probeAIAvailability } from '@/lib/ai/runner'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
-import { createMessage, messageExists, getUnprocessedMessages } from '@/lib/db/messages'
+import { createMessage, messageExists, getUnprocessedMessages, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser } from '@/lib/db/users'
+import { generateMessageEmbedding } from '@/lib/embeddings/generate'
+import { saveMessageEmbedding } from '@/lib/db/embeddings'
+import { getSupabaseAdmin } from '@/lib/supabase/client'
 import { isBlockedSender } from './ingestion'
 import { processMessagesForThreading } from './threading'
 import { generateAndSendBackfillReport } from './backfill-report'
@@ -60,6 +68,10 @@ export interface BulkIngestionResult {
   }
   report: {
     sent: boolean
+  }
+  enrichment: {
+    enriched: number
+    enrichmentFailed: number
   }
   errors: string[]
 }
@@ -336,6 +348,114 @@ async function phase2Thread(
   }
 }
 
+// ─── Phase 4: Enrich ────────────────────────────────────────────────────────
+
+interface Phase4Result {
+  enriched: number
+  enrichmentFailed: number
+  errors: string[]
+}
+
+/**
+ * Phase 4: Enrich
+ * Classify and embed all messages that were stored in Phase 1 but not yet enriched.
+ * Runs AFTER the backfill report (Phase 3) so the user gets their summary even
+ * if enrichment times out on Vercel.
+ *
+ * Unenriched messages are identified by tag_primary = 'bulk_import'.
+ * After enrichment, tag_primary is updated to the classification category.
+ * This makes enrichment resumable — if the function is killed mid-run,
+ * remaining messages still have tag_primary = 'bulk_import' and can be retried.
+ */
+async function phase4Enrich(
+  userId: string,
+  onProgress: ProgressCallback
+): Promise<Phase4Result> {
+  console.log(`[BulkIngest] Phase 4: Enriching stored messages`)
+  onProgress({ phase: 4, step: 'loading_unenriched' })
+
+  const result: Phase4Result = {
+    enriched: 0,
+    enrichmentFailed: 0,
+    errors: [],
+  }
+
+  // Query messages that were stored in Phase 1 but not yet enriched
+  const supabase = getSupabaseAdmin()
+  const { data: messages, error } = await supabase
+    .from('messages')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('tag_primary', 'bulk_import')
+    .order('timestamp', { ascending: true })
+
+  if (error) {
+    result.errors.push(`Failed to query unenriched messages: ${error.message}`)
+    return result
+  }
+
+  if (!messages || messages.length === 0) {
+    console.log(`[BulkIngest] Phase 4: No unenriched messages found`)
+    onProgress({ phase: 4, step: 'complete', enriched: 0, enrichmentFailed: 0 })
+    return result
+  }
+
+  console.log(`[BulkIngest] Phase 4: ${messages.length} messages to enrich`)
+  onProgress({ phase: 4, step: 'enriching', total: messages.length })
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+    try {
+      const bodyText = msg.raw_text || msg.cleaned_text || ''
+
+      // Classify the email (subject/from not stored separately — body is the primary signal)
+      const classification = await classifyEmail('', bodyText, '')
+
+      // Update message with classification results (replaces 'bulk_import' tag)
+      await updateMessage(msg.id, {
+        tag_primary: classification.category,
+        tag_secondary: classification.priority,
+      })
+
+      // Generate and save embedding (non-fatal if it fails)
+      try {
+        if (bodyText) {
+          const embedding = await generateMessageEmbedding(bodyText)
+          await saveMessageEmbedding(msg.id, embedding)
+        }
+      } catch (embError) {
+        console.error(`[BulkIngest] Phase 4: Embedding failed for ${msg.id}:`, embError)
+        // Embedding failure is non-fatal — classification still succeeded
+      }
+
+      result.enriched++
+    } catch (error) {
+      console.error(`[BulkIngest] Phase 4: Enrichment failed for ${msg.id}:`, error)
+      result.enrichmentFailed++
+      result.errors.push(`Enrich ${msg.id}: ${error instanceof Error ? error.message : 'Unknown'}`)
+    }
+
+    // Stream progress every 5 messages
+    if ((i + 1) % 5 === 0 || i === messages.length - 1) {
+      onProgress({
+        phase: 4,
+        step: 'enriching',
+        processed: i + 1,
+        total: messages.length,
+        enriched: result.enriched,
+        enrichmentFailed: result.enrichmentFailed,
+      })
+    }
+  }
+
+  console.log(`\n[BulkIngest] Phase 4 complete:`)
+  console.log(`[BulkIngest]   Enriched:    ${result.enriched}`)
+  console.log(`[BulkIngest]   Failed:      ${result.enrichmentFailed}`)
+  onProgress({ phase: 4, step: 'complete', enriched: result.enriched, enrichmentFailed: result.enrichmentFailed })
+
+  return result
+}
+
 // ─── Main Pipeline ──────────────────────────────────────────────────────────
 
 /**
@@ -343,6 +463,7 @@ async function phase2Thread(
  * Phase 1 completes entirely before Phase 2 starts.
  * Phase 2 completes entirely before Phase 3 starts.
  * Phase 3 sends the backfill report (no action proposals).
+ * Phase 4 enriches stored messages (classify + embed) — runs AFTER report.
  * Streams progress via onProgress callback.
  */
 export async function runBulkIngestion(
@@ -368,6 +489,10 @@ export async function runBulkIngestion(
     },
     report: {
       sent: false,
+    },
+    enrichment: {
+      enriched: 0,
+      enrichmentFailed: 0,
     },
     errors: [],
   }
@@ -415,6 +540,16 @@ export async function runBulkIngestion(
 
   console.log(`[BulkIngest] Phase 3 complete: report ${reportSent ? 'sent' : 'FAILED'}`)
   onProgress({ phase: 3, step: 'complete', reportSent })
+
+  // Phase 4: Enrich stored messages (classify + embed)
+  // Runs AFTER the report so the user gets their backfill summary
+  // even if enrichment times out on Vercel's maxDuration.
+  const p4 = await phase4Enrich(userId, onProgress)
+  result.enrichment = {
+    enriched: p4.enriched,
+    enrichmentFailed: p4.enrichmentFailed,
+  }
+  result.errors.push(...p4.errors)
 
   return result
 }
