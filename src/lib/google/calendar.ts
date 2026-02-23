@@ -1,5 +1,6 @@
 import { google, calendar_v3 } from 'googleapis'
 import { getAuthenticatedClient } from './auth'
+import { isSameGmailAddress } from '@/lib/db/counterparties'
 
 export interface CalendarEvent {
   id: string
@@ -328,7 +329,7 @@ export async function respondToInvitation(
 
   // Update the user's attendee status
   const updatedAttendees = event.data.attendees.map(attendee => {
-    if (attendee.email?.toLowerCase() === userEmail.toLowerCase() || attendee.self) {
+    if ((attendee.email && isSameGmailAddress(attendee.email, userEmail)) || attendee.self) {
       return { ...attendee, responseStatus: response }
     }
     return attendee
@@ -372,7 +373,7 @@ export async function getPendingInvitations(
   return events.filter(event => {
     if (!event.attendees) return false
     return event.attendees.some(
-      a => (a.email?.toLowerCase() === userEmail.toLowerCase()) &&
+      a => (a.email != null && isSameGmailAddress(a.email, userEmail)) &&
            a.responseStatus === 'needsAction'
     )
   })
@@ -469,11 +470,11 @@ export function isIncomingInvitation(
   // and the user is in the attendees list
   if (!event.organizer || !event.attendees) return false
 
-  const organizerIsUser = event.organizer.email?.toLowerCase() === userEmail.toLowerCase()
+  const organizerIsUser = event.organizer.email != null && isSameGmailAddress(event.organizer.email, userEmail)
   if (organizerIsUser) return false
 
   const userIsAttendee = event.attendees.some(
-    a => a.email?.toLowerCase() === userEmail.toLowerCase()
+    a => a.email != null && isSameGmailAddress(a.email, userEmail)
   )
 
   return userIsAttendee

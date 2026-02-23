@@ -17,6 +17,7 @@ import { hasPendingAction, createAction, calculatePriorityScore, getActionsForUs
 import { getCPById } from '@/lib/db/counterparties'
 import { getUserSettings } from '@/lib/db/users'
 import { containsHighValueSignals } from '@/config/client'
+import { selectOfferMultiplier } from './planning'
 import type { ActionProposal, ConversationThread, UserSettings } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -156,12 +157,19 @@ async function processConversationForLeadTracking(
   const conversationText = recentMessages.map(m => m.cleaned_text || m.raw_text || '').join(' ')
   const isHighValue = containsHighValueSignals(conversationText, settings)
 
+  // Select offer multiplier based on counterparty role
+  const offerMultiplier = selectOfferMultiplier(
+    cp.role, settings.offer_multiplier_seller, settings.offer_multiplier_buyer
+  )
+
   // Calculate priority with lead-tracking boosts
   const basePriority = calculatePriorityScore({
     dollarValue: 0, // We don't know deal value from messages alone
     urgency: status === 'dead' ? 9 : status === 'cold' ? 7 : 5,
     painFactor: status === 'dead' ? 9 : status === 'cold' ? 7 : 4,
     daysIgnored: daysSinceActivity,
+    offerMultiplier,
+    kcFactor: settings.kc_factor,
   })
 
   // Apply lead-status boost
@@ -194,6 +202,7 @@ async function processConversationForLeadTracking(
     rationale: intent.rationaleCs,
     priority_score: boostedPriority,
     dollar_value: 0,
+    offer_multiplier: offerMultiplier,
     urgency: status === 'dead' ? 9 : status === 'cold' ? 7 : 5,
     pain_factor: status === 'dead' ? 9 : status === 'cold' ? 7 : 4,
     draft_subject: null,
@@ -206,6 +215,7 @@ async function processConversationForLeadTracking(
         action_type: 'REPLY',
         urgency: status === 'dead' ? 9 : status === 'cold' ? 7 : 5,
         dollar_value: 0,
+        offer_multiplier: offerMultiplier,
         pain_factor: status === 'dead' ? 9 : status === 'cold' ? 7 : 4,
       },
       // Lead tracking metadata

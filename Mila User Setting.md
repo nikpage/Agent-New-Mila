@@ -23,7 +23,7 @@ These settings are stored as a JSON object in the `users` table under the `setti
 | offer_multiplier_seller | Number | Priority boost for seller leads (e.g., 1.5) | 1.5 |
 | offer_multiplier_buyer | Number | Priority boost for buyer leads (e.g., 1.0) | 1.0 |
 | priority_multiplier_vip | Number | Priority boost for VIP contacts (e.g., 2.0) | 2.0 |
-| kc_factor | Number | Fibonacci factor for priority scoring (e.g., 13, 21) | 13 |
+| kc_factor | Number | Fibonacci-based constant that normalizes dollar values in priority scoring. Higher = less impact of raw CZK on score. (e.g., 13, 21) | 13 |
 | default_delegate_email | String | Email address to delegate tasks to | null |
 | todo_auto_due_days | Number | Default due date offset (days) | 1 |
 | ai_tone_user | String | Tone for messages to the user | "professional and concise" |

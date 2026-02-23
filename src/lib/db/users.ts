@@ -2,6 +2,7 @@ import { getSupabaseAdmin } from '../supabase/client'
 import type { User, UserInsert, UserSettings } from '../supabase/types'
 import { DEFAULT_USER_SETTINGS } from '../supabase/types'
 import { encryptTokens } from '../crypto'
+import { normalizeGmailAddress } from './counterparties'
 
 export interface GoogleTokens {
   access_token: string
@@ -37,18 +38,35 @@ export async function getUserById(userId: string): Promise<User | null> {
  */
 export async function getUserByEmail(email: string): Promise<User | null> {
   const supabase = getSupabaseAdmin()
+  const normalized = normalizeGmailAddress(email)
+
+  // Try exact lowercase match first (most emails are stored as-is from Google)
   const { data, error } = await supabase
     .from('users')
     .select('*')
-    .eq('email', email)
+    .eq('email', email.toLowerCase().trim())
     .single()
 
-  if (error) {
-    if (error.code === 'PGRST116') return null
+  if (!error && data) return data
+  if (error && error.code !== 'PGRST116') {
     throw new Error(`Failed to get user by email: ${error.message}`)
   }
 
-  return data
+  // Fallback: try Gmail-normalized form (handles first.last vs firstlast)
+  if (normalized !== email.toLowerCase().trim()) {
+    const { data: data2, error: error2 } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', normalized)
+      .single()
+
+    if (!error2 && data2) return data2
+    if (error2 && error2.code !== 'PGRST116') {
+      throw new Error(`Failed to get user by email: ${error2.message}`)
+    }
+  }
+
+  return null
 }
 
 /**

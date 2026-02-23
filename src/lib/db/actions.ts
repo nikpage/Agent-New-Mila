@@ -246,6 +246,7 @@ export function calculatePriorityScore(params: {
   daysIgnored: number
   weight?: number
   offerMultiplier?: number
+  kcFactor?: number
 }): number {
   const {
     dollarValue,
@@ -254,14 +255,17 @@ export function calculatePriorityScore(params: {
     daysIgnored,
     weight = 0,
     offerMultiplier = 1,
+    kcFactor = 1,
   } = params
 
   const safeOfferMultiplier = offerMultiplier || 1
   const safeUrgency = urgency || 1
   const safePainFactor = painFactor || 1
   const safeWeight = weight || 0
+  const safeKcFactor = kcFactor || 1
 
-  const adjustedValue = dollarValue * safeOfferMultiplier
+  const normalizedValue = dollarValue / safeKcFactor
+  const adjustedValue = normalizedValue * safeOfferMultiplier
   const valueComponent = adjustedValue * safeUrgency
   const painComponent = safePainFactor * Math.pow(daysIgnored + 1, 2)
 

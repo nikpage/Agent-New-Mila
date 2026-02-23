@@ -33,6 +33,42 @@ BODY: ${body.slice(0, 500)}`
 }
 
 /**
+ * Enrich a single message: extract key information as structured free-text.
+ * Stage: enrichment (gemini-2.5-flash-lite → gemini-2.5-flash)
+ * Runs per-message after cleaning, before threading. Cost-sensitive — uses cheapest model.
+ */
+export async function enrichMessage(
+  cleanedText: string,
+  channel: 'email' | 'whatsapp',
+  direction: 'inbound' | 'outbound',
+  conversationContext?: string
+): Promise<string> {
+  console.log(`[AI:enrichMessage] Running stage 'enrichment' (${channel}/${direction})`)
+  const contextBlock = conversationContext
+    ? `\nRECENT CONVERSATION CONTEXT:\n${conversationContext}\n`
+    : ''
+
+  const prompt = `Extract key information from this message. Use the following as guidance for what to look for, but only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text.
+
+- Who's involved (all parties mentioned, who's in focus)
+- What property, subject matter, or topic, if any
+- What kind of message (meeting request, question, offer, info, personal, admin, legal, update...)
+- If deal-related: stage, key numbers (price, area, dates), commitments made
+- If personal/admin: what it's about, any time sensitivity, any action needed
+- What this message actually says or asks (the core intent)
+
+Channel: ${channel}
+Direction: ${direction}
+${contextBlock}
+MESSAGE:
+${cleanedText.slice(0, 3000)}
+
+Respond with ONLY the extracted information as concise structured text. No JSON. No markdown headers. Just the facts.`
+
+  return (await runAITask('enrichment', prompt)).trim()
+}
+
+/**
  * Analyze a conversation for summary, risks, next steps.
  * Stage: analysis (gemini-2.5-flash → claude-sonnet)
  */
@@ -54,8 +90,16 @@ Respond with ONLY valid JSON in this exact format:
   "currentState": "Brief description of where this conversation/deal currently stands (in Czech)",
   "risks": ["Risk 1 (in Czech)", "Risk 2 (in Czech)"],
   "nextSteps": ["Next step 1 (in Czech)", "Next step 2 (in Czech)"],
-  "keyPoints": ["Key point 1 (in Czech)", "Key point 2 (in Czech)"]
+  "keyPoints": ["Key point 1 (in Czech)", "Key point 2 (in Czech)"],
+  "confidence": 0.75,
+  "confidenceReason": "Why you are this confident — e.g. 'Only 2 short messages, unclear deal stage' or 'Full conversation with clear progression and concrete numbers'",
+  "dealType": "sale"
 }
+
+FIELD RULES:
+- confidence: 0.0 to 1.0 — how confident you are in the summary's accuracy. Consider: message count, message clarity, how much context is available, whether the conversation is coherent.
+- confidenceReason: Explain WHY this confidence level — what evidence supports or limits your understanding. NOT how the analysis was done.
+- dealType: one of "sale", "purchase", "rental", "lease", "consultation", "other", or null if not a deal/transaction.
 
 Be concise. Focus on actionable insights.`
 
@@ -63,7 +107,16 @@ Be concise. Focus on actionable insights.`
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error('Failed to parse conversation analysis')
 
-  return JSON.parse(jsonMatch[0]) as ConversationSummary
+  const parsed = JSON.parse(jsonMatch[0])
+  return {
+    currentState: parsed.currentState || '',
+    risks: parsed.risks || [],
+    nextSteps: parsed.nextSteps || [],
+    keyPoints: parsed.keyPoints || [],
+    confidence: typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : null,
+    confidenceReason: typeof parsed.confidenceReason === 'string' ? parsed.confidenceReason : null,
+    dealType: typeof parsed.dealType === 'string' ? parsed.dealType : null,
+  } satisfies ConversationSummary
 }
 
 /**
@@ -84,6 +137,7 @@ export async function proposeAction(
   urgency: number
   dollarValue: number
   painFactor: number
+  weight: number
   dealType: DealType
   suggestedLocation?: string | null
   suggestedTime?: string | null
@@ -112,6 +166,12 @@ ${channelNote}
 ${highValueNote}
 
 You are Mila, a proactive executive assistant. Based on this conversation, determine what action to take.
+
+CRITICAL — ROLE IDENTIFICATION:
+- Messages marked [outbound] are sent BY YOUR BOSS (the email account owner, the user you work for). Your boss is ALWAYS the principal — the client, the buyer, the decision-maker on our side.
+- Messages marked [inbound] are FROM THE COUNTERPARTY (${cpName || 'the other party'}). They are the service provider, seller, agent, or external party.
+- NEVER confuse who is who. Your boss wrote the [outbound] messages. The counterparty wrote the [inbound] messages.
+- When describing actions, refer to your boss's actions as "you" and the counterparty by name.
 
 CONVERSATION STATE:
 ${JSON.stringify(conversationSummary, null, 2)}
@@ -150,6 +210,7 @@ Respond with ONLY valid JSON:
   "urgency": 1-10 (10 = needs immediate attention),
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "painFactor": 1-10 (how much pain from ignoring this),
+  "weight": 0-100 (how immovable/fixed is this action? 100 = must happen regardless of other priorities, 0 = flexible. E.g. legal deadline = 90, casual follow-up = 5),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
   "suggestedLocation": "Physical meeting location if mentioned or clearly implied. null if not specified.",
   "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). null if no specific time mentioned."
@@ -287,5 +348,9 @@ export async function classifyEmail(
   const text = await runAITask('classify', prompt)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) return { isActionable: false, category: 'other', priority: 'low' }
-  return JSON.parse(jsonMatch[0])
+  try {
+    return JSON.parse(jsonMatch[0])
+  } catch {
+    return { isActionable: false, category: 'other', priority: 'low' }
+  }
 }

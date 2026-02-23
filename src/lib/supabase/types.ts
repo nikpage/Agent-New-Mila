@@ -149,6 +149,7 @@ export interface Database {
           direction: string | null
           raw_text: string | null
           cleaned_text: string | null
+          enriched_text: string | null
           tag_primary: string | null
           tag_secondary: string | null
           message_type: string | null
@@ -168,6 +169,7 @@ export interface Database {
           direction?: string | null
           raw_text?: string | null
           cleaned_text?: string | null
+          enriched_text?: string | null
           tag_primary?: string | null
           tag_secondary?: string | null
           message_type?: string | null
@@ -187,6 +189,7 @@ export interface Database {
           direction?: string | null
           raw_text?: string | null
           cleaned_text?: string | null
+          enriched_text?: string | null
           tag_primary?: string | null
           tag_secondary?: string | null
           message_type?: string | null
@@ -795,4 +798,7 @@ export interface ConversationSummary {
   risks: string[]
   nextSteps: string[]
   keyPoints: string[]
+  confidence: number | null
+  confidenceReason: string | null
+  dealType: string | null
 }

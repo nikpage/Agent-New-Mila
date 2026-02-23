@@ -28,6 +28,7 @@ vi.mock('@/lib/ai/runner', () => ({
 vi.mock('@/lib/db/counterparties', () => ({
   findOrCreateCP: vi.fn().mockResolvedValue({ id: 'cp-1' }),
   isSameGmailAddress: vi.fn((a: string, b: string) => a.toLowerCase() === b.toLowerCase()),
+  normalizeGmailAddress: vi.fn((email: string) => email.toLowerCase()),
   purgeUserAsCp: vi.fn().mockResolvedValue(0),
 }))
 
@@ -80,7 +81,7 @@ vi.mock('./threading', () => ({
 vi.mock('./backfill-report', () => ({
   generateAndSendBackfillReport: vi.fn().mockImplementation(async () => {
     callOrder.push('phase3_report')
-    return true
+    return { sent: true }
   }),
 }))
 

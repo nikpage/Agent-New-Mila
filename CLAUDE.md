@@ -36,7 +36,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (190 tests)
+npm test             # Run Vitest test suite (256 tests)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -59,6 +59,7 @@ src/
 │   ├── api/ingest/             # Manual email/calendar ingestion
 │   ├── api/ingest/bulk/        # Bulk historical ingestion orchestrator (QStash on Vercel, NDJSON locally)
 │   ├── api/ingest/bulk/worker/ # QStash worker — processes Phase 1–4 in chained batches of 50
+│   ├── api/backfill/action/    # Backfill report action handler (allow/blacklist/add/setrole)
 │   ├── api/health/             # Health check
 │   ├── api/whatsapp/status/    # WhatsApp daemon status proxy
 │   ├── action/[id]/            # Action detail + edit pages
@@ -68,8 +69,10 @@ src/
 │   ├── agent.ts                # Main pipeline — 6-step orchestration (parallel ingestion)
 │   ├── scheduling.ts           # Calendar slot finding (683 lines) ⚠️ LARGEST
 │   ├── planning.ts             # Action generation with channel detection (parallel batches of 5)
-│   ├── threading.ts            # Email/WA conversation grouping (parallel CP lookups)
+│   ├── threading.ts            # Email/WA conversation grouping (enriched embeddings + external thread ID)
 │   ├── ingestion.ts            # Email ingestion (parallel batches of 5)
+│   ├── bulk-ingestion.ts       # Historical backfill — 3-phase: fetch → thread → report
+│   ├── backfill-report.ts      # "Welcome to Mila" report email after bulk ingestion (772 lines)
 │   ├── calendar-ingestion.ts   # Calendar sync + personal event filtering
 │   ├── lead-tracking.ts        # Cooling/cold/dead lead detection (parallel batches of 10)
 │   └── morning-brief.ts        # Daily summary email (212 lines)
@@ -79,7 +82,7 @@ src/
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
 │   ├── supabase/               # Client + types (types.ts = 593 lines)
 │   ├── ai/
-│   │   ├── gemini.ts           # AI functions (preFilter, classify, proposeAction, generateFinalDraft, etc.)
+│   │   ├── gemini.ts           # AI functions (preFilter, classify, enrichMessage, proposeAction, generateFinalDraft, etc.)
 │   │   ├── runner.ts           # runAITask() with 3-model fallback + 429 retry
 │   │   └── providers/          # gemini.ts (multi-key rotation), anthropic.ts, types.ts, index.ts
 │   ├── qstash/
@@ -88,8 +91,10 @@ src/
 │   │   ├── types.ts            # WAIncomingMessage, WASendRequest, normalizePhoneNumber, etc.
 │   │   ├── sender.ts           # sendWhatsAppMessage(), getWhatsAppStatus() — talks to daemon
 │   │   └── index.ts            # Barrel re-export
+│   ├── embeddings/
+│   │   └── generate.ts         # cleanMessageText (channel-aware), cleanEmailText, generateMessageEmbedding
 │   ├── auth/
-│   │   ├── tokens.ts           # OAuth state, action tokens, cron validation, trigger tokens
+│   │   ├── tokens.ts           # OAuth state, action tokens, cron validation, trigger tokens, backfill tokens
 │   │   └── api.ts              # API key verification middleware
 │   └── holidays.ts             # Holiday calendar
 │
@@ -114,12 +119,12 @@ src/
 Step 0: purgeUserAsCp — data hygiene
 Step 1: Verify user exists + has Google credentials
 Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
-  Step 2: Ingest inbound emails from Gmail
-  Step 2.1: Ingest outbound emails from Gmail
+  Step 2: Ingest inbound emails from Gmail (clean → enrich → embed enriched text)
+  Step 2.1: Ingest outbound emails from Gmail (clean → enrich → embed enriched text)
   Step 2.5: Sync Google Calendar events, detect invitations, filter personal events
 Step 3: Get all unprocessed messages (email + WhatsApp)
-Step 4: Thread messages into conversations
-Step 5: Generate action proposals for updated conversations (channel-aware, batched ×5)
+Step 4: Thread messages into conversations (uses enriched_text for embedding similarity)
+Step 5: Generate action proposals for updated conversations (channel-aware, adaptive context, batched ×5)
 Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10)
 ```
 
@@ -150,12 +155,12 @@ Instead of reading these files, use this index:
 | File | Contents |
 |------|----------|
 | `users.ts` | `getUserById`, `getUserByEmail`, `upsertUser`, `getUserSettings`, `updateUserSettings`, `getUsersWithEmailEnabled`, `getUsersDueBrief`, `updateUserGoogleTokens`, `getUserGoogleTokens` |
-| `counterparties.ts` | `getCPById`, `getCPByIdentifier`, `createCP`, `updateCP`, `getCPsForUser`, `findOrCreateCP`, `isSameGmailAddress`, `purgeUserAsCp` |
+| `counterparties.ts` | `normalizeGmailAddress`, `isSameGmailAddress`, `getCPById`, `getCPByIdentifier`, `upsertCP`, `updateCP`, `blacklistCP`, `getCPsForUser`, `findOrCreateCP`, `purgeUserAsCp`, `getCPState`, `updateCPState` |
 | `conversations.ts` | `getConversationById`, `createConversation`, `updateConversation`, `getConversationsForUser`, `addParticipant`, `getRecentMessages`, `findConversationByExternalThread` |
 | `messages.ts` | `getMessageById`, `createMessage`, `getMessagesForConversation`, `getUnprocessedMessages` |
 | `actions.ts` | `getActionById`, `createAction`, `updateAction`, `getActionsForUser`, `calculatePriorityScore`, `hasPendingAction`, `getPendingActionsForBrief`, `markActionsNotified` |
 | `todos.ts` | `getTodoById`, `createTodo`, `updateTodo`, `getTodosForUser` |
-| `events.ts` | `getEventById`, `createEvent`, `updateEvent`, `getEventsForUser`, `getEventsInRange`, `getEventsForToday`, `calculateEventScore` |
+| `events.ts` | `getEventById`, `createEvent`, `updateEvent`, `deleteEvent`, `getEventsInRange`, `getEventsForToday`, `getUpcomingEvents`, `findConflicts`, `getLastEventLocation`, `findAvailableSlots`, `createHoldEvent`, `createTravelBuffer`, `cleanupTravelBuffers`, `confirmEvent`, `cancelEventWithCleanup`, `calculateEventScore`, `upsertEventByGoogleId`, `getChildEvents` |
 | `embeddings.ts` | `saveMessageEmbedding`, `searchSimilarMessages` |
 | `gdpr.ts` | `writeAuditLog`, `exportAllUserData`, `deleteAllUserData`, `enforceRetentionPolicy` |
 | `locks.ts` | `tryAcquireUserLock`, `releaseUserLock` |
@@ -194,7 +199,7 @@ Runs as Step 6 of agent pipeline. Scans all conversations, detects stale leads:
 | Cold | 5-14 | Urgent follow-up (2.5x boost) |
 | Dead | 14+ | Last-chance contact (3.75x boost) |
 
-Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation. High-value conversations (matching `highValueSignals`) get additional 1.5x boost in lead tracking and are flagged to the AI during planning for better dollar value estimation.
+Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation. Uses `selectOfferMultiplier()` to apply seller/buyer role-based multiplier to follow-up priority scores. High-value conversations (matching `highValueSignals`) get additional 1.5x boost in lead tracking and are flagged to the AI during planning for better dollar value estimation.
 
 ## Database Schema (actual columns from Supabase)
 
@@ -227,7 +232,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 **`conversation_threads`** — id, user_id, topic, summary_text, summary_json (jsonb), summary_confidence (numeric), summary_confidence_reason, messages_since_rebuild, message_count, state, deal_type, priority_score (integer), embedding (vector 768-dim), last_updated, created_at
 
-**`messages`** — id, user_id, cp_id, channel_id, thread_id, conversation_id, external_thread_id, universal_message_id, external_id, direction (inbound/outbound), raw_text, cleaned_text, message_type (enum), tag_primary, tag_secondary, timestamp, occurred_at
+**`messages`** — id, user_id, cp_id, channel_id, thread_id, conversation_id, external_thread_id, universal_message_id, external_id, direction (inbound/outbound), raw_text, cleaned_text, enriched_text, message_type (enum), tag_primary, tag_secondary, timestamp, occurred_at
 
 **`thread_participants`** — thread_id, cp_id, added_at
 
@@ -268,26 +273,29 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 - **`action_proposals.offer_multiplier`** — set during planning from user settings based on CP role. `cp.role === 'seller'` → `offer_multiplier_seller` (default 1.5), otherwise `offer_multiplier_buyer` (default 1.0). Flows into `calculatePriorityScore()`.
 - **`action_proposals.dollar_value`** — AI estimates in user's configured currency (from `typical_deal_size_currency`, default CZK). High-value signal detection (`containsHighValueSignals`) flags conversations for the AI to prioritize estimation.
 - **CP `role`** — typed as `CPRole`: `seller`, `buyer`, `landlord`, `tenant`, `agent`, `developer`, `other`, or `null`.
-- **`payload.action_metadata`** — includes `deal_type`, `offer_multiplier`, and `is_high_value` boolean for downstream consumers.
+- **`payload.action_metadata`** — includes `deal_type`, `offer_multiplier`, `weight`, and `is_high_value` boolean for downstream consumers.
 
 ## Priority Scoring
 
-**Formula:** `(dollarValue × offerMultiplier × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
+**Formula:** `(dollarValue / kcFactor × offerMultiplier × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
 
 **Implementation:** `src/lib/db/actions.ts` → `calculatePriorityScore()`
 
 | Input | Scale | Notes |
 |-------|-------|-------|
 | `dollarValue` | 0+ (CZK) | Deal/transaction value |
+| `kcFactor` | default 13 | Fibonacci-based normalization constant from `settings.kc_factor`. Divides raw dollar value so scores are comparable across deal size scales. |
 | `offerMultiplier` | default 1 | From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
 | `urgency` | 1-10 | AI-assessed, safe default 1 |
 | `painFactor` | 1-10 | AI-assessed relationship pain, safe default 1 |
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
-| `weight` | 0-100 | How "movable". 100 = immovable. Default 0. |
+| `weight` | 0-100 | AI-assessed immovability (100 = legal deadline, 0 = flexible). Set during proposal generation. |
 
-Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/null (prevents score collapse).
+Safe defaults: `urgency`, `painFactor`, `offerMultiplier`, `kcFactor` fallback to 1 if 0/null (prevents score collapse / division by zero).
 
-**Note:** `planning.ts` passes `offerMultiplier` (based on CP role) to `calculatePriorityScore()`. `weight` is not yet wired into proposal generation (defaults to 0).
+**DO NOT REMOVE OR CHANGE** the `kcFactor` normalization or `weight` wiring without explicit user permission. These were deliberately connected in Feb 2025 to fix scoring bugs where raw CZK values dominated all other factors and AI-assessed immovability was silently discarded.
+
+**Wiring:** `planning.ts` passes `offerMultiplier` (from CP role), `kcFactor` (from user settings), and `weight` (from AI response) to `calculatePriorityScore()`. `lead-tracking.ts` also passes `offerMultiplier` and `kcFactor` for follow-up actions.
 
 ## AI Model Configuration
 
@@ -296,12 +304,13 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 
 | Stage | Purpose | Primary → Fallback1 → Fallback2 |
 |-------|---------|----------------------------------|
-| `preFilter` | Spam detection | `gemini-2.5-flash-lite` → `gemini-2.5-flash` → `claude-haiku-4-5-20251001` |
-| `classify` | Email category + priority | `gemini-2.5-flash-lite` → `gemini-2.5-flash` → `claude-haiku-4-5-20251001` |
-| `threading` | extractTopic, shouldJoinConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
-| `analysis` | analyzeConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
-| `planning` | proposeAction (type, rationale, intent) | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
-| `drafting` | generateFinalDraft, generateBriefHeadline | `gemini-2.5-flash` → `claude-sonnet-4-6` → `claude-haiku-4-5-20251001` |
+| `preFilter` | Spam detection | `gemini-2.5-flash-lite` → `claude-haiku-4-5-20251001` |
+| `classify` | Email category + priority | `gemini-2.5-flash-lite` → `claude-haiku-4-5-20251001` |
+| `enrichment` | Per-message key info extraction | `gemini-2.5-flash-lite` → `gemini-2.5-flash` |
+| `threading` | extractTopic, shouldJoinConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` |
+| `analysis` | analyzeConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` |
+| `planning` | proposeAction (type, rationale, intent) | `gemini-2.5-flash` → `claude-sonnet-4-6` |
+| `drafting` | generateFinalDraft, generateBriefHeadline | `gemini-2.5-flash` → `claude-sonnet-4-6` |
 
 **Rate limit handling:** On 429/RESOURCE_EXHAUSTED errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
 
@@ -311,16 +320,22 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 - `src/lib/ai/providers/gemini.ts` — `@google/generative-ai` SDK. Supports **multi-key rotation** via `GEMINI_API_KEYS` (comma-separated) — round-robins across keys. Falls back to single `GEMINI_API_KEY` if not set.
 - `src/lib/ai/providers/anthropic.ts` — `@anthropic-ai/sdk`. Uses `ANTHROPIC_API_KEY` env var.
 
-**Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()` and `generateFinalDraft()` prompts. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates `dollarValue` in the user's configured currency with typical deal range as reference, and classifies `dealType`.
+**Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()` and `generateFinalDraft()` prompts. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates `dollarValue` and `weight` (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies `dealType`.
 
 ## Embeddings & Semantic Threading
 
-**Purpose:** Assign incoming messages to existing conversations when Gmail thread ID doesn't match.
+**Purpose:** Assign incoming messages to existing conversations when external thread ID doesn't match. Supports cross-channel matching (WhatsApp message finds its email conversation).
+
+**Per-message enrichment** (`enrichMessage` in `gemini.ts`):
+- Runs after cleaning, before threading. Extracts: who's involved, property/subject, message kind, deal numbers, core intent.
+- Saves to `messages.enriched_text` column. Embedding generated from enriched text (not raw body).
+- Stage: `enrichment` (gemini-2.5-flash-lite → gemini-2.5-flash). Cost-sensitive — runs per message.
+- Runs in **both** regular ingestion (`ingestion.ts`) **and** bulk historical ingestion (`bulk-ingestion.ts`). Bulk enrichment tracks success/failure counts (`enriched`, `enrichmentFailed` in `BulkIngestionPhase1Result`).
 
 **Pipeline** (`src/services/threading.ts`):
-1. **Gmail thread ID match** (primary) — exact match on `external_thread_id`
-2. **Embedding similarity** (secondary) — cosine similarity against `conversation_threads.embedding` for same CP
-3. **New conversation** (fallback) — if nothing matches
+1. **External thread ID match** (primary) — exact match on `external_thread_id` (Gmail thread ID, Exchange conversation ID, `wa:+phone`)
+2. **Enriched embedding similarity** (secondary) — cosine similarity of enriched message embedding against conversation embeddings, same CP only
+3. **New conversation** (fallback) — if nothing matches. Creates thin-conversation ToDo if enrichment yielded < 100 chars.
 
 **Thresholds:**
 - `≥ 0.78` → auto-join conversation (no AI needed)
@@ -329,7 +344,13 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 
 **WhatsApp threading:** By phone number — `external_thread_id = wa:+phone`
 
-**Conversation embeddings** are regenerated on summary rebuild. Embedding failure doesn't block summary updates.
+**Conversation summaries** use enriched messages (adaptive count: enough to reach ~1500 chars). Falls back to cleaned_text for older un-enriched messages. Embedding generated from summary text.
+
+**Channel-aware cleaning** (`cleanMessageText` in `generate.ts`):
+- `email`/`email/gmail`: Full cleaning (signatures, quoted replies, disclaimers, tracking pixels)
+- `email/exchange`: Gmail base + Outlook-specific patterns (EXTERNAL EMAIL banners, From/Sent/To headers, aka.ms links)
+- `whatsapp`: Minimal — system messages and forwarded labels only
+- `cleanEmailText()` is a backward-compatible alias for `cleanMessageText(text, 'email')`
 
 ## Scheduling & Conflict Resolution
 
@@ -364,9 +385,42 @@ When a new meeting conflicts with existing events:
 **Language:** Czech (configured in `src/config/client.ts` → `ai.language`)
 **Channel-aware tone:** Implemented — email gets formal tone + signature; WhatsApp gets short, conversational messages.
 
-Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `is_high_value`) is stored in `payload.action_metadata`.
+Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`, `weight`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `weight`, `is_high_value`) is stored in `payload.action_metadata`.
 
 `generateFinalDraft()` in `src/lib/ai/gemini.ts` takes conversation context + intent + user notes + channel → returns `{ subject, body }`.
+
+## Bulk Ingestion & Backfill Report
+
+### Bulk Ingestion (`src/services/bulk-ingestion.ts`)
+Historical backfill — imports a user's email history and sets up Mila's understanding of their conversations.
+
+**Route:** `POST /api/ingest/bulk` (API key auth, 5-min timeout). Streams NDJSON progress events: `started`, `progress`, `done`, `error`.
+
+**3-phase pipeline:**
+1. **Phase 1 — Fetch & Store:** Paginates through INBOX + SENT. Skips blocked senders, Gmail categories (PROMOTIONS, SOCIAL, etc.), duplicates. Runs `preFilterEmail()` AI + `enrichMessage()` AI per email. Tracks: `inboxFetched`, `sentFetched`, `skippedCategory`, `skippedBlocked`, `skippedPreFilter`, `skippedDuplicate`, `enriched`, `enrichmentFailed`, `stored`.
+2. **Phase 2 — Thread:** Calls `processMessagesForThreading()` on all stored messages (chronological). Same threading logic as agent Step 4.
+3. **Phase 3 — Backfill Report:** Generates and sends a "Welcome to Mila" summary email.
+
+**Filtered senders** are tracked (email + count + reason) and passed to the backfill report for "Allow as Contact" links.
+
+### Backfill Report (`src/services/backfill-report.ts`)
+Generates a comprehensive HTML email sent from the user's Gmail to themselves. Sections:
+- **Inbox health:** totals, inbound/outbound ratio
+- **Filtered senders:** blocked/pre-filtered emails with "Allow as Contact" signed links
+- **Counterparties:** discovered contacts with message counts, deal stage, "Blacklist" links
+- **Conversations:** threads with summary, CP names, lead status, "Add to Mila" links
+- **Unanswered inbound:** emails from last 7 days with no outbound reply
+- **Calendar:** upcoming events (next 2 weeks)
+- **Leads:** cooling/cold/dead lead alerts
+
+### Backfill Action Handler (`src/app/api/backfill/action/route.ts`)
+Handles signed GET links from the report email. Operations:
+- `allow` — creates CP from a previously-filtered sender email
+- `blacklist` — blacklists an existing CP
+- `add` — generates action proposals for a conversation (enters Mila process)
+- `setrole` — sets a CP's role (e.g., `buyer`, `seller`)
+
+Authentication via HMAC-signed backfill tokens (`generateBackfillToken`/`validateBackfillToken` in `src/lib/auth/tokens.ts`). All operations are idempotent.
 
 ## WhatsApp Integration
 
@@ -423,9 +477,9 @@ npm run test:watch   # Watch mode (re-runs on save)
 npm run test:coverage # With v8 coverage report
 ```
 
-### Test Layers (200 tests + 10 smoke tests)
+### Test Layers (256 tests + 10 smoke tests)
 
-Tests are organized in three layers. All three MUST pass before any commit.
+Tests are organized in four layers. All must pass before any commit.
 
 #### Layer 1: Route Protection (34 tests)
 **File:** `src/app/api/__tests__/route-protection.test.ts`
@@ -437,6 +491,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 - Action token routes: `/api/action/[id]`, `/api/action/[id]/execute`, `/api/action/[id]/draft`, `/api/action/[id]/blacklist`, `/api/action/[id]/todo`
 - Superadmin: `/api/superadmin/stats`
 - Trigger pixel: `/api/trigger/ingest` — verifies it returns GIF but does NOT run agent with bad sig
+- Backfill: `/api/backfill/action` — rejects missing params and bad signatures
 - Auth: `/api/auth/connect` (email validation), `/api/auth/callback` (state validation)
 
 #### Layer 2: Behavior Pinning (72 tests)
@@ -450,22 +505,32 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/services/scheduling.test.ts` | 9 | Meeting duration, buffer, working hours, working days, timezone, travel mode defaults |
 | `src/services/morning-brief.test.ts` | 4 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10) |
 
-#### Layer 2 (existing): Logic Tests (88 tests)
+#### Layer 3: Logic Tests (127 tests)
 
 | Source file | Test file | What's tested |
 |-------------|-----------|---------------|
 | `src/lib/auth/tokens.ts` | `tokens.test.ts` | 20 tests — HMAC round-trip, expiry, tampering, missing secret, malformed input. **Protects every approve/reject button in brief emails.** |
 | `src/services/agent.ts` | `agent.test.ts` | 12 tests — Lock acquire/release/fallback, user-not-found, no-credentials, fault isolation (`Promise.allSettled` not `Promise.all`) |
 | `src/services/planning.ts` | `planning.test.ts` | 11 tests — `validateDealType`: valid/invalid/hallucinated values, `selectOfferMultiplier`: seller/buyer/null role selection, `VALID_DEAL_TYPES`/`VALID_CP_ROLES` pinning, seller vs buyer priority score difference |
-| `src/lib/db/actions.ts` | `actions.test.ts` | 9 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding |
+| `src/lib/db/actions.ts` | `actions.test.ts` | 13 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding, `kcFactor` normalization + zero-safety, `weight` wiring |
 | `src/services/ingestion.ts` | `ingestion.test.ts` | 8 tests — `isBlockedSender`: exact/prefix/domain/subaddress matching, false-positive prevention (`mynotifications` ≠ `notifications`) |
 | `src/config/client.ts` | `client.test.ts` | 10 tests — `containsHighValueSignals` + `isPersonalEvent`: keyword matching, case-insensitivity, empty inputs, empty keyword lists |
-| `src/lib/db/counterparties.ts` | `counterparties.test.ts` | 6 tests — `isSameGmailAddress`: dot/case-insensitive, domain dots, whitespace trimming |
+| `src/lib/db/counterparties.ts` | `counterparties.test.ts` | 11 tests — `isSameGmailAddress`: dot/case-insensitive, domain dots, whitespace trimming; `normalizeGmailAddress`: lowercasing, dot stripping, idempotency, missing `@` |
+| `src/lib/embeddings/generate.ts` | `generate.test.ts` | 30 tests — `cleanEmailText` (13 original), `cleanMessageText` channel-aware: Exchange (EXTERNAL banners, Outlook headers, aka.ms, Get Outlook), WhatsApp (system msgs, forwarded labels, no false stripping), backward-compatible alias, unknown channel fallback |
 | `src/lib/whatsapp/types.ts` | `types.test.ts` | 6 tests — `normalizePhoneNumber`, `phoneToThreadId`: separator stripping, `+` prefix, thread ID format |
 | `src/lib/db/gdpr.ts` | `gdpr.test.ts` | 4 tests — `writeAuditLog` never-throw contract, `deleteAllUserData` FK-safe ordering, missing lock table graceful handling |
 | `src/lib/db/locks.ts` | `locks.test.ts` | 2 tests — unique violation → `false` (error code `23505`), `releaseUserLock` filters by `user_id` |
 
-#### Layer 3: Smoke Tests (10 tests, opt-in)
+#### Layer 4: Integration Tests (25 tests)
+
+**Verify that services wire together correctly — mock at boundaries (DB, AI, Google APIs) but let service code chain for real.**
+
+| File | Tests | What's tested |
+|------|-------|---------------|
+| `src/services/agent-pipeline.test.ts` | 5 | Agent pipeline data flow: emails → threading → planning, calendar + lead tracking aggregation, step 2 fault isolation, step 4-5 skip on empty, WhatsApp message counting |
+| `src/services/integration.test.ts` | 20 | **Planning:** conversation → AI → scored action in DB, blacklisted CP skipped, weight clamping. **Morning Brief:** action loading + CP enrichment + email send, unsubscribed skip, empty brief, 10-action cap, afternoon greeting, multi-user fault isolation. **Bulk Ingestion:** 3-phase pipeline (fetch → thread → report), blocked sender skip, category skip, early return on errors, enrichment tracking. **Ingestion → Threading:** classify + store + enrich, non-actionable skip, blocked sender skip, duplicate skip, external thread ID match, new conversation creation |
+
+#### Layer 5: Smoke Tests (10 tests, opt-in)
 **File:** `src/__tests__/smoke.test.ts`
 
 Real HTTP calls against a running instance. Skipped by default. Reads `MILA_USER_API_KEY` and `CRON_SECRET` from `.env.local`. Run with:
@@ -644,13 +709,19 @@ Replaces the old in-memory `runningUsers` Map which only worked within a single 
 
 **Used in:** `src/services/agent.ts` → `runAgentForUser()`
 
-### Required Migration
+### Required Migrations
 ```sql
 CREATE TABLE user_agent_locks (
   user_id uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   locked_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL
 );
+
+-- Per-message enrichment (enriched key info extracted by AI)
+ALTER TABLE messages ADD COLUMN enriched_text text;
+CREATE INDEX idx_messages_enriched_null
+  ON messages (user_id, created_at)
+  WHERE enriched_text IS NULL;
 ```
 
 ## Parallelism Architecture

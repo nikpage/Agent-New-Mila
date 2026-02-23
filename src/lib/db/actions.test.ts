@@ -102,8 +102,68 @@ describe('calculatePriorityScore', () => {
       painFactor: 0,
       daysIgnored: 0,
     })
-    // All zeros → safe defaults: (0 * 1 * 1) + (1 * 1) + 0 = 1
+    // All zeros → safe defaults: (0 / 1 * 1 * 1) + (1 * 1) + 0 = 1
     expect(score).toBe(1)
     expect(Number.isFinite(score)).toBe(true)
+  })
+
+  it('applies kcFactor to normalize dollar value', () => {
+    const score = calculatePriorityScore({
+      dollarValue: 5_000_000,
+      urgency: 5,
+      painFactor: 1,
+      daysIgnored: 0,
+      kcFactor: 13,
+    })
+    // (5_000_000 / 13 * 1 * 5) + (1 * 1) + 0 ≈ 1_923_077
+    expect(score).toBe(Math.round((5_000_000 / 13) * 5 + 1))
+  })
+
+  it('kcFactor=1 is identity (no normalization)', () => {
+    const withKc = calculatePriorityScore({
+      dollarValue: 1000,
+      urgency: 5,
+      painFactor: 3,
+      daysIgnored: 2,
+      kcFactor: 1,
+    })
+    const withoutKc = calculatePriorityScore({
+      dollarValue: 1000,
+      urgency: 5,
+      painFactor: 3,
+      daysIgnored: 2,
+    })
+    expect(withKc).toBe(withoutKc)
+  })
+
+  it('replaces zero kcFactor with 1 to prevent division by zero', () => {
+    const score = calculatePriorityScore({
+      dollarValue: 1000,
+      urgency: 1,
+      painFactor: 1,
+      daysIgnored: 0,
+      kcFactor: 0,
+    })
+    // kcFactor 0 → 1: (1000 / 1 * 1 * 1) + (1 * 1) + 0 = 1001
+    expect(score).toBe(1001)
+    expect(Number.isFinite(score)).toBe(true)
+  })
+
+  it('higher kcFactor reduces dollar value impact', () => {
+    const lowKc = calculatePriorityScore({
+      dollarValue: 5_000_000,
+      urgency: 5,
+      painFactor: 1,
+      daysIgnored: 0,
+      kcFactor: 8,
+    })
+    const highKc = calculatePriorityScore({
+      dollarValue: 5_000_000,
+      urgency: 5,
+      painFactor: 1,
+      daysIgnored: 0,
+      kcFactor: 21,
+    })
+    expect(lowKc).toBeGreaterThan(highKc)
   })
 })

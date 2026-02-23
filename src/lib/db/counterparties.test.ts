@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isSameGmailAddress } from './counterparties'
+import { isSameGmailAddress, normalizeGmailAddress } from './counterparties'
 
 describe('isSameGmailAddress', () => {
   it('matches identical emails', () => {
@@ -26,5 +26,31 @@ describe('isSameGmailAddress', () => {
 
   it('handles whitespace trimming', () => {
     expect(isSameGmailAddress('  jan@gmail.com  ', 'jan@gmail.com')).toBe(true)
+  })
+})
+
+describe('normalizeGmailAddress', () => {
+  it('lowercases and trims', () => {
+    expect(normalizeGmailAddress('  Jan@Gmail.Com  ')).toBe('jan@gmailcom')
+  })
+
+  it('strips dots from local and domain', () => {
+    expect(normalizeGmailAddress('first.last@pod.one')).toBe('firstlast@podone')
+  })
+
+  it('normalizes Gmail dot variants to same string', () => {
+    const a = normalizeGmailAddress('f.i.r.s.t.last@gmail.com')
+    const b = normalizeGmailAddress('firstlast@gmail.com')
+    expect(a).toBe(b)
+  })
+
+  it('handles missing @ gracefully', () => {
+    expect(normalizeGmailAddress('nope')).toBe('nope')
+  })
+
+  it('is idempotent', () => {
+    const once = normalizeGmailAddress('First.Last@Pod.One')
+    const twice = normalizeGmailAddress(once)
+    expect(once).toBe(twice)
   })
 })

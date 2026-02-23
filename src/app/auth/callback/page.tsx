@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { Card, CardContent } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -11,7 +11,13 @@ function CallbackContent() {
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading')
   const [message, setMessage] = useState('')
 
+  // Guard against React 18 Strict Mode double-invocation.
+  // Google authorization codes are single-use — a second POST with the same
+  // code fails, and the error would overwrite the first successful result.
+  const hasRun = useRef(false)
   useEffect(() => {
+    if (hasRun.current) return
+    hasRun.current = true
     handleCallback()
   }, [])
 

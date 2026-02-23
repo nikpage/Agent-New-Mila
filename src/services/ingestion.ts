@@ -11,11 +11,11 @@ import {
   getUserEmail,
   type EmailMessage,
 } from '@/lib/google/gmail'
-import { classifyEmail } from '@/lib/ai/gemini'
+import { classifyEmail, enrichMessage } from '@/lib/ai/gemini'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
-import { createMessage, messageExists } from '@/lib/db/messages'
+import { createMessage, messageExists, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser } from '@/lib/db/users'
-import { generateMessageEmbedding } from '@/lib/embeddings/generate'
+import { generateMessageEmbedding, cleanMessageText } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -256,19 +256,24 @@ async function processOneInboundEmail(
     universal_message_id: email.id,
     direction: 'inbound',
     raw_text: email.body,
-    cleaned_text: email.body.slice(0, 5000),
+    cleaned_text: cleanMessageText(email.body, 'email').slice(0, 5000),
     tag_primary: classification.category,
     tag_secondary: classification.priority,
     timestamp: email.date.toISOString(),
     occurred_at: email.date.toISOString(),
   })
 
-  // Generate and save message embedding
+  // Enrich message: extract key info, save enriched text, embed it
   try {
-    const embedding = await generateMessageEmbedding(email.body)
+    const cleanedText = cleanMessageText(email.body, 'email')
+    const enrichedText = await enrichMessage(cleanedText, 'email', 'inbound')
+    await updateMessage(messageId, { enriched_text: enrichedText })
+
+    // Embed the enriched text (not the raw body)
+    const embedding = await generateMessageEmbedding(enrichedText, 'email')
     await saveMessageEmbedding(messageId, embedding)
   } catch (error) {
-    console.error(`Failed to generate embedding for message ${messageId}:`, error)
+    console.error(`Failed to enrich/embed message ${messageId}:`, error)
   }
 
   return {
@@ -371,19 +376,24 @@ async function processOneOutboundEmail(
     universal_message_id: email.id,
     direction: 'outbound',
     raw_text: email.body,
-    cleaned_text: email.body.slice(0, 5000),
+    cleaned_text: cleanMessageText(email.body, 'email').slice(0, 5000),
     tag_primary: 'outbound',
     tag_secondary: null,
     timestamp: email.date.toISOString(),
     occurred_at: email.date.toISOString(),
   })
 
-  // Generate and save message embedding
+  // Enrich message: extract key info, save enriched text, embed it
   try {
-    const embedding = await generateMessageEmbedding(email.body)
+    const cleanedText = cleanMessageText(email.body, 'email')
+    const enrichedText = await enrichMessage(cleanedText, 'email', 'outbound')
+    await updateMessage(messageId, { enriched_text: enrichedText })
+
+    // Embed the enriched text (not the raw body)
+    const embedding = await generateMessageEmbedding(enrichedText, 'email')
     await saveMessageEmbedding(messageId, embedding)
   } catch (error) {
-    console.error(`Failed to generate embedding for outbound message ${messageId}:`, error)
+    console.error(`Failed to enrich/embed outbound message ${messageId}:`, error)
   }
 
   return true
