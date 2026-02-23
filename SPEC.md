@@ -236,7 +236,8 @@ The planning stage (`proposeAction`) also asks the AI to classify `dealType` (sa
 |----------|------|---------|
 | `POST /api/agent/run` | API Key | Run full pipeline for a user |
 | `POST /api/ingest` | API Key | Manual email/calendar ingestion |
-| `POST /api/ingest/bulk` | API Key | Bulk message ingestion |
+| `POST /api/ingest/bulk` | API Key | Bulk ingestion orchestrator (202 via QStash on Vercel, NDJSON locally) |
+| `POST /api/ingest/bulk/worker` | Cron Secret | QStash worker — processes Phase 1–4 in chained 50-email batches |
 | `GET /api/action/[id]` | Action Token | Get action details |
 | `POST /api/action/[id]/execute` | Action Token | Execute approved action |
 | `POST /api/action/[id]/draft` | Action Token | Generate draft on demand |

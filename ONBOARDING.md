@@ -162,7 +162,8 @@ All commands below assume `$UID_NIK` is set and the app is running on `localhost
 | **Run agent pipeline** | `curl -X POST http://localhost:3000/api/agent/run -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\"}"` |
 | **Send morning briefs** | `curl http://localhost:3000/api/cron/morning-brief -H "Authorization: Bearer $(grep '^CRON_SECRET=' .env.local \| cut -d'=' -f2-)"` |
 | **Manual ingest** | `curl -X POST http://localhost:3000/api/ingest -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\"}"` |
-| **Bulk ingest** | `curl -X POST http://localhost:3000/api/ingest/bulk -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\"}"` |
+| **Bulk ingest (local)** | `curl -X POST http://localhost:3000/api/ingest/bulk -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\",\"since\":\"2025-01-01\"}"` |
+| **Bulk ingest (prod)** | Same as above but against `https://mila.specialagents.pro`. Returns 202 — work runs via QStash worker chain (50 emails/batch). |
 | **Superadmin stats** | `curl "http://localhost:3000/api/superadmin/stats?key=$(grep '^SUPERADMIN_KEY=' .env.local \| cut -d'=' -f2-)"` |
 | **GDPR data export** | `curl "http://localhost:3000/api/gdpr/export?userId=$UID_NIK" -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)"` |
 | **GDPR data deletion** | `curl -X POST http://localhost:3000/api/gdpr/delete -H "x-api-key: $(grep '^MILA_USER_API_KEY=' .env.local \| cut -d'=' -f2-)" -H "Content-Type: application/json" -d "{\"userId\":\"$UID_NIK\"}"` |
@@ -174,6 +175,7 @@ All commands below assume `$UID_NIK` is set and the app is running on `localhost
 | `/api/agent/run` | API Key | `x-api-key: $MILA_USER_API_KEY` |
 | `/api/ingest` | API Key | `x-api-key: $MILA_USER_API_KEY` |
 | `/api/ingest/bulk` | API Key | `x-api-key: $MILA_USER_API_KEY` |
+| `/api/ingest/bulk/worker` | Bearer Token | `Authorization: Bearer $CRON_SECRET` (called by QStash, not manually) |
 | `/api/cron/morning-brief` | Bearer Token | `Authorization: Bearer $CRON_SECRET` |
 | `/api/action/[id]/*` | Action Token | `?token=<hmac-token>` (from email links) |
 | `/api/superadmin/stats` | Query Param or Bearer | `?key=$SUPERADMIN_KEY` |

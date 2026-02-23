@@ -56,7 +56,9 @@ src/
 │   ├── api/cron/morning-brief/ # Brief endpoint (called by QStash per-user schedules)
 │   ├── api/gdpr/delete/        # GDPR Art. 17 — cascade-delete all user data
 │   ├── api/gdpr/export/        # GDPR Art. 15 — export all user data as JSON
-│   ├── api/ingest/             # Manual email/calendar ingestion (+ /bulk)
+│   ├── api/ingest/             # Manual email/calendar ingestion
+│   ├── api/ingest/bulk/        # Bulk historical ingestion orchestrator (QStash on Vercel, NDJSON locally)
+│   ├── api/ingest/bulk/worker/ # QStash worker — processes Phase 1–4 in chained batches of 50
 │   ├── api/health/             # Health check
 │   ├── api/whatsapp/status/    # WhatsApp daemon status proxy
 │   ├── action/[id]/            # Action detail + edit pages
@@ -421,17 +423,17 @@ npm run test:watch   # Watch mode (re-runs on save)
 npm run test:coverage # With v8 coverage report
 ```
 
-### Test Layers (190 tests + 10 smoke tests)
+### Test Layers (200 tests + 10 smoke tests)
 
 Tests are organized in three layers. All three MUST pass before any commit.
 
-#### Layer 1: Route Protection (30 tests)
+#### Layer 1: Route Protection (34 tests)
 **File:** `src/app/api/__tests__/route-protection.test.ts`
 
 Every API route is tested to verify it rejects unauthenticated/bad requests. Catches: accidentally removed auth checks, changed HTTP methods, broken request parsing.
 
 - API key routes: `/api/agent/run`, `/api/gdpr/delete`, `/api/gdpr/export`, `/api/ingest`, `/api/ingest/bulk`, `/api/whatsapp/status`
-- Cron routes: `/api/cron/morning-brief` (GET + POST)
+- Cron routes: `/api/cron/morning-brief` (GET + POST), `/api/ingest/bulk/worker` (no token + bad token)
 - Action token routes: `/api/action/[id]`, `/api/action/[id]/execute`, `/api/action/[id]/draft`, `/api/action/[id]/blacklist`, `/api/action/[id]/todo`
 - Superadmin: `/api/superadmin/stats`
 - Trigger pixel: `/api/trigger/ingest` — verifies it returns GIF but does NOT run agent with bad sig
@@ -505,8 +507,8 @@ Set `SMOKE_BASE_URL` to target prod (defaults to `http://localhost:3000`).
 
 ### API Protection
 All API endpoints are protected by one of:
-1. **API Key** (`MILA_USER_API_KEY`) — For `/api/agent/run`, `/api/ingest`, `/api/gdpr/*`
-2. **Cron Secret** (`CRON_SECRET`) — For `/api/cron/*`
+1. **API Key** (`MILA_USER_API_KEY`) — For `/api/agent/run`, `/api/ingest`, `/api/ingest/bulk`, `/api/gdpr/*`
+2. **Cron Secret** (`CRON_SECRET`) — For `/api/cron/*`, `/api/ingest/bulk/worker`
 3. **Action Token** (HMAC-signed) — For `/api/action/[id]/*` (email links)
 4. **Superadmin Key** — For `/api/superadmin/*`
 
@@ -525,7 +527,7 @@ NEXTAUTH_SECRET      # Token signing secret
 SUPABASE_SERVICE_KEY # Database admin access (NEVER expose)
 GEMINI_API_KEYS      # Comma-separated Gemini keys for rotation (optional, falls back to GEMINI_API_KEY)
 ANTHROPIC_API_KEY    # Claude fallback models (required for fallback chain)
-QSTASH_TOKEN         # Upstash QStash token for per-user brief scheduling
+QSTASH_TOKEN         # Upstash QStash token for brief scheduling + bulk ingest worker chaining
 ```
 
 **SECURITY:** OAuth tokens migrating from `users.google_oauth_tokens` (plaintext jsonb) to `users.encrypted_google_tokens` (encrypted text). See `SECURITY.md`.
@@ -544,6 +546,46 @@ QSTASH_TOKEN         # Upstash QStash token for per-user brief scheduling
 - `sendAllMorningBriefs()` processes users in batches of 10 (`BRIEF_CONCURRENCY`)
 - Uses `Promise.allSettled()` for fault isolation — one user's failure doesn't block others
 - 5-minute function timeout (`maxDuration: 300`) handles ~100 users per invocation
+
+## Bulk Ingestion via QStash
+
+### Problem
+Bulk historical email ingestion (500+ emails) exceeds Vercel's 300-second function timeout when running as a single request.
+
+### Solution: QStash Worker Chaining
+When `QSTASH_TOKEN` is set (Vercel), `/api/ingest/bulk` splits the work into chained QStash messages. Each step runs within the 300s timeout. Without `QSTASH_TOKEN` (local dev), falls back to synchronous NDJSON streaming.
+
+### Architecture
+```
+POST /api/ingest/bulk (orchestrator)
+  ├─ Validates input, resolves user email, purges user-as-CP
+  ├─ Publishes first QStash step → returns 202 immediately
+  │
+  ▼ QStash worker chain (/api/ingest/bulk/worker)
+  │
+  ├─ phase1_inbox  ─► fetch 50 inbox emails, preFilter+store, chain next page
+  │   └─ repeats until maxTotal reached or no more pages
+  ├─ phase1_sent   ─► fetch 50 sent emails, preFilter+store, chain next page
+  │   └─ repeats until maxTotal reached or no more pages
+  ├─ phase2        ─► thread all unprocessed messages into conversations
+  ├─ phase3        ─► generate & send backfill report email to user
+  └─ phase4        ─► enrich stored messages (classify + embed)
+```
+
+### Key Details
+- **Batch size:** 50 emails per QStash hop (Phase 1)
+- **Budget:** 500 emails ≈ 12 QStash calls (10 for Phase 1 + 1 each for Phase 2–4)
+- **State passing:** Job state (stats, filteredSenders, pageToken) is passed in the QStash message body between hops
+- **Auth:** Worker endpoint uses `CRON_SECRET` Bearer token (same as morning-brief)
+- **Orchestrator returns:** `{ started: true, mode: "queued", qstashMessageId }` with HTTP 202
+- **Idempotency:** Phase 1 dedup via `messageExists()` prevents double-storing on QStash retry
+
+### Implementation
+- **Orchestrator:** `src/app/api/ingest/bulk/route.ts` — QStash path (with `QSTASH_TOKEN`) or NDJSON fallback
+- **Worker:** `src/app/api/ingest/bulk/worker/route.ts` — state machine handling all 5 steps
+- **Batch fetch:** `fetchEmailsBatch()` in `src/lib/google/gmail.ts` — single-page Gmail fetch with `nextPageToken`
+- **Batch process:** `processEmailBatch()` in `src/services/bulk-ingestion.ts` — dedup, filter, preFilter AI, store
+- **QStash publish:** `publishBulkIngestStep()` in `src/lib/qstash/client.ts`
 
 ## Error Monitoring (Sentry)
 - **Client-side:** Session replay + error tracking
@@ -622,6 +664,7 @@ All services use **batched `Promise.allSettled`** for fault isolation — one it
 | `ingestion.ts` | Emails batched (inbound + outbound) | 5 | classifyEmail AI call is the bottleneck |
 | `lead-tracking.ts` | Conversations batched | 10 | Independent conversations, DB-heavy |
 | `threading.ts` | Pre-assigned lookups + CP fetches | All | `Promise.all` for reads; serial for `assignToConversation` (prevents duplicate creation) |
+| `bulk-ingestion.ts` | QStash worker chaining (Vercel) | 50/batch | Phase 1 splits into 50-email hops via QStash; Phases 2–4 each a single hop |
 
 ## Superadmin
 - Dashboard at `/superadmin`
