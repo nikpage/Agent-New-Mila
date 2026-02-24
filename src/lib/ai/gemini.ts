@@ -54,11 +54,14 @@ export async function enrichMessage(
     : ''
 
   const businessContext = settings
-    ? `BUSINESS CONTEXT: ${settings.client_company} — ${settings.business_specialization}. Market: ${settings.business_market}.\n`
+    ? `KONTEXT PODNIKÁNÍ: ${settings.client_company} — ${settings.business_specialization}. Trh: ${settings.business_market}.\n`
     : ''
-  const language = settings?.ai_language === 'cs' ? 'Czech' : (settings?.ai_language || 'Czech')
 
-  const prompt = `${businessContext}Extract key information from this message. Output in ${language}. Use the following as guidance for what to look for, but only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text. Interpret terms in context of the business domain above — do NOT translate domain-specific words literally.
+  const directionLabel = direction === 'outbound'
+    ? 'odesláno MAJITELEM emailového účtu'
+    : 'přijato OD PROTISTRANY'
+
+  const prompt = `${businessContext}Extrahuj klíčové informace z této zprávy. Piš POUZE ČESKY. Uveď pouze to, co je skutečně přítomno v textu. Nevymýšlej, nehádej. Vynech cokoli, co není jasně podloženo textem. Interpretuj termíny v kontextu výše uvedeného podnikání — NEPŘEKLÁDEJ odborné termíny doslovně.
 
 - Kdo je zapojen (všechny zmíněné strany)
 - Jaký předmět, téma nebo nemovitost
@@ -67,13 +70,13 @@ export async function enrichMessage(
 - Pokud osobní/admin: o co jde, časová citlivost, potřebná akce
 - Co zpráva skutečně říká nebo žádá (hlavní záměr)
 
-Channel: ${channel}
-Direction: ${direction} (${direction === 'outbound' ? 'sent BY the email account owner' : 'received FROM a counterparty'})
+Kanál: ${channel}
+Směr: ${direction} (${directionLabel})
 ${contextBlock}
-MESSAGE:
+ZPRÁVA:
 ${cleanedText.slice(0, 3000)}
 
-Respond with ONLY the extracted information as concise structured text in ${language}. No JSON. No markdown headers. Just the facts.`
+Odpověz POUZE extrahovanými informacemi jako stručný strukturovaný text ČESKY. Žádný JSON. Žádné markdown nadpisy. Pouze fakta.`
 
   return (await runAITask('enrichment', prompt)).trim()
 }
