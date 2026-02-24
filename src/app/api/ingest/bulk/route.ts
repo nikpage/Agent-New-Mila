@@ -51,7 +51,11 @@ export async function POST(request: NextRequest) {
   console.log(`[BulkIngest] Time:  ${new Date().toISOString()}`)
 
   // ── QStash path: split into batched worker steps ──────────────────────────
-  if (process.env['QSTASH_TOKEN']) {
+  // Only use QStash when the app is reachable from the internet (not localhost).
+  // QStash is a cloud service that calls back to our endpoint — it can't reach loopback addresses.
+  const appBaseUrl = process.env['APP_BASE_URL'] || ''
+  const isLocalhost = !appBaseUrl || /localhost|127\.0\.0\.1|\[::1\]/i.test(appBaseUrl)
+  if (process.env['QSTASH_TOKEN'] && !isLocalhost) {
     try {
       const user = await getUserById(userId as string)
       if (!user?.email) {
