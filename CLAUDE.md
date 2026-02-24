@@ -36,7 +36,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (264 tests)
+npm test             # Run Vitest test suite (285 tests: 233 unit, 30 integration, 10 smoke, 12 e2e)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -474,21 +474,43 @@ All in `src/config/client.ts` → `whatsapp` section:
 
 **Framework:** Vitest 4 with `@/*` path aliases (`vitest.config.ts`). Tests are co-located next to source files (`foo.ts` → `foo.test.ts`).
 
+### Philosophy: Mock-Only-AI
+
+Integration and pipeline tests mock **only external boundaries** — AI calls (Gemini, Anthropic), Google APIs (Gmail, Calendar, Maps, Auth), and embedding generation. Everything else runs for real:
+
+- **Real DB** — Supabase CRUD, scoring, token generation, data integrity
+- **Real config** — `calculatePriorityScore`, `getAISystemPrompt`, settings parsing
+- **Real auth tokens** — HMAC round-trip via `generateActionToken`/`validateActionToken`
+- **Real text cleaning** — `cleanMessageText`, `cleanEmailText` (uses `importOriginal()`)
+- **Real HTML templates** — morning brief email generation
+
+This ensures tests catch real regressions, not just mock return values.
+
+### Setup
+
+- **`vitest.setup.ts`** — Loads `.env.local` for DB credentials (uses Node built-ins, no dotenv dependency). Shell env vars take precedence.
+- **`vitest.config.ts`** — `setupFiles: ['./vitest.setup.ts']` ensures env is loaded before any test.
+- **`src/__tests__/helpers/test-db.ts`** — Real Supabase test utilities: `setupTestUser()`, `createTestCP()`, `createTestConversation()`, `createTestMessage()`, `createTestAction()`, `cleanupTestData()`, `getTestActions()`, `getTestMessages()`, `getTestConversations()`. Cleanup uses FK-safe cascade delete mirroring GDPR `deleteAllUserData` order.
+
 ### Run
 ```bash
-npm test             # All tests (CI mode, exits with code)
-npm run test:watch   # Watch mode (re-runs on save)
-npm run test:coverage # With v8 coverage report
+npm test                                           # Unit + integration (263 tests with DB, 233 without)
+npm run test:watch                                 # Watch mode (re-runs on save)
+npm run test:coverage                              # With v8 coverage report
+SMOKE_TEST=1 npm test -- src/__tests__/smoke.test.ts  # + 10 smoke tests (needs running server)
+E2E_TEST=1 npm test -- src/__tests__/e2e.test.ts      # + 12 e2e tests (100% live, costs money)
 ```
 
-### Test Layers (264 tests + 10 smoke tests)
+### Test Tiers (285 total: 233 unit + 30 integration + 10 smoke + 12 e2e)
 
-Tests are organized in four layers. All must pass before any commit.
+#### Tier 1: Unit Tests (233 tests, always run)
 
-#### Layer 1: Route Protection (34 tests)
+No DB, no server, no env vars needed. Pure function verification.
+
+##### Route Protection (34 tests)
 **File:** `src/app/api/__tests__/route-protection.test.ts`
 
-Every API route is tested to verify it rejects unauthenticated/bad requests. Catches: accidentally removed auth checks, changed HTTP methods, broken request parsing.
+Every API route rejects unauthenticated/bad requests. Catches: removed auth checks, changed HTTP methods, broken request parsing.
 
 - API key routes: `/api/agent/run`, `/api/gdpr/delete`, `/api/gdpr/export`, `/api/ingest`, `/api/ingest/bulk`, `/api/whatsapp/status`
 - Cron routes: `/api/cron/morning-brief` (GET + POST), `/api/ingest/bulk/worker` (no token + bad token)
@@ -498,7 +520,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 - Backfill: `/api/backfill/action` — rejects missing params and bad signatures
 - Auth: `/api/auth/connect` (email validation), `/api/auth/callback` (state validation)
 
-#### Layer 2: Behavior Pinning (72 tests)
+##### Behavior Pinning (72 tests)
 
 **Catches unauthorized changes to scoring, thresholds, defaults, or business logic.**
 
@@ -509,7 +531,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/services/scheduling.test.ts` | 9 | Meeting duration, buffer, working hours, working days, timezone, travel mode defaults |
 | `src/services/morning-brief.test.ts` | 4 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10) |
 
-#### Layer 3: Logic Tests (133 tests)
+##### Logic Tests (127 tests)
 
 | Source file | Test file | What's tested |
 |-------------|-----------|---------------|
@@ -524,30 +546,49 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/lib/whatsapp/types.ts` | `types.test.ts` | 6 tests — `normalizePhoneNumber`, `phoneToThreadId`: separator stripping, `+` prefix, thread ID format |
 | `src/lib/db/gdpr.ts` | `gdpr.test.ts` | 4 tests — `writeAuditLog` never-throw contract, `deleteAllUserData` FK-safe ordering, missing lock table graceful handling |
 | `src/lib/db/locks.ts` | `locks.test.ts` | 2 tests — unique violation → `false` (error code `23505`), `releaseUserLock` filters by `user_id` |
-| `src/services/bulk-ingestion.ts` | `bulk-ingestion.test.ts` | 6 tests — Phase 4 enrichment: phase ordering (report before enrich), report sent even on enrichment failure, classify + update + embedding pipeline, embedding failure still counts as enriched, progress streaming, no-op when no unenriched messages |
 
-#### Layer 4: Integration Tests (25 tests)
+#### Tier 2: Integration Tests (30 tests, need DB)
 
-**Verify that services wire together correctly — mock at boundaries (DB, AI, Google APIs) but let service code chain for real.**
+**Use `describe.skipIf(!HAS_DB)` — gracefully skip when `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` are not set.** Mock only AI + Google APIs. All DB operations, scoring, token generation, and service orchestration run for real.
 
 | File | Tests | What's tested |
 |------|-------|---------------|
-| `src/services/agent-pipeline.test.ts` | 5 | Agent pipeline data flow: emails → threading → planning, calendar + lead tracking aggregation, step 2 fault isolation, step 4-5 skip on empty, WhatsApp message counting |
-| `src/services/integration.test.ts` | 20 | **Planning:** conversation → AI → scored action in DB, blacklisted CP skipped, weight clamping. **Morning Brief:** action loading + CP enrichment + email send, unsubscribed skip, empty brief, 10-action cap, afternoon greeting, multi-user fault isolation. **Bulk Ingestion:** 4-phase pipeline (fetch → thread → report → enrich), blocked sender skip, category skip, early return on errors, enrichment tracking. **Ingestion → Threading:** classify + store + enrich, non-actionable skip, blocked sender skip, duplicate skip, external thread ID match, new conversation creation |
+| `src/services/integration.test.ts` | 19 | **Planning (3):** conversation → AI → scored action in real DB with exact priority score assertion, blacklisted CP skipped, weight clamping 0-100. **Morning Brief (6):** real HMAC token round-trip, email HTML content verification, action marked notified in real DB, unsubscribed skip, 10-action cap, afternoon greeting. **Bulk Ingestion (5):** real DB message storage, blocked sender skip, category skip, enrichment tracking, user-not-found early return. **Ingestion→Threading (5):** real CP creation in DB, blocked sender skip, duplicate skip, external thread ID matching, new conversation creation |
+| `src/services/agent-pipeline.test.ts` | 5 | Agent pipeline data flow: emails → threading → planning in real DB, calendar + lead tracking aggregation, step 2 fault isolation, step 4-5 skip on empty, WhatsApp message counting |
+| `src/services/bulk-ingestion.test.ts` | 6 | Phase 4 enrichment with real DB: phase ordering (report before enrich), report sent even on enrichment failure, classify + update + embedding in real DB, embedding failure still counts as enriched, progress streaming, no-op when no unenriched messages |
 
-#### Layer 5: Smoke Tests (10 tests, opt-in)
+#### Tier 3: Smoke Tests (10 tests, opt-in)
 **File:** `src/__tests__/smoke.test.ts`
 
-Real HTTP calls against a running instance. Skipped by default. Reads `MILA_USER_API_KEY` and `CRON_SECRET` from `.env.local`. Run with:
+Real HTTP calls against a running instance with **content verification** (not just status codes). Gated behind `SMOKE_TEST=1`. Reads `MILA_USER_API_KEY` and `CRON_SECRET` from env.
+
 ```bash
 SMOKE_TEST=1 npm test -- src/__tests__/smoke.test.ts
+SMOKE_BASE_URL=https://mila.specialagents.pro SMOKE_TEST=1 npm test -- src/__tests__/smoke.test.ts
 ```
 
 Test user: `podtwo@gmail.com` (`d1a403fd-121b-4dcc-96aa-0efa3af114a8`)
 
-Tests: health check, auth rejection (live), agent run, morning brief, GDPR export, WhatsApp status, trigger pixel.
+Tests: health check (full status object), auth rejection with wrong/missing keys (4 tests), agent run (all fields + correct types + non-negative values), morning brief (userId + briefType), GDPR export (structure + user data + arrays), WhatsApp status, trigger pixel (image content-type).
 
-Set `SMOKE_BASE_URL` to target prod (defaults to `http://localhost:3000`).
+#### Tier 4: E2E Tests (12 tests, opt-in, 100% live)
+**File:** `src/__tests__/e2e.test.ts`
+
+**Nothing is mocked.** Real AI, real DB, real email, real everything. Gated behind `E2E_TEST=1`. **WARNING: triggers real AI calls and may incur costs. Also sends real emails and modifies real data.**
+
+```bash
+E2E_TEST=1 npm test -- src/__tests__/e2e.test.ts
+```
+
+Required env vars: `E2E_TEST=1`, `MILA_USER_API_KEY`, `CRON_SECRET`. Optional: `E2E_BASE_URL` (defaults to `http://localhost:3000`).
+
+| Workflow | Tests | What's verified |
+|----------|-------|-----------------|
+| Agent → Brief cycle | 2 | Full agent pipeline returns valid numeric fields, then morning brief runs on same data |
+| GDPR data integrity | 1 | Export returns all data categories with correct structure (user, counterparties, conversations, messages, actions, emails, todos, events) |
+| Manual ingest trigger | 1 | POST /api/ingest triggers ingestion successfully |
+| System health | 3 | Health check, trigger pixel GIF, WhatsApp status |
+| Auth boundaries (live) | 5 | 5 protected routes reject without auth (agent/run, ingest, gdpr/export, gdpr/delete, cron/morning-brief) |
 
 ### When to update tests
 
