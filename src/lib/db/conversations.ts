@@ -274,14 +274,19 @@ export async function findConversationByExternalThread(
 ): Promise<ConversationThread | null> {
   const supabase = getSupabaseAdmin()
 
-  // First find a message with this external thread ID
+  // Find a message with this external thread ID that is already assigned
+  // to a conversation. Without the NOT NULL filter, the query could return
+  // an unassigned message (conversation_id = null) — especially during bulk
+  // ingestion where all messages start unassigned — causing the lookup to
+  // fail and every message to create its own conversation.
   const { data: message } = await supabase
     .from('messages')
     .select('conversation_id')
     .eq('user_id', userId)
     .eq('external_thread_id', externalThreadId)
+    .not('conversation_id', 'is', null)
     .limit(1)
-    .single()
+    .maybeSingle()
 
   if (!message?.conversation_id) return null
 
