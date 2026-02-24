@@ -36,7 +36,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (256 tests)
+npm test             # Run Vitest test suite (264 tests)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -481,7 +481,7 @@ npm run test:watch   # Watch mode (re-runs on save)
 npm run test:coverage # With v8 coverage report
 ```
 
-### Test Layers (256 tests + 10 smoke tests)
+### Test Layers (264 tests + 10 smoke tests)
 
 Tests are organized in four layers. All must pass before any commit.
 
@@ -509,7 +509,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/services/scheduling.test.ts` | 9 | Meeting duration, buffer, working hours, working days, timezone, travel mode defaults |
 | `src/services/morning-brief.test.ts` | 4 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10) |
 
-#### Layer 3: Logic Tests (127 tests)
+#### Layer 3: Logic Tests (133 tests)
 
 | Source file | Test file | What's tested |
 |-------------|-----------|---------------|
@@ -524,6 +524,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | `src/lib/whatsapp/types.ts` | `types.test.ts` | 6 tests — `normalizePhoneNumber`, `phoneToThreadId`: separator stripping, `+` prefix, thread ID format |
 | `src/lib/db/gdpr.ts` | `gdpr.test.ts` | 4 tests — `writeAuditLog` never-throw contract, `deleteAllUserData` FK-safe ordering, missing lock table graceful handling |
 | `src/lib/db/locks.ts` | `locks.test.ts` | 2 tests — unique violation → `false` (error code `23505`), `releaseUserLock` filters by `user_id` |
+| `src/services/bulk-ingestion.ts` | `bulk-ingestion.test.ts` | 6 tests — Phase 4 enrichment: phase ordering (report before enrich), report sent even on enrichment failure, classify + update + embedding pipeline, embedding failure still counts as enriched, progress streaming, no-op when no unenriched messages |
 
 #### Layer 4: Integration Tests (25 tests)
 
