@@ -36,34 +36,44 @@ BODY: ${body.slice(0, 500)}`
  * Enrich a single message: extract key information as structured free-text.
  * Stage: enrichment (gemini-2.5-flash-lite → gemini-2.5-flash)
  * Runs per-message after cleaning, before threading. Cost-sensitive — uses cheapest model.
+ *
+ * Accepts optional UserSettings for business context and language.
+ * When settings are provided, output is in the user's configured language
+ * and domain-specific terms are interpreted correctly.
  */
 export async function enrichMessage(
   cleanedText: string,
   channel: 'email' | 'whatsapp',
   direction: 'inbound' | 'outbound',
-  conversationContext?: string
+  conversationContext?: string,
+  settings?: UserSettings
 ): Promise<string> {
   console.log(`[AI:enrichMessage] Running stage 'enrichment' (${channel}/${direction})`)
   const contextBlock = conversationContext
     ? `\nRECENT CONVERSATION CONTEXT:\n${conversationContext}\n`
     : ''
 
-  const prompt = `Extract key information from this message. Use the following as guidance for what to look for, but only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text.
+  const businessContext = settings
+    ? `BUSINESS CONTEXT: ${settings.client_company} — ${settings.business_specialization}. Market: ${settings.business_market}.\n`
+    : ''
+  const language = settings?.ai_language === 'cs' ? 'Czech' : (settings?.ai_language || 'Czech')
 
-- Who's involved (all parties mentioned, who's in focus)
-- What property, subject matter, or topic, if any
-- What kind of message (meeting request, question, offer, info, personal, admin, legal, update...)
-- If deal-related: stage, key numbers (price, area, dates), commitments made
-- If personal/admin: what it's about, any time sensitivity, any action needed
-- What this message actually says or asks (the core intent)
+  const prompt = `${businessContext}Extract key information from this message. Output in ${language}. Use the following as guidance for what to look for, but only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text. Interpret terms in context of the business domain above — do NOT translate domain-specific words literally.
+
+- Kdo je zapojen (všechny zmíněné strany)
+- Jaký předmět, téma nebo nemovitost
+- Typ zprávy (žádost o schůzku, dotaz, nabídka, info, osobní, admin, právní, update...)
+- Pokud jde o obchod: fáze, klíčová čísla (cena, plocha, termíny), závazky
+- Pokud osobní/admin: o co jde, časová citlivost, potřebná akce
+- Co zpráva skutečně říká nebo žádá (hlavní záměr)
 
 Channel: ${channel}
-Direction: ${direction}
+Direction: ${direction} (${direction === 'outbound' ? 'sent BY the email account owner' : 'received FROM a counterparty'})
 ${contextBlock}
 MESSAGE:
 ${cleanedText.slice(0, 3000)}
 
-Respond with ONLY the extracted information as concise structured text. No JSON. No markdown headers. Just the facts.`
+Respond with ONLY the extracted information as concise structured text in ${language}. No JSON. No markdown headers. Just the facts.`
 
   return (await runAITask('enrichment', prompt)).trim()
 }
@@ -71,37 +81,50 @@ Respond with ONLY the extracted information as concise structured text. No JSON.
 /**
  * Analyze a conversation for summary, risks, next steps.
  * Stage: analysis (gemini-2.5-flash → claude-sonnet)
+ *
+ * Accepts optional UserSettings for business context, language, and user identity.
+ * When settings are provided, the AI knows who [outbound] and [inbound] represent.
  */
 export async function analyzeConversation(
-  messages: { direction: string; text: string; date: Date }[]
+  messages: { direction: string; text: string; date: Date }[],
+  settings?: UserSettings
 ): Promise<ConversationSummary> {
   console.log(`[AI:analyzeConversation] Running stage 'analysis'`)
   const messageText = messages
     .map(m => `[${m.direction}] ${m.date.toISOString().split('T')[0]}: ${m.text}`)
     .join('\n\n')
 
-  const prompt = `Analyze this email conversation and provide a JSON summary.
+  const businessContext = settings
+    ? `${getAISystemPrompt(settings)}\n\n`
+    : ''
 
-CONVERSATION:
+  const prompt = `${businessContext}Analyzuj tuto konverzaci a poskytni JSON shrnutí.
+
+ROLE:
+- Zprávy označené [outbound] jsou OD MAJITELE EMAILOVÉHO ÚČTU (váš šéf, uživatel). Vždy je to uživatel, nikdy protistrana.
+- Zprávy označené [inbound] jsou OD PROTISTRANY (externí kontakt).
+- NIKDY nezaměňuj, kdo je kdo.
+
+KONVERZACE:
 ${messageText}
 
-Respond with ONLY valid JSON in this exact format:
+Odpověz POUZE validním JSON v tomto formátu:
 {
-  "currentState": "Brief description of where this conversation/deal currently stands (in Czech)",
-  "risks": ["Risk 1 (in Czech)", "Risk 2 (in Czech)"],
-  "nextSteps": ["Next step 1 (in Czech)", "Next step 2 (in Czech)"],
-  "keyPoints": ["Key point 1 (in Czech)", "Key point 2 (in Czech)"],
+  "currentState": "Stručný popis aktuálního stavu konverzace/obchodu (česky)",
+  "risks": ["Riziko 1 (česky)", "Riziko 2 (česky)"],
+  "nextSteps": ["Další krok 1 (česky)", "Další krok 2 (česky)"],
+  "keyPoints": ["Klíčový bod 1 (česky)", "Klíčový bod 2 (česky)"],
   "confidence": 0.75,
-  "confidenceReason": "Why you are this confident — e.g. 'Only 2 short messages, unclear deal stage' or 'Full conversation with clear progression and concrete numbers'",
+  "confidenceReason": "Proč tato úroveň jistoty — jaké důkazy podporují nebo omezují vaše porozumění (česky)",
   "dealType": "sale"
 }
 
-FIELD RULES:
-- confidence: 0.0 to 1.0 — how confident you are in the summary's accuracy. Consider: message count, message clarity, how much context is available, whether the conversation is coherent.
-- confidenceReason: Explain WHY this confidence level — what evidence supports or limits your understanding. NOT how the analysis was done.
-- dealType: one of "sale", "purchase", "rental", "lease", "consultation", "other", or null if not a deal/transaction.
+PRAVIDLA:
+- confidence: 0.0 až 1.0 — jak jste si jisti přesností shrnutí.
+- confidenceReason: Vysvětlete PROČ tato úroveň jistoty — ne jak analýza probíhala.
+- dealType: "sale", "purchase", "rental", "lease", "consultation", "other", nebo null pokud nejde o obchod.
 
-Be concise. Focus on actionable insights.`
+Buďte struční. Zaměřte se na akční závěry.`
 
   const text = await runAITask('analysis', prompt)
   const jsonMatch = text.match(/\{[\s\S]*\}/)

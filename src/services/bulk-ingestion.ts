@@ -30,7 +30,7 @@ import { preFilterEmail, classifyEmail, enrichMessage } from '@/lib/ai/gemini'
 import { probeAIAvailability } from '@/lib/ai/runner'
 import { findOrCreateCP, isSameGmailAddress, normalizeGmailAddress, purgeUserAsCp } from '@/lib/db/counterparties'
 import { createMessage, messageExists, getUnprocessedMessages, updateMessage } from '@/lib/db/messages'
-import { getUserById, upsertUser } from '@/lib/db/users'
+import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
 import { cleanMessageText, generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
@@ -113,6 +113,7 @@ export async function processEmailBatch(
   stats: BulkIngestionPhase1Result,
   filteredSenders: FilteredSender[],
   errors: string[],
+  settings?: import('@/lib/supabase/types').UserSettings | null,
 ): Promise<void> {
   const totalEmails = emails.length
   console.log(`[BulkIngest] Batch start: ${totalEmails} emails to process`)
@@ -195,7 +196,7 @@ export async function processEmailBatch(
 
       // Enrich message: extract key info, save enriched text, embed it
       try {
-        const enrichedText = await enrichMessage(cleanedText, 'email', direction as 'inbound' | 'outbound')
+        const enrichedText = await enrichMessage(cleanedText, 'email', direction as 'inbound' | 'outbound', undefined, settings ?? undefined)
         await updateMessage(messageId, { enriched_text: enrichedText })
 
         const embedding = await generateMessageEmbedding(enrichedText, 'email')
@@ -286,6 +287,9 @@ async function phase1FetchAndStore(
 
   onProgress({ phase: 1, step: 'user_resolved', userEmail })
   console.log(`[BulkIngest] Phase 1: User resolved — ${userEmail}`)
+
+  // Fetch user settings for AI enrichment context
+  const settings = await getUserSettings(userId)
 
   // Purge user-as-CP
   await purgeUserAsCp(userId)
@@ -406,7 +410,7 @@ async function phase1FetchAndStore(
       // Enrich message: extract key info, save enriched text, embed it
       try {
         const cleanedText = cleanMessageText(email.body, 'email')
-        const enrichedText = await enrichMessage(cleanedText, 'email', direction as 'inbound' | 'outbound')
+        const enrichedText = await enrichMessage(cleanedText, 'email', direction as 'inbound' | 'outbound', undefined, settings ?? undefined)
         await updateMessage(messageId, { enriched_text: enrichedText })
 
         const embedding = await generateMessageEmbedding(enrichedText, 'email')
@@ -534,7 +538,8 @@ export interface Phase4Result {
  */
 export async function phase4Enrich(
   userId: string,
-  onProgress: ProgressCallback
+  onProgress: ProgressCallback,
+  settings?: import('@/lib/supabase/types').UserSettings | null,
 ): Promise<Phase4Result> {
   console.log(`[BulkIngest] Phase 4: Enriching stored messages`)
   onProgress({ phase: 4, step: 'loading_unenriched' })
@@ -587,7 +592,7 @@ export async function phase4Enrich(
       if (!enrichedText && bodyText) {
         try {
           const direction = (msg.direction as 'inbound' | 'outbound') || 'inbound'
-          enrichedText = await enrichMessage(bodyText, 'email', direction)
+          enrichedText = await enrichMessage(bodyText, 'email', direction, undefined, settings ?? undefined)
           await updateMessage(msg.id, { enriched_text: enrichedText })
         } catch (enrichErr) {
           console.error(`[BulkIngest] Phase 4: enrichMessage failed for ${msg.id}:`, enrichErr)
@@ -735,7 +740,8 @@ export async function runBulkIngestion(
   // Phase 4: Enrich stored messages (classify + embed)
   // Runs AFTER the report so the user gets their backfill summary
   // even if enrichment times out on Vercel's maxDuration.
-  const p4 = await phase4Enrich(userId, onProgress)
+  const bulkSettings = await getUserSettings(userId)
+  const p4 = await phase4Enrich(userId, onProgress, bulkSettings)
   result.enrichment = {
     enriched: p4.enriched,
     enrichmentFailed: p4.enrichmentFailed,

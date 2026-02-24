@@ -14,7 +14,7 @@ import {
 import { classifyEmail, enrichMessage } from '@/lib/ai/gemini'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists, updateMessage } from '@/lib/db/messages'
-import { getUserById, upsertUser } from '@/lib/db/users'
+import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
 import { generateMessageEmbedding, cleanMessageText } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { v4 as uuidv4 } from 'uuid'
@@ -156,6 +156,7 @@ export async function ingestEmailsForUser(
   maxEmails: number = 50
 ): Promise<IngestedMessage[]> {
   const userEmail = await getNormalizedUserEmail(userId)
+  const settings = await getUserSettings(userId)
 
   // Fetch unread emails
   const emails = await fetchUnreadEmails(userId, maxEmails)
@@ -169,7 +170,7 @@ export async function ingestEmailsForUser(
   for (let i = 0; i < emails.length; i += INGESTION_CONCURRENCY) {
     const chunk = emails.slice(i, i + INGESTION_CONCURRENCY)
     const results = await Promise.allSettled(
-      chunk.map(email => processOneInboundEmail(email, userId, userEmail))
+      chunk.map(email => processOneInboundEmail(email, userId, userEmail, settings ?? undefined))
     )
 
     for (const result of results) {
@@ -191,7 +192,8 @@ export async function ingestEmailsForUser(
 async function processOneInboundEmail(
   email: EmailMessage,
   userId: string,
-  userEmail: string
+  userEmail: string,
+  settings?: import('@/lib/supabase/types').UserSettings
 ): Promise<IngestedMessage | null> {
   // Check if already processed
   if (await messageExists(userId, email.id)) {
@@ -266,7 +268,7 @@ async function processOneInboundEmail(
   // Enrich message: extract key info, save enriched text, embed it
   try {
     const cleanedText = cleanMessageText(email.body, 'email')
-    const enrichedText = await enrichMessage(cleanedText, 'email', 'inbound')
+    const enrichedText = await enrichMessage(cleanedText, 'email', 'inbound', undefined, settings ?? undefined)
     await updateMessage(messageId, { enriched_text: enrichedText })
 
     // Embed the enriched text (not the raw body)
@@ -296,6 +298,7 @@ export async function ingestOutboundEmails(
   since: Date
 ): Promise<number> {
   const userEmail = await getNormalizedUserEmail(userId)
+  const settings = await getUserSettings(userId)
   let ingested = 0
 
   try {
@@ -312,7 +315,7 @@ export async function ingestOutboundEmails(
     for (let i = 0; i < sentEmails.length; i += OUTBOUND_CONCURRENCY) {
       const chunk = sentEmails.slice(i, i + OUTBOUND_CONCURRENCY)
       const results = await Promise.allSettled(
-        chunk.map(email => processOneOutboundEmail(email, userId, userEmail))
+        chunk.map(email => processOneOutboundEmail(email, userId, userEmail, settings ?? undefined))
       )
 
       for (const result of results) {
@@ -337,7 +340,8 @@ export async function ingestOutboundEmails(
 async function processOneOutboundEmail(
   email: EmailMessage,
   userId: string,
-  userEmail: string
+  userEmail: string,
+  settings?: import('@/lib/supabase/types').UserSettings
 ): Promise<boolean> {
   // Skip if already processed
   if (await messageExists(userId, email.id)) {
@@ -386,7 +390,7 @@ async function processOneOutboundEmail(
   // Enrich message: extract key info, save enriched text, embed it
   try {
     const cleanedText = cleanMessageText(email.body, 'email')
-    const enrichedText = await enrichMessage(cleanedText, 'email', 'outbound')
+    const enrichedText = await enrichMessage(cleanedText, 'email', 'outbound', undefined, settings ?? undefined)
     await updateMessage(messageId, { enriched_text: enrichedText })
 
     // Embed the enriched text (not the raw body)

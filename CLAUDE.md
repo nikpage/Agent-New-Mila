@@ -323,7 +323,7 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier`, `kcFactor` fallback t
 - `src/lib/ai/providers/gemini.ts` — `@google/generative-ai` SDK. Supports **multi-key rotation** via `GEMINI_API_KEYS` (comma-separated) — round-robins across keys. Falls back to single `GEMINI_API_KEY` if not set.
 - `src/lib/ai/providers/anthropic.ts` — `@anthropic-ai/sdk`. Uses `ANTHROPIC_API_KEY` env var.
 
-**Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()` and `generateFinalDraft()` prompts. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates `dollarValue` and `weight` (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies `dealType`.
+**Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()`, `generateFinalDraft()`, and `analyzeConversation()` prompts. `enrichMessage()` receives a lighter business context (company, specialization, market) + language setting. All AI functions that process user content now receive `UserSettings` for consistent language (Czech) and domain interpretation. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates `dollarValue` and `weight` (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies `dealType`.
 
 ## Embeddings & Semantic Threading
 
@@ -331,12 +331,14 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier`, `kcFactor` fallback t
 
 **Per-message enrichment** (`enrichMessage` in `gemini.ts`):
 - Runs after cleaning, before threading. Extracts: who's involved, property/subject, message kind, deal numbers, core intent.
+- **Output language:** Czech (matches `ai_language` setting). Enrichment prompt includes business context from `UserSettings` so domain-specific terms are interpreted correctly (e.g. Czech "statek" = farm/estate, not "ship").
 - Saves to `messages.enriched_text` column. Embedding generated from enriched text (not raw body).
 - Stage: `enrichment` (gemini-2.5-flash-lite → gemini-2.5-flash). Cost-sensitive — runs per message.
-- Runs in **both** regular ingestion (`ingestion.ts`) **and** bulk historical ingestion (`bulk-ingestion.ts`). Bulk enrichment tracks success/failure counts (`enriched`, `enrichmentFailed` in `BulkIngestionPhase1Result`).
+- Accepts optional `UserSettings` for business context injection. All callers (`ingestion.ts`, `bulk-ingestion.ts`, QStash worker) fetch and pass user settings.
+- Runs in **both** regular ingestion (`ingestion.ts`) **and** bulk historical ingestion (`bulk-ingestion.ts`). Bulk enrichment tracks success/failure counts (`enriched`, `enrichmentFailed`, `preFilterFailOpen` in `BulkIngestionPhase1Result`).
 
 **Pipeline** (`src/services/threading.ts`):
-1. **External thread ID match** (primary) — exact match on `external_thread_id` (Gmail thread ID, Exchange conversation ID, `wa:+phone`)
+1. **External thread ID match** (primary) — exact match on `external_thread_id` (Gmail thread ID, Exchange conversation ID, `wa:+phone`). Only matches messages already assigned to a conversation (`conversation_id IS NOT NULL`) — unassigned messages are skipped to prevent 1:1 message-to-conversation creation during bulk ingestion.
 2. **Enriched embedding similarity** (secondary) — cosine similarity of enriched message embedding against conversation embeddings, same CP only
 3. **New conversation** (fallback) — if nothing matches. Creates thin-conversation ToDo if enrichment yielded < 100 chars.
 
@@ -347,7 +349,7 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier`, `kcFactor` fallback t
 
 **WhatsApp threading:** By phone number — `external_thread_id = wa:+phone`
 
-**Conversation summaries** use enriched messages (adaptive count: enough to reach ~1500 chars). Falls back to cleaned_text for older un-enriched messages. Embedding generated from summary text.
+**Conversation summaries** (`analyzeConversation` in `gemini.ts`) use enriched messages (adaptive count: enough to reach ~1500 chars). Falls back to cleaned_text for older un-enriched messages. Embedding generated from summary text. Accepts optional `UserSettings` — when provided, the AI receives business context and explicit role mapping: `[outbound]` = user (email account owner), `[inbound]` = counterparty. All output in Czech.
 
 **Channel-aware cleaning** (`cleanMessageText` in `generate.ts`):
 - `email`/`email/gmail`: Full cleaning (signatures, quoted replies, disclaimers, tracking pixels)
@@ -400,7 +402,7 @@ Historical backfill — imports a user's email history and sets up Mila's unders
 **Route:** `POST /api/ingest/bulk` (API key auth, 5-min timeout). Streams NDJSON progress events: `started`, `progress`, `done`, `error`.
 
 **4-phase pipeline:**
-1. **Phase 1 — Fetch & Store:** Paginates through INBOX + SENT. Skips blocked senders, Gmail categories (PROMOTIONS, SOCIAL, etc.), duplicates. Runs `preFilterEmail()` AI + `enrichMessage()` AI per email. Tracks: `inboxFetched`, `sentFetched`, `skippedCategory`, `skippedBlocked`, `skippedPreFilter`, `skippedDuplicate`, `enriched`, `enrichmentFailed`, `stored`.
+1. **Phase 1 — Fetch & Store:** Paginates through INBOX + SENT. Skips blocked senders, Gmail categories (PROMOTIONS, SOCIAL, etc.), duplicates. Runs `preFilterEmail()` AI + `enrichMessage()` AI per email. Tracks: `inboxFetched`, `sentFetched`, `skippedCategory`, `skippedBlocked`, `skippedPreFilter`, `skippedDuplicate`, `preFilterFailOpen`, `enriched`, `enrichmentFailed`, `stored`.
 2. **Phase 2 — Thread:** Calls `processMessagesForThreading()` on all stored messages (chronological). Same threading logic as agent Step 4.
 3. **Phase 3 — Backfill Report:** Generates and sends a "Welcome to Mila" summary email.
 4. **Phase 4 — Enrich:** Retry pass — classifies and embeds any messages that failed enrichment during Phase 1. Runs after the report so the user gets their summary even if enrichment times out.
@@ -664,7 +666,7 @@ QSTASH_TOKEN         # Upstash QStash token for brief scheduling + bulk ingest w
 Bulk historical email ingestion (500+ emails) exceeds Vercel's 300-second function timeout when running as a single request.
 
 ### Solution: QStash Worker Chaining
-When `QSTASH_TOKEN` is set (Vercel), `/api/ingest/bulk` splits the work into chained QStash messages. Each step runs within the 300s timeout. Without `QSTASH_TOKEN` (local dev), falls back to synchronous NDJSON streaming.
+When `QSTASH_TOKEN` is set **and** `APP_BASE_URL` points to a public address (not localhost/127.0.0.1/[::1]), `/api/ingest/bulk` splits the work into chained QStash messages. Each step runs within the 300s timeout. If `QSTASH_TOKEN` is missing or `APP_BASE_URL` is empty/localhost, falls back to synchronous NDJSON streaming (QStash can't reach loopback addresses).
 
 ### Architecture
 ```
@@ -692,7 +694,7 @@ POST /api/ingest/bulk (orchestrator)
 - **Idempotency:** Phase 1 dedup via `messageExists()` prevents double-storing on QStash retry
 
 ### Implementation
-- **Orchestrator:** `src/app/api/ingest/bulk/route.ts` — QStash path (with `QSTASH_TOKEN`) or NDJSON fallback
+- **Orchestrator:** `src/app/api/ingest/bulk/route.ts` — QStash path (requires `QSTASH_TOKEN` + non-localhost `APP_BASE_URL`) or NDJSON fallback
 - **Worker:** `src/app/api/ingest/bulk/worker/route.ts` — state machine handling all 4 phases (phase1_inbox, phase1_sent, phase2, phase3, phase4)
 - **Batch fetch:** `fetchEmailsBatch()` in `src/lib/google/gmail.ts` — single-page Gmail fetch with `nextPageToken`
 - **Batch process:** `processEmailBatch()` in `src/services/bulk-ingestion.ts` — dedup, filter, preFilter AI, store

@@ -19,6 +19,7 @@ import { analyzeConversation, extractTopic, shouldJoinConversation } from '@/lib
 import { generateConversationEmbedding, generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveConversationEmbedding, getConversationsWithEmbeddingsByCP } from '@/lib/db/embeddings'
 import { createTodo } from '@/lib/db/todos'
+import { getUserSettings } from '@/lib/db/users'
 import { validateDealType } from './planning'
 import type { Message, ConversationThread } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
@@ -268,10 +269,13 @@ export async function rebuildConversationSummary(
   selectedCount = Math.max(selectedCount, Math.min(MIN_MESSAGES, formattedMessages.length))
   const selectedMessages = formattedMessages.slice(-selectedCount)
 
+  // Fetch user settings for business context + language in AI summary
+  const settings = await getUserSettings(conversation.user_id)
+
   // Step 1: Generate AI summary
   let summaryText: string | null = null
   try {
-    const summary = await analyzeConversation(selectedMessages)
+    const summary = await analyzeConversation(selectedMessages, settings ?? undefined)
 
     summaryText = `${summary.currentState}. ${summary.nextSteps.length > 0 ? 'Next: ' + summary.nextSteps[0] : ''}`
 

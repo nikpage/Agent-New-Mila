@@ -11,6 +11,7 @@ import {
   type FilteredSender,
 } from '@/services/bulk-ingestion'
 import { generateAndSendBackfillReport } from '@/services/backfill-report'
+import { getUserSettings } from '@/lib/db/users'
 
 export const maxDuration = 300
 
@@ -43,6 +44,9 @@ export async function POST(request: NextRequest) {
   const { userId, step } = job
 
   console.log(`[BulkIngest/Worker] Step: ${step} for user ${userId}`)
+
+  // Fetch user settings once for AI enrichment context
+  const settings = await getUserSettings(userId)
 
   try {
     switch (step) {
@@ -83,6 +87,7 @@ export async function POST(request: NextRequest) {
           job.phase1Stats,
           job.filteredSenders,
           job.errors,
+          settings,
         )
 
         console.log(`[BulkIngest/Worker] ${step}: batch=${batchEmails.length}, stored=${job.phase1Stats.stored}, enriched=${job.phase1Stats.enriched}, enrichFailed=${job.phase1Stats.enrichmentFailed}, skipped=${job.phase1Stats.skippedCategory + job.phase1Stats.skippedBlocked + job.phase1Stats.skippedPreFilter + job.phase1Stats.skippedDuplicate}, totalFetched=${job[totalFetchedKey]}`)
@@ -129,7 +134,7 @@ export async function POST(request: NextRequest) {
         await probeAIAvailability()
         const logProgress = (p: Record<string, unknown>) =>
           console.log('[BulkIngest/Worker] Phase 4:', JSON.stringify(p))
-        const p4 = await phase4Enrich(userId, logProgress)
+        const p4 = await phase4Enrich(userId, logProgress, settings)
         console.log(`[BulkIngest/Worker] Phase 4 complete: ${p4.enriched} enriched, ${p4.enrichmentFailed} failed`)
 
         return NextResponse.json({ ok: true, done: true, enriched: p4.enriched })
