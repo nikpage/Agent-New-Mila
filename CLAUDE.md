@@ -67,20 +67,20 @@ src/
 │
 ├── services/                   # Business logic (orchestration layer)
 │   ├── agent.ts                # Main pipeline — 6-step orchestration (parallel ingestion)
-│   ├── scheduling.ts           # Calendar slot finding (683 lines) ⚠️ LARGEST
+│   ├── scheduling.ts           # Calendar slot finding (702 lines) ⚠️ LARGEST
 │   ├── planning.ts             # Action generation with channel detection (parallel batches of 5)
 │   ├── threading.ts            # Email/WA conversation grouping (enriched embeddings + external thread ID)
 │   ├── ingestion.ts            # Email ingestion (parallel batches of 5)
-│   ├── bulk-ingestion.ts       # Historical backfill — 3-phase: fetch → thread → report
+│   ├── bulk-ingestion.ts       # Historical backfill — 4-phase: fetch → thread → report → enrich
 │   ├── backfill-report.ts      # "Welcome to Mila" report email after bulk ingestion (772 lines)
 │   ├── calendar-ingestion.ts   # Calendar sync + personal event filtering
 │   ├── lead-tracking.ts        # Cooling/cold/dead lead detection (parallel batches of 10)
-│   └── morning-brief.ts        # Daily summary email (212 lines)
+│   └── morning-brief.ts        # Daily summary email (254 lines)
 │
 ├── lib/                        # Shared utilities & integrations
-│   ├── db/                     # Supabase CRUD — 11 files, ~2200 lines total
+│   ├── db/                     # Supabase CRUD — 11 files, ~2500 lines total
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
-│   ├── supabase/               # Client + types (types.ts = 593 lines)
+│   ├── supabase/               # Client + types (types.ts = 804 lines)
 │   ├── ai/
 │   │   ├── gemini.ts           # AI functions (preFilter, classify, enrichMessage, proposeAction, generateFinalDraft, etc.)
 │   │   ├── runner.ts           # runAITask() with 3-model fallback + 429 retry
@@ -92,20 +92,23 @@ src/
 │   │   ├── sender.ts           # sendWhatsAppMessage(), getWhatsAppStatus() — talks to daemon
 │   │   └── index.ts            # Barrel re-export
 │   ├── embeddings/
-│   │   └── generate.ts         # cleanMessageText (channel-aware), cleanEmailText, generateMessageEmbedding
+│   │   └── generate.ts         # cleanMessageText (channel-aware), cleanEmailText, generateEmbedding, generateMessageEmbedding, generateConversationEmbedding
+│   ├── crypto.ts               # OAuth token encryption/decryption (81 lines)
 │   ├── auth/
 │   │   ├── tokens.ts           # OAuth state, action tokens, cron validation, trigger tokens, backfill tokens
 │   │   └── api.ts              # API key verification middleware
 │   └── holidays.ts             # Holiday calendar
 │
 ├── components/                 # React components
-│   ├── action/ActionCard.tsx   # Main action UI (337 lines)
+│   ├── action/ActionCard.tsx   # Main action UI (382 lines)
 │   ├── action/EditForm.tsx     # Action editor (142 lines)
+│   ├── action/SuccessOverlay.tsx # Post-action success animation (103 lines)
+│   ├── action/action-card-template.ts # HTML template for action card emails (140 lines)
 │   └── ui/                     # Button, Card, Badge, Input
 │
 ├── config/
 │   ├── client.ts               # Per-client config (identity, business, AI persona, leads, WA, calendar, scoring)
-│   ├── ai-models.ts            # 6 AI stages × 3-model fallback chains
+│   ├── ai-models.ts            # 7 AI stages × 3-model fallback chains
 │   ├── env.ts                  # Environment config with validation
 │   └── theme.ts                # Design tokens
 │
@@ -116,8 +119,8 @@ src/
 ## Agent Pipeline (src/services/agent.ts)
 
 ```
-Step 0: purgeUserAsCp — data hygiene
-Step 1: Verify user exists + has Google credentials
+Step 1: Verify user exists + has Google credentials (early return if fail)
+Step 0: purgeUserAsCp — data hygiene (runs after user is verified)
 Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
   Step 2: Ingest inbound emails from Gmail (clean → enrich → embed enriched text)
   Step 2.1: Ingest outbound emails from Gmail (clean → enrich → embed enriched text)
@@ -136,12 +139,12 @@ Result type includes: `emailsIngested`, `whatsappMessagesProcessed`, `calendarEv
 Never read all files in a directory sequentially. This bloats context and causes hangs.
 
 **Worst offenders (do NOT read all files in these):**
-- `src/lib/db/` — 11 files, ~2200 lines. Use the index below to pick the right file.
-- `src/services/` — 8 files, 2500+ lines. Read only the service relevant to the task.
-- `src/lib/google/` — 5 files, 1100+ lines. Read only the API you need.
+- `src/lib/db/` — 11 files, ~2500 lines. Use the index below to pick the right file.
+- `src/services/` — 11 files, ~4500 lines. Read only the service relevant to the task.
+- `src/lib/google/` — 5 files, ~1400 lines. Read only the API you need.
 
 ### Do NOT follow imports into large type files
-- `src/lib/supabase/types.ts` (593 lines) — Only read if you need specific type definitions. Use Grep to find the type you need instead.
+- `src/lib/supabase/types.ts` (804 lines) — Only read if you need specific type definitions. Use Grep to find the type you need instead.
 
 ### Strategy for understanding code
 1. **Start with Grep** to find the function/type you need
@@ -155,13 +158,13 @@ Instead of reading these files, use this index:
 | File | Contents |
 |------|----------|
 | `users.ts` | `getUserById`, `getUserByEmail`, `upsertUser`, `getUserSettings`, `updateUserSettings`, `getUsersWithEmailEnabled`, `getUsersDueBrief`, `updateUserGoogleTokens`, `getUserGoogleTokens` |
-| `counterparties.ts` | `normalizeGmailAddress`, `isSameGmailAddress`, `getCPById`, `getCPByIdentifier`, `upsertCP`, `updateCP`, `blacklistCP`, `getCPsForUser`, `findOrCreateCP`, `purgeUserAsCp`, `getCPState`, `updateCPState` |
-| `conversations.ts` | `getConversationById`, `createConversation`, `updateConversation`, `getConversationsForUser`, `addParticipant`, `getRecentMessages`, `findConversationByExternalThread` |
-| `messages.ts` | `getMessageById`, `createMessage`, `getMessagesForConversation`, `getUnprocessedMessages` |
-| `actions.ts` | `getActionById`, `createAction`, `updateAction`, `getActionsForUser`, `calculatePriorityScore`, `hasPendingAction`, `getPendingActionsForBrief`, `markActionsNotified` |
-| `todos.ts` | `getTodoById`, `createTodo`, `updateTodo`, `getTodosForUser` |
-| `events.ts` | `getEventById`, `createEvent`, `updateEvent`, `deleteEvent`, `getEventsInRange`, `getEventsForToday`, `getUpcomingEvents`, `findConflicts`, `getLastEventLocation`, `findAvailableSlots`, `createHoldEvent`, `createTravelBuffer`, `cleanupTravelBuffers`, `confirmEvent`, `cancelEventWithCleanup`, `calculateEventScore`, `upsertEventByGoogleId`, `getChildEvents` |
-| `embeddings.ts` | `saveMessageEmbedding`, `searchSimilarMessages` |
+| `counterparties.ts` | `normalizeGmailAddress`, `isSameGmailAddress`, `purgeUserAsCp`, `getCPById`, `getCPByIdentifier`, `getCPsForUser`, `upsertCP`, `findOrCreateCP`, `updateCP`, `blacklistCP`, `getCPState`, `updateCPState` |
+| `conversations.ts` | `getConversationById`, `getConversationsForUser`, `createConversation`, `updateConversation`, `updateConversationSummary`, `incrementMessageCount`, `getMessagesForConversation`, `getRecentMessages`, `addParticipant`, `getParticipants`, `findConversationByExternalThread` |
+| `messages.ts` | `getMessageById`, `getMessageByExternalId`, `messageExists`, `createMessage`, `createMessages`, `updateMessage`, `getMessagesInRange`, `getUnprocessedMessages`, `assignMessageToConversation`, `getLatestMessageFromCP`, `countMessagesInConversation` |
+| `actions.ts` | `getActionById`, `getActionsForUser`, `getPendingActionsForBrief`, `createAction`, `updateAction`, `updateActionStatus`, `approveAction`, `completeAction`, `dismissAction`, `dismissAllPendingActions`, `updateActionDraft`, `markActionsNotified`, `calculatePriorityScore`, `getActionsForConversation`, `hasPendingAction` |
+| `todos.ts` | `getTodoById`, `getTodosForUser`, `getPendingTodos`, `createTodo`, `updateTodo`, `completeTodo`, `deleteTodo`, `getTodosForThread`, `getOverdueTodos`, `getTodosDueToday` |
+| `events.ts` | `getEventById`, `getEventsInRange`, `getEventsForToday`, `getUpcomingEvents`, `createEvent`, `updateEvent`, `deleteEvent`, `findConflicts`, `getLastEventLocation`, `getEventsWithCP`, `findAvailableSlots`, `getEventsByBlockGroup`, `cleanupBlockGroup`, `createHoldEvent`, `createTravelBuffer`, `cleanupTravelBuffers`, `getTravelBuffers`, `confirmEvent`, `cancelEventWithCleanup`, `calculateEventScore`, `upsertEventByGoogleId`, `getChildEvents` |
+| `embeddings.ts` | `saveMessageEmbedding`, `saveConversationEmbedding`, `getConversationsWithEmbeddingsByCP` |
 | `gdpr.ts` | `writeAuditLog`, `exportAllUserData`, `deleteAllUserData`, `enforceRetentionPolicy` |
 | `locks.ts` | `tryAcquireUserLock`, `releaseUserLock` |
 | `index.ts` | Barrel re-exports (do not read) |
@@ -299,7 +302,7 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier`, `kcFactor` fallback t
 
 ## AI Model Configuration
 
-**Config:** `src/config/ai-models.ts` — 6 pipeline stages, each with 3-model fallback chain.
+**Config:** `src/config/ai-models.ts` — 7 pipeline stages, each with 3-model fallback chain.
 **Runner:** `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, retries 429s with exponential backoff (1s, 2s, 4s), logs which model succeeded.
 
 | Stage | Purpose | Primary → Fallback1 → Fallback2 |
@@ -354,7 +357,7 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier`, `kcFactor` fallback t
 
 ## Scheduling & Conflict Resolution
 
-**Implementation:** `src/services/scheduling.ts` (683 lines — largest service)
+**Implementation:** `src/services/scheduling.ts` (702 lines — largest service)
 
 ### Slot Finding
 - `findFreeSlots()` scans working hours for gaps between ALL calendar events
@@ -396,10 +399,11 @@ Historical backfill — imports a user's email history and sets up Mila's unders
 
 **Route:** `POST /api/ingest/bulk` (API key auth, 5-min timeout). Streams NDJSON progress events: `started`, `progress`, `done`, `error`.
 
-**3-phase pipeline:**
+**4-phase pipeline:**
 1. **Phase 1 — Fetch & Store:** Paginates through INBOX + SENT. Skips blocked senders, Gmail categories (PROMOTIONS, SOCIAL, etc.), duplicates. Runs `preFilterEmail()` AI + `enrichMessage()` AI per email. Tracks: `inboxFetched`, `sentFetched`, `skippedCategory`, `skippedBlocked`, `skippedPreFilter`, `skippedDuplicate`, `enriched`, `enrichmentFailed`, `stored`.
 2. **Phase 2 — Thread:** Calls `processMessagesForThreading()` on all stored messages (chronological). Same threading logic as agent Step 4.
 3. **Phase 3 — Backfill Report:** Generates and sends a "Welcome to Mila" summary email.
+4. **Phase 4 — Enrich:** Retry pass — classifies and embeds any messages that failed enrichment during Phase 1. Runs after the report so the user gets their summary even if enrichment times out.
 
 **Filtered senders** are tracked (email + count + reason) and passed to the backfill report for "Allow as Contact" links.
 
@@ -528,7 +532,7 @@ Every API route is tested to verify it rejects unauthenticated/bad requests. Cat
 | File | Tests | What's tested |
 |------|-------|---------------|
 | `src/services/agent-pipeline.test.ts` | 5 | Agent pipeline data flow: emails → threading → planning, calendar + lead tracking aggregation, step 2 fault isolation, step 4-5 skip on empty, WhatsApp message counting |
-| `src/services/integration.test.ts` | 20 | **Planning:** conversation → AI → scored action in DB, blacklisted CP skipped, weight clamping. **Morning Brief:** action loading + CP enrichment + email send, unsubscribed skip, empty brief, 10-action cap, afternoon greeting, multi-user fault isolation. **Bulk Ingestion:** 3-phase pipeline (fetch → thread → report), blocked sender skip, category skip, early return on errors, enrichment tracking. **Ingestion → Threading:** classify + store + enrich, non-actionable skip, blocked sender skip, duplicate skip, external thread ID match, new conversation creation |
+| `src/services/integration.test.ts` | 20 | **Planning:** conversation → AI → scored action in DB, blacklisted CP skipped, weight clamping. **Morning Brief:** action loading + CP enrichment + email send, unsubscribed skip, empty brief, 10-action cap, afternoon greeting, multi-user fault isolation. **Bulk Ingestion:** 4-phase pipeline (fetch → thread → report → enrich), blocked sender skip, category skip, early return on errors, enrichment tracking. **Ingestion → Threading:** classify + store + enrich, non-actionable skip, blocked sender skip, duplicate skip, external thread ID match, new conversation creation |
 
 #### Layer 5: Smoke Tests (10 tests, opt-in)
 **File:** `src/__tests__/smoke.test.ts`
@@ -647,7 +651,7 @@ POST /api/ingest/bulk (orchestrator)
 
 ### Implementation
 - **Orchestrator:** `src/app/api/ingest/bulk/route.ts` — QStash path (with `QSTASH_TOKEN`) or NDJSON fallback
-- **Worker:** `src/app/api/ingest/bulk/worker/route.ts` — state machine handling all 5 steps
+- **Worker:** `src/app/api/ingest/bulk/worker/route.ts` — state machine handling all 4 phases (phase1_inbox, phase1_sent, phase2, phase3, phase4)
 - **Batch fetch:** `fetchEmailsBatch()` in `src/lib/google/gmail.ts` — single-page Gmail fetch with `nextPageToken`
 - **Batch process:** `processEmailBatch()` in `src/services/bulk-ingestion.ts` — dedup, filter, preFilter AI, store
 - **QStash publish:** `publishBulkIngestStep()` in `src/lib/qstash/client.ts`

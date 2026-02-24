@@ -186,12 +186,13 @@ All multipliers fall back to 1 if 0/null to prevent score collapse. `kcFactor` f
 
 ### Model Configuration
 
-6 pipeline stages, each with a 3-model fallback chain:
+7 pipeline stages, each with a 3-model fallback chain:
 
 | Stage | Purpose |
 |-------|---------|
 | `preFilter` | Spam/junk detection (cheapest model) |
 | `classify` | Email category + priority |
+| `enrichment` | Per-message key info extraction |
 | `threading` | Topic extraction, conversation joining |
 | `analysis` | Conversation analysis (state, risks, next steps) |
 | `planning` | Action proposal (type, rationale, intent) |

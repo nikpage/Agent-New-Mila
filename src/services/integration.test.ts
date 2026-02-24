@@ -166,7 +166,6 @@ vi.mock('@/lib/db/events', () => ({
 vi.mock('@/lib/db/embeddings', () => ({
   saveMessageEmbedding: vi.fn(),
   saveConversationEmbedding: vi.fn(),
-  searchSimilarMessages: vi.fn(),
   getConversationsWithEmbeddingsByCP: vi.fn(),
 }))
 
