@@ -236,7 +236,7 @@ Respond with ONLY valid JSON:
   "urgency": 1-10 (10 = needs immediate attention),
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "painFactor": 1-10 (how much pain from ignoring this),
-  "weight": 0-100 (how immovable/fixed is this action? 100 = must happen regardless of other priorities, 0 = flexible. E.g. legal deadline = 90, casual follow-up = 5),
+  "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
   "suggestedLocation": "Physical meeting location if mentioned or clearly implied. null if not specified.",
   "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). null if no specific time mentioned."

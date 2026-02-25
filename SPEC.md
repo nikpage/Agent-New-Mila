@@ -182,7 +182,7 @@ When a new meeting conflicts with existing events:
 | `urgency` | 1-10 | AI-assessed |
 | `painFactor` | 1-10 | AI-assessed relationship pain |
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
-| `weight` | 0-100 | AI-assessed immovability (100 = legal deadline, 0 = flexible follow-up) |
+| `weight` | 1-10 or 100 | How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable (court date, kids concert, airport pickup) |
 
 All multipliers fall back to 1 if 0/null to prevent score collapse. `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue.
 

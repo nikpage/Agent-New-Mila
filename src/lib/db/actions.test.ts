@@ -209,11 +209,11 @@ describe('calculatePriorityScore', () => {
       urgency: 10,
       painFactor: 5,
       daysIgnored: 3,
-      weight: 50,
+      weight: 8,
     })
     // normalizedValue = 0 (no financial component)
-    // 0*10 + 5*(3+1)^2 + 50 = 0 + 80 + 50 = 130
-    expect(score).toBe(130)
+    // 0*10 + 5*(3+1)^2 + 8 = 0 + 80 + 8 = 88
+    expect(score).toBe(88)
   })
 
   it('custom kcLowValue/kcHighValue shift the normalization anchors', () => {
@@ -271,14 +271,14 @@ describe('calculatePriorityScore', () => {
       urgency: 9,
       painFactor: 8,
       daysIgnored: 3,
-      weight: 50,
+      weight: 8,
     })
     const bigRoutine = calculatePriorityScore({
       dollarValue: 5_000_000,
       urgency: 2,
       painFactor: 1,
       daysIgnored: 0,
-      weight: 5,
+      weight: 2,
     })
     expect(smallUrgent).toBeGreaterThan(bigRoutine)
   })

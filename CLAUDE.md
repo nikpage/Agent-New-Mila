@@ -296,7 +296,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 | `urgency` | 1-10 | AI-assessed, safe default 1 |
 | `painFactor` | 1-10 | AI-assessed relationship pain, safe default 1 |
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
-| `weight` | 0-100 | AI-assessed immovability (100 = legal deadline, 0 = flexible). Set during proposal generation. |
+| `weight` | 1-10 or 100 | How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable (court date, kids concert, airport pickup). No values between 10-100. |
 
 **Normalization range:** Values below kcLowValue compress toward 1. Values between anchors map smoothly to 2-13. Values above kcHighValue extend toward 21-34 (headroom for outlier deals). Clamped at [1, 34]. This keeps financial values comparable to urgency/pain (1-10 scale) instead of letting raw CZK dominate.
 

@@ -209,7 +209,7 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     expect(dbActions).toHaveLength(0)
   })
 
-  it('clamps weight to 0-100 range before scoring', async () => {
+  it('clamps weight to 1-10 range (or 100 for immovable) before scoring', async () => {
     const { generateActionProposal } = await import('./planning')
 
     const cp = await createTestCP()
@@ -219,20 +219,24 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     vi.mocked(proposeAction).mockResolvedValue({
       actionType: 'REPLY', rationale_cs: 'Test', intent_cs: 'Test',
       missingInfo: [], dollarValue: 1000, urgency: 5, painFactor: 2,
-      weight: 250, // exceeds max
+      weight: 50, // AI hallucinated a value > 10 but < 100
       dealType: null,
     } as never)
 
     const action = await generateActionProposal(conv)
 
     expect(action).not.toBeNull()
-    // Weight stored as 100 (clamped from 250)
-    expect(action!.weight).toBe(100)
+    // Weight stored as 10 (clamped from 50 — not immovable, so max is 10)
+    expect(action!.weight).toBe(10)
     const metadata = (action!.payload as Record<string, unknown>).action_metadata as Record<string, unknown>
-    expect(metadata.weight).toBe(100)
+    expect(metadata.weight).toBe(10)
 
-    // Score uses clamped weight, not raw 250
-    const expectedWithClamp = Math.round((1000 / 13 * 1.0 * 5) + (2 * 1) + 100)
+    // Score uses clamped weight=10, not raw 50
+    const logLow = Math.log(500_000)
+    const logHigh = Math.log(5_000_000)
+    const logVal = Math.log(1000)
+    const norm = Math.max(1, Math.min(34, 2 + ((logVal - logLow) / (logHigh - logLow)) * 11))
+    const expectedWithClamp = Math.round(norm * 5 + 2 * 1 + 10)
     expect(action!.priority_score).toBe(expectedWithClamp)
   })
 })
