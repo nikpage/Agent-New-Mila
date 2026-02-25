@@ -219,9 +219,7 @@ export async function generateActionProposal(
       cp.role, settings.offer_multiplier_seller, settings.offer_multiplier_buyer
     )
 
-    // Weight: 1-10 normal scale, 100 = immovable. Clamp AI hallucinations.
-    const rawWeight = proposal.weight || 0
-    const weight = rawWeight >= 100 ? 100 : Math.max(0, Math.min(10, rawWeight))
+    const weight = proposal.weight || 0
 
     const priorityScore = calculatePriorityScore({
       dollarValue: proposal.dollarValue,
