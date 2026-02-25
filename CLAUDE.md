@@ -323,6 +323,8 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier`, `kcFactor` fallback t
 - `src/lib/ai/providers/gemini.ts` — `@google/generative-ai` SDK. Supports **multi-key rotation** via `GEMINI_API_KEYS` (comma-separated) — round-robins across keys. Falls back to single `GEMINI_API_KEY` if not set.
 - `src/lib/ai/providers/anthropic.ts` — `@anthropic-ai/sdk`. Uses `ANTHROPIC_API_KEY` env var.
 
+**Prompt language convention: ALL prompts are written in English. Czech output is requested via explicit directives (e.g. "in Czech", "Output in CZECH").** This is consistent across all 9 AI functions. Never write mixed-language prompts — English instructions with Czech labels, or vice versa. If the AI needs to output Czech, tell it in English.
+
 **Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()`, `generateFinalDraft()`, and `analyzeConversation()` prompts. `enrichMessage()` receives a lighter business context (company, specialization, market) + language setting. All AI functions that process user content now receive `UserSettings` for consistent language (Czech) and domain interpretation. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates `dollarValue` and `weight` (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies `dealType`.
 
 ## Embeddings & Semantic Threading
