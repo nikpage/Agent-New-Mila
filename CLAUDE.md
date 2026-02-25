@@ -302,7 +302,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/null (prevents score collapse). `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue (falls back to kcLowValue × 10).
 
-**DO NOT REMOVE OR CHANGE** the log-scale normalization or `weight` wiring without explicit user permission. Log-scale replaced linear division (Feb 2025) to fix scoring where raw CZK values dominated all other factors.
+**DO NOT REMOVE OR CHANGE** the log-scale normalization or `weight` wiring without explicit user permission.
 
 **Wiring:** `planning.ts` passes `offerMultiplier` (from CP role), `kcLowValue`/`kcHighValue` (from user settings), and `weight` (from AI response) to `calculatePriorityScore()`. `lead-tracking.ts` also passes `offerMultiplier` and `kcLowValue`/`kcHighValue` for follow-up actions.
 
