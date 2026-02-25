@@ -77,10 +77,12 @@ describe('offer multiplier affects priority scoring', () => {
       offerMultiplier: selectOfferMultiplier('buyer', 1.5, 1.0),
     })
     expect(sellerScore).toBeGreaterThan(buyerScore)
-    // Seller: (5M * 1.5 * 5) + (3 * 9) = 37,500,027
-    // Buyer:  (5M * 1.0 * 5) + (3 * 9) = 25,000,027
-    // Difference = 12,500,000 — seller deal is significantly prioritized
-    expect(sellerScore - buyerScore).toBe(12_500_000)
+    // With log-scale: seller's offerMultiplier (1.5) is applied BEFORE log,
+    // so 5M×1.5=7.5M effective vs 5M×1.0=5M effective.
+    // Both compress to similar range (~13 vs ~15) but seller still wins.
+    // The difference is modest (not millions) — that's the whole point of log normalization.
+    expect(sellerScore - buyerScore).toBeGreaterThan(0)
+    expect(sellerScore - buyerScore).toBeLessThan(100) // log-compressed, not millions apart
   })
 
   it('unknown CP role defaults to buyer multiplier', () => {

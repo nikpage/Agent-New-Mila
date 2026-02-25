@@ -235,7 +235,12 @@ export async function markActionsNotified(actionIds: string[]): Promise<void> {
  * Calculate priority score for an action
  *
  * Formula:
- * Total Priority Score = (V_adjusted × Urgency) + (Pain Factor × (Days Ignored + 1)²) + Weight
+ * 1. effectiveValue = dollarValue × offerMultiplier  (seller deals worth more)
+ * 2. normalizedValue = log-scale compress into ~1-34 range (low anchor→2, high anchor→13)
+ * 3. Total = (normalizedValue × urgency) + (painFactor × (daysIgnored + 1)²) + weight
+ *
+ * The log normalization keeps financial values comparable to urgency/pain (1-10 scale)
+ * instead of letting raw CZK values dominate all other factors.
  *
  * Zero handling: Any multiplier = 0 → replace with 1 to prevent score nullification
  */
@@ -246,7 +251,8 @@ export function calculatePriorityScore(params: {
   daysIgnored: number
   weight?: number
   offerMultiplier?: number
-  kcFactor?: number
+  kcLowValue?: number
+  kcHighValue?: number
 }): number {
   const {
     dollarValue,
@@ -255,18 +261,31 @@ export function calculatePriorityScore(params: {
     daysIgnored,
     weight = 0,
     offerMultiplier = 1,
-    kcFactor = 1,
+    kcLowValue = 500_000,
+    kcHighValue = 5_000_000,
   } = params
 
   const safeOfferMultiplier = offerMultiplier || 1
   const safeUrgency = urgency || 1
   const safePainFactor = painFactor || 1
   const safeWeight = weight || 0
-  const safeKcFactor = kcFactor || 1
+  const safeLow = kcLowValue > 0 ? kcLowValue : 500_000
+  const safeHigh = kcHighValue > safeLow ? kcHighValue : safeLow * 10
 
-  const normalizedValue = dollarValue / safeKcFactor
-  const adjustedValue = normalizedValue * safeOfferMultiplier
-  const valueComponent = adjustedValue * safeUrgency
+  // Apply offerMultiplier BEFORE log normalization
+  const effectiveValue = dollarValue * safeOfferMultiplier
+
+  // Log-scale normalization: lowValue→2, highValue→13, range clamped to [1, 34]
+  let normalizedValue = 0
+  if (effectiveValue > 0) {
+    const logLow = Math.log(safeLow)
+    const logHigh = Math.log(safeHigh)
+    const logVal = Math.log(effectiveValue)
+    normalizedValue = 2 + ((logVal - logLow) / (logHigh - logLow)) * 11
+    normalizedValue = Math.max(1, Math.min(34, normalizedValue))
+  }
+
+  const valueComponent = normalizedValue * safeUrgency
   const painComponent = safePainFactor * Math.pow(daysIgnored + 1, 2)
 
   return Math.round(valueComponent + painComponent + safeWeight)

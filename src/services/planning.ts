@@ -228,7 +228,8 @@ export async function generateActionProposal(
       painFactor: proposal.painFactor,
       daysIgnored,
       offerMultiplier,
-      kcFactor: settings.kc_factor,
+      kcLowValue: settings.kc_low_value,
+      kcHighValue: settings.kc_high_value,
       weight,
     })
 

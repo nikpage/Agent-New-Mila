@@ -102,7 +102,7 @@ The core anti-churn mechanism. Runs as Step 6 of every pipeline execution.
 4. For cooling/cold/dead leads:
    - Skips if there's already a pending action for that conversation
    - Skips if max auto follow-ups (3) already sent
-   - Applies `selectOfferMultiplier()` based on CP role (seller/buyer) and `kcFactor` from user settings
+   - Applies `selectOfferMultiplier()` based on CP role (seller/buyer) and `kcLowValue`/`kcHighValue` from user settings
    - Creates a REPLY action proposal with boosted priority score
    - Writes follow-up intent in Czech
 
@@ -168,19 +168,23 @@ When a new meeting conflicts with existing events:
 
 ## Priority Scoring
 
-**Formula:** `(dollarValue / kcFactor × offerMultiplier × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
+**Formula (log-scale normalization):**
+1. `effectiveValue = dollarValue × offerMultiplier` (seller deals worth more — applied BEFORE log)
+2. `normalizedValue = log-scale compress into [1, 34]` (kcLowValue→2, kcHighValue→13)
+3. `Total = (normalizedValue × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
 
 | Input | Scale | Source |
 |-------|-------|--------|
 | `dollarValue` | 0+ CZK | AI-assessed from conversation |
-| `kcFactor` | default 13 | `settings.kc_factor` — Fibonacci-based constant that normalizes raw CZK values so scores are comparable across deal sizes |
-| `offerMultiplier` | default 1 | User settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
+| `kcLowValue` | default 500000 | `settings.kc_low_value` — "small deal" anchor, maps to normalized score ~2 |
+| `kcHighValue` | default 5000000 | `settings.kc_high_value` — "big deal" anchor, maps to normalized score ~13 |
+| `offerMultiplier` | default 1 | Applied to raw value BEFORE log. User settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
 | `urgency` | 1-10 | AI-assessed |
 | `painFactor` | 1-10 | AI-assessed relationship pain |
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
 | `weight` | 0-100 | AI-assessed immovability (100 = legal deadline, 0 = flexible follow-up) |
 
-All multipliers fall back to 1 if 0/null to prevent score collapse. `kcFactor` falls back to 1 if 0/null to prevent division by zero.
+All multipliers fall back to 1 if 0/null to prevent score collapse. `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue.
 
 ## AI Architecture
 

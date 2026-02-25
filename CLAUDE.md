@@ -214,7 +214,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 | **Work Hours** | `working_hours_start`, `working_hours_end`, `working_days`, `timezone` | 9-17, Mon-Fri, Europe/Prague |
 | **Meetings** | `default_meeting_duration`, `default_meeting_type`, `meeting_buffer_minutes` | 30m, online, 15m |
 | **Travel** | `travel_mode`, `home_location`, `office_location` | driving |
-| **Priorities** | `offer_multiplier_seller`, `offer_multiplier_buyer`, `priority_multiplier_vip`, `kc_factor` | 1.5, 1.0, 2.0, 13 |
+| **Priorities** | `offer_multiplier_seller`, `offer_multiplier_buyer`, `priority_multiplier_vip`, `kc_low_value`, `kc_high_value` | 1.5, 1.0, 2.0, 500000, 5000000 |
 | **AI Persona** | `ai_tone_user`, `ai_tone_cp`, `user_alias` | Professional, Polite, "User" |
 | **Briefs** | `morning_brief_time`, `afternoon_brief_time` | 08:00, 13:00 |
 | **Misc** | `default_delegate_email`, `todo_auto_due_days` | null, 1 |
@@ -280,25 +280,31 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 ## Priority Scoring
 
-**Formula:** `(dollarValue / kcFactor × offerMultiplier × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
+**Formula (log-scale normalization):**
+1. `effectiveValue = dollarValue × offerMultiplier` (seller deals worth more — applied BEFORE log)
+2. `normalizedValue = log-scale compress into [1, 34]` (kcLowValue→2, kcHighValue→13)
+3. `Total = (normalizedValue × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
 
 **Implementation:** `src/lib/db/actions.ts` → `calculatePriorityScore()`
 
 | Input | Scale | Notes |
 |-------|-------|-------|
 | `dollarValue` | 0+ (CZK) | Deal/transaction value |
-| `kcFactor` | default 13 | Fibonacci-based normalization constant from `settings.kc_factor`. Divides raw dollar value so scores are comparable across deal size scales. |
-| `offerMultiplier` | default 1 | From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
+| `kcLowValue` | default 500000 | "Small deal" anchor from `settings.kc_low_value`. Maps to normalized score ~2. |
+| `kcHighValue` | default 5000000 | "Big deal" anchor from `settings.kc_high_value`. Maps to normalized score ~13. |
+| `offerMultiplier` | default 1 | Applied to raw value BEFORE log. From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
 | `urgency` | 1-10 | AI-assessed, safe default 1 |
 | `painFactor` | 1-10 | AI-assessed relationship pain, safe default 1 |
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
 | `weight` | 0-100 | AI-assessed immovability (100 = legal deadline, 0 = flexible). Set during proposal generation. |
 
-Safe defaults: `urgency`, `painFactor`, `offerMultiplier`, `kcFactor` fallback to 1 if 0/null (prevents score collapse / division by zero).
+**Normalization range:** Values below kcLowValue compress toward 1. Values between anchors map smoothly to 2-13. Values above kcHighValue extend toward 21-34 (headroom for outlier deals). Clamped at [1, 34]. This keeps financial values comparable to urgency/pain (1-10 scale) instead of letting raw CZK dominate.
 
-**DO NOT REMOVE OR CHANGE** the `kcFactor` normalization or `weight` wiring without explicit user permission. These were deliberately connected in Feb 2025 to fix scoring bugs where raw CZK values dominated all other factors and AI-assessed immovability was silently discarded.
+Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/null (prevents score collapse). `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue (falls back to kcLowValue × 10).
 
-**Wiring:** `planning.ts` passes `offerMultiplier` (from CP role), `kcFactor` (from user settings), and `weight` (from AI response) to `calculatePriorityScore()`. `lead-tracking.ts` also passes `offerMultiplier` and `kcFactor` for follow-up actions.
+**DO NOT REMOVE OR CHANGE** the log-scale normalization or `weight` wiring without explicit user permission. Log-scale replaced linear division (Feb 2025) to fix scoring where raw CZK values dominated all other factors.
+
+**Wiring:** `planning.ts` passes `offerMultiplier` (from CP role), `kcLowValue`/`kcHighValue` (from user settings), and `weight` (from AI response) to `calculatePriorityScore()`. `lead-tracking.ts` also passes `offerMultiplier` and `kcLowValue`/`kcHighValue` for follow-up actions.
 
 ## AI Model Configuration
 
@@ -542,7 +548,7 @@ Every API route rejects unauthenticated/bad requests. Catches: removed auth chec
 | `src/lib/auth/tokens.ts` | `tokens.test.ts` | 20 tests — HMAC round-trip, expiry, tampering, missing secret, malformed input. **Protects every approve/reject button in brief emails.** |
 | `src/services/agent.ts` | `agent.test.ts` | 12 tests — Lock acquire/release/fallback, user-not-found, no-credentials, fault isolation (`Promise.allSettled` not `Promise.all`) |
 | `src/services/planning.ts` | `planning.test.ts` | 11 tests — `validateDealType`: valid/invalid/hallucinated values, `selectOfferMultiplier`: seller/buyer/null role selection, `VALID_DEAL_TYPES`/`VALID_CP_ROLES` pinning, seller vs buyer priority score difference |
-| `src/lib/db/actions.ts` | `actions.test.ts` | 13 tests — `calculatePriorityScore` formula: zero-safety fallbacks, quadratic `daysIgnored` growth, multipliers, integer rounding, `kcFactor` normalization + zero-safety, `weight` wiring |
+| `src/lib/db/actions.ts` | `actions.test.ts` | 17 tests — `calculatePriorityScore` log-scale formula: zero-safety fallbacks, quadratic `daysIgnored` growth, offerMultiplier before log, anchor mapping (low→2, high→13), cap at 34, custom anchors, edge cases, urgent-small-beats-routine-big |
 | `src/services/ingestion.ts` | `ingestion.test.ts` | 8 tests — `isBlockedSender`: exact/prefix/domain/subaddress matching, false-positive prevention (`mynotifications` ≠ `notifications`) |
 | `src/config/client.ts` | `client.test.ts` | 10 tests — `containsHighValueSignals` + `isPersonalEvent`: keyword matching, case-insensitivity, empty inputs, empty keyword lists |
 | `src/lib/db/counterparties.ts` | `counterparties.test.ts` | 11 tests — `isSameGmailAddress`: dot/case-insensitive, domain dots, whitespace trimming; `normalizeGmailAddress`: lowercasing, dot stripping, idempotency, missing `@` |

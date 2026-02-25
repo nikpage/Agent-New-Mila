@@ -23,7 +23,8 @@ These settings are stored as a JSON object in the `users` table under the `setti
 | offer_multiplier_seller | Number | Priority boost for seller leads (e.g., 1.5) | 1.5 |
 | offer_multiplier_buyer | Number | Priority boost for buyer leads (e.g., 1.0) | 1.0 |
 | priority_multiplier_vip | Number | Priority boost for VIP contacts (e.g., 2.0) | 2.0 |
-| kc_factor | Number | Fibonacci-based constant that normalizes dollar values in priority scoring. Higher = less impact of raw CZK on score. (e.g., 13, 21) | 13 |
+| kc_low_value | Number | "Small deal" anchor for log-scale priority scoring. Maps to normalized score ~2. (e.g., 500000) | 500000 |
+| kc_high_value | Number | "Big deal" anchor for log-scale priority scoring. Maps to normalized score ~13. (e.g., 5000000) | 5000000 |
 | default_delegate_email | String | Email address to delegate tasks to | null |
 | todo_auto_due_days | Number | Default due date offset (days) | 1 |
 | ai_tone_user | String | Tone for messages to the user | "professional and concise" |
@@ -51,7 +52,8 @@ Copy and paste this into the `settings` column in Supabase to apply a custom con
   "offer_multiplier_seller": 2.0,
   "offer_multiplier_buyer": 1.2,
   "priority_multiplier_vip": 3.0,
-  "kc_factor": 21,
+  "kc_low_value": 1000000,
+  "kc_high_value": 10000000,
   "default_delegate_email": "assistant@agency.com",
   "todo_auto_due_days": 2,
   "ai_tone_user": "friendly and casual",

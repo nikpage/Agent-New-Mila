@@ -89,8 +89,12 @@ describe('DEFAULT_USER_SETTINGS — Full Snapshot', () => {
     expect(DEFAULT_USER_SETTINGS.priority_multiplier_vip).toBe(2.0)
   })
 
-  it('kc_factor = 13', () => {
-    expect(DEFAULT_USER_SETTINGS.kc_factor).toBe(13)
+  it('kc_low_value = 500000', () => {
+    expect(DEFAULT_USER_SETTINGS.kc_low_value).toBe(500_000)
+  })
+
+  it('kc_high_value = 5000000', () => {
+    expect(DEFAULT_USER_SETTINGS.kc_high_value).toBe(5_000_000)
   })
 
   // -------------------------------------------------------------------------
@@ -271,6 +275,6 @@ describe('DEFAULT_USER_SETTINGS — Full Snapshot', () => {
   it('has exactly the expected number of fields', () => {
     const fieldCount = Object.keys(DEFAULT_USER_SETTINGS).length
     // If you add a new field to UserSettings, add a test above AND update this count
-    expect(fieldCount).toBe(56)
+    expect(fieldCount).toBe(57)
   })
 })

@@ -136,8 +136,9 @@ His office is at Václavské náměstí 1, Praha 1.`,
     offerMultiplierBuyer: 1.0,
     /** Multiplier for VIP contacts */
     priorityMultiplierVip: 2.0,
-    /** Fibonacci-based scoring factor */
-    kcFactor: 13,
+    /** Log-scale scoring anchors (low→2, high→13) */
+    kcLowValue: 500_000,
+    kcHighValue: 5_000_000,
   },
 } as const
 

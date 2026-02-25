@@ -46,7 +46,8 @@ function makeSettings(overrides: Partial<UserSettings> = {}): UserSettings {
     offer_multiplier_seller: 1.5,
     offer_multiplier_buyer: 1.0,
     priority_multiplier_vip: 2.0,
-    kc_factor: 13,
+    kc_low_value: 500_000,
+    kc_high_value: 5_000_000,
     default_delegate_email: null,
     todo_auto_due_days: 1,
     // Lead management

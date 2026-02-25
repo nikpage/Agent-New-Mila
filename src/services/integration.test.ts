@@ -163,9 +163,15 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     expect(action!.queued_for_brief).toBe(true)
 
     // REAL priority score (not mocked 42!)
-    // Formula: (dollarValue/kcFactor * offerMultiplier * urgency) + (painFactor * (daysIgnored+1)²) + weight
-    // = (8500000/13 * 1.0 * 7) + (3 * 1) + 40 = 4576966 (with daysIgnored=0)
-    const expectedScore = Math.round((8500000 / 13 * 1.0 * 7) + (3 * Math.pow(0 + 1, 2)) + 40)
+    // Log-scale formula: offerMultiplier applied BEFORE log, then × urgency + pain + weight
+    // effectiveValue = 8500000 * 1.0 (buyer role) = 8500000
+    // logNorm = 2 + (log(8.5M) - log(500K)) / (log(5M) - log(500K)) * 11 ≈ 15.54
+    // valueComponent = 15.54 * 7 ≈ 108.76, painComponent = 3 * 1 = 3, weight = 40
+    const logLow = Math.log(500_000)
+    const logHigh = Math.log(5_000_000)
+    const logVal = Math.log(8_500_000)
+    const norm = Math.max(1, Math.min(34, 2 + ((logVal - logLow) / (logHigh - logLow)) * 11))
+    const expectedScore = Math.round(norm * 7 + 3 * Math.pow(0 + 1, 2) + 40)
     expect(action!.priority_score).toBe(expectedScore)
     expect(Number.isInteger(action!.priority_score)).toBe(true)
 

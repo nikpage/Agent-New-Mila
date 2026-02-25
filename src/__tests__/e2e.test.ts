@@ -146,7 +146,8 @@ describeE2E('E2E: Full Workflow Tests (100% live)', () => {
       const settings = user.settings as Record<string, unknown>
       expect(typeof settings.timezone).toBe('string')
       expect(typeof settings.working_hours_start).toBe('string')
-      expect(typeof settings.kc_factor).toBe('number')
+      expect(typeof settings.kc_low_value).toBe('number')
+      expect(typeof settings.kc_high_value).toBe('number')
     })
   })
 

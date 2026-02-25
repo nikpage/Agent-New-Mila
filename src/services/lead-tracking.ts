@@ -169,7 +169,8 @@ async function processConversationForLeadTracking(
     painFactor: status === 'dead' ? 9 : status === 'cold' ? 7 : 4,
     daysIgnored: daysSinceActivity,
     offerMultiplier,
-    kcFactor: settings.kc_factor,
+    kcLowValue: settings.kc_low_value,
+    kcHighValue: settings.kc_high_value,
   })
 
   // Apply lead-status boost

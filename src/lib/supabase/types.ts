@@ -642,7 +642,8 @@ export interface UserSettings {
   offer_multiplier_seller: number // default 1.5
   offer_multiplier_buyer: number  // default 1.0
   priority_multiplier_vip: number // default 2.0
-  kc_factor: number               // default 13 (Fibonacci)
+  kc_low_value: number             // default 500000 — "small deal" anchor, maps to score ~2
+  kc_high_value: number            // default 5000000 — "big deal" anchor, maps to score ~13
   default_delegate_email: string | null
 
   // Todo Settings
@@ -726,7 +727,8 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   offer_multiplier_seller: 1.5,
   offer_multiplier_buyer: 1.0,
   priority_multiplier_vip: 2.0,
-  kc_factor: 13,
+  kc_low_value: 500_000,
+  kc_high_value: 5_000_000,
   default_delegate_email: null,
 
   // Todo Settings
