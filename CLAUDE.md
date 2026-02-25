@@ -298,7 +298,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 | `daysIgnored` | 0+ | Days since last activity (squared growth) |
 | `weight` | 1-10 or 100 | How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable (court date, kids concert, airport pickup). No values between 10-100. |
 
-**Normalization range:** Values below kcLowValue compress toward 1. Values between anchors map smoothly to 2-13. Values above kcHighValue extend toward 21-34 (headroom for outlier deals). Clamped at [1, 34]. This keeps financial values comparable to urgency/pain (1-10 scale) instead of letting raw CZK dominate.
+**Normalization range:** No clamping. Values below kcLowValue go below 2 (can be negative for very small deals). Values between anchors map smoothly to 2-13. Values above kcHighValue extend beyond 13. The log scale naturally compresses extremes.
 
 Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/null (prevents score collapse). `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue (falls back to kcLowValue × 10).
 
@@ -548,7 +548,7 @@ Every API route rejects unauthenticated/bad requests. Catches: removed auth chec
 | `src/lib/auth/tokens.ts` | `tokens.test.ts` | 20 tests — HMAC round-trip, expiry, tampering, missing secret, malformed input. **Protects every approve/reject button in brief emails.** |
 | `src/services/agent.ts` | `agent.test.ts` | 12 tests — Lock acquire/release/fallback, user-not-found, no-credentials, fault isolation (`Promise.allSettled` not `Promise.all`) |
 | `src/services/planning.ts` | `planning.test.ts` | 11 tests — `validateDealType`: valid/invalid/hallucinated values, `selectOfferMultiplier`: seller/buyer/null role selection, `VALID_DEAL_TYPES`/`VALID_CP_ROLES` pinning, seller vs buyer priority score difference |
-| `src/lib/db/actions.ts` | `actions.test.ts` | 17 tests — `calculatePriorityScore` log-scale formula: zero-safety fallbacks, quadratic `daysIgnored` growth, offerMultiplier before log, anchor mapping (low→2, high→13), cap at 34, custom anchors, edge cases, urgent-small-beats-routine-big |
+| `src/lib/db/actions.ts` | `actions.test.ts` | 17 tests — `calculatePriorityScore` log-scale formula: zero-safety fallbacks, quadratic `daysIgnored` growth, offerMultiplier before log, anchor mapping (low→2, high→13), no clamping, custom anchors, edge cases, urgent-small-beats-routine-big |
 | `src/services/ingestion.ts` | `ingestion.test.ts` | 8 tests — `isBlockedSender`: exact/prefix/domain/subaddress matching, false-positive prevention (`mynotifications` ≠ `notifications`) |
 | `src/config/client.ts` | `client.test.ts` | 10 tests — `containsHighValueSignals` + `isPersonalEvent`: keyword matching, case-insensitivity, empty inputs, empty keyword lists |
 | `src/lib/db/counterparties.ts` | `counterparties.test.ts` | 11 tests — `isSameGmailAddress`: dot/case-insensitive, domain dots, whitespace trimming; `normalizeGmailAddress`: lowercasing, dot stripping, idempotency, missing `@` |

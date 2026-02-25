@@ -3,7 +3,7 @@ import { calculatePriorityScore } from './actions'
 
 /**
  * Log-scale normalization helper (mirrors the implementation)
- * effectiveValue = dollarValue * offerMultiplier → log compress to [1, 34]
+ * effectiveValue = dollarValue * offerMultiplier → log compress, no clamping
  * lowValue → 2, highValue → 13
  */
 function expectedLogNorm(effectiveValue: number, low = 500_000, high = 5_000_000): number {
@@ -11,8 +11,7 @@ function expectedLogNorm(effectiveValue: number, low = 500_000, high = 5_000_000
   const logLow = Math.log(low)
   const logHigh = Math.log(high)
   const logVal = Math.log(effectiveValue)
-  const raw = 2 + ((logVal - logLow) / (logHigh - logLow)) * 11
-  return Math.max(1, Math.min(34, raw))
+  return 2 + ((logVal - logLow) / (logHigh - logLow)) * 11
 }
 
 describe('calculatePriorityScore', () => {
@@ -169,7 +168,7 @@ describe('calculatePriorityScore', () => {
     expect(score).toBe(Math.round(13 * 1 + 1))
   })
 
-  it('values above high anchor extend beyond 13 but cap at 34', () => {
+  it('values above high anchor extend beyond 13 with no cap', () => {
     const bigDeal = calculatePriorityScore({
       dollarValue: 50_000_000,
       urgency: 1,
@@ -186,11 +185,13 @@ describe('calculatePriorityScore', () => {
     const norm50M = expectedLogNorm(50_000_000)
     expect(norm50M).toBeGreaterThan(13)
     expect(bigDeal).toBe(Math.round(norm50M + 1))
-    // Cap at 34 regardless of how large
-    expect(hugeDeal).toBe(Math.round(34 * 1 + 1))
+    // Huge deal scores even higher — no cap
+    const normHuge = expectedLogNorm(500_000_000_000)
+    expect(hugeDeal).toBe(Math.round(normHuge + 1))
+    expect(hugeDeal).toBeGreaterThan(bigDeal)
   })
 
-  it('values below low anchor compress toward 1', () => {
+  it('values below low anchor go below 2 with no floor', () => {
     const tinyDeal = calculatePriorityScore({
       dollarValue: 10_000,
       urgency: 1,
@@ -198,8 +199,8 @@ describe('calculatePriorityScore', () => {
       daysIgnored: 0,
     })
     const normTiny = expectedLogNorm(10_000)
-    expect(normTiny).toBeLessThan(2)
-    expect(normTiny).toBeGreaterThanOrEqual(1) // clamped at 1
+    // 10K is far below the 500K low anchor — normalizedValue goes negative
+    expect(normTiny).toBeLessThan(0)
     expect(tinyDeal).toBe(Math.round(normTiny + 1))
   })
 

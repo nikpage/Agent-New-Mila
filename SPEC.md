@@ -170,7 +170,7 @@ When a new meeting conflicts with existing events:
 
 **Formula (log-scale normalization):**
 1. `effectiveValue = dollarValue × offerMultiplier` (seller deals worth more — applied BEFORE log)
-2. `normalizedValue = log-scale compress into [1, 34]` (kcLowValue→2, kcHighValue→13)
+2. `normalizedValue = log-scale compress, no clamping` (kcLowValue→2, kcHighValue→13, below/above extends naturally)
 3. `Total = (normalizedValue × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
 
 | Input | Scale | Source |

@@ -275,14 +275,13 @@ export function calculatePriorityScore(params: {
   // Apply offerMultiplier BEFORE log normalization
   const effectiveValue = dollarValue * safeOfferMultiplier
 
-  // Log-scale normalization: lowValue→2, highValue→13, range clamped to [1, 34]
+  // Log-scale normalization: lowValue→2, highValue→13, no clamping
   let normalizedValue = 0
   if (effectiveValue > 0) {
     const logLow = Math.log(safeLow)
     const logHigh = Math.log(safeHigh)
     const logVal = Math.log(effectiveValue)
     normalizedValue = 2 + ((logVal - logLow) / (logHigh - logLow)) * 11
-    normalizedValue = Math.max(1, Math.min(34, normalizedValue))
   }
 
   const valueComponent = normalizedValue * safeUrgency
