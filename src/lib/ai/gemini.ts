@@ -63,6 +63,9 @@ export async function enrichMessage(
 
   const prompt = `${businessContext}Extract key information from this message. Output in CZECH. Only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text. Interpret terms in context of the business domain above — do NOT translate domain-specific words literally.
 
+VOICE: Refer to the email account owner as "vy" (you), never as "uživatel" (the user). The counterparty is referred to by name or as "protistrana".
+FORMATTING: Plain text only. No markdown, no ** bold **, no # headers.
+
 - Who's involved (all parties mentioned)
 - What property, subject matter, or topic
 - Message type (meeting request, question, offer, info, personal, admin, legal, update...)
@@ -108,12 +111,22 @@ CRITICAL — ROLE IDENTIFICATION:
 - Messages marked [inbound] are FROM THE COUNTERPARTY (external contact).
 - NEVER confuse who is who.
 
+CRITICAL — VOICE AND PERSPECTIVE:
+- You are Mila, the user's assistant. Address the user directly as "vy" (you).
+- NEVER refer to the user in 3rd person. NEVER write "uživatel" (the user). Write "vy" (you).
+- Example GOOD: "Čekáte na odpověď od protistrany" (You are waiting for a response)
+- Example BAD: "Uživatel čeká na odpověď" (The user is waiting)
+
+CRITICAL — FORMATTING:
+- Output PLAIN TEXT only. No markdown. No ** bold **. No * italic *. No # headers. No bullet markers.
+- Use commas and periods for structure, not formatting symbols.
+
 CONVERSATION:
 ${messageText}
 
 Respond with ONLY valid JSON in this exact format:
 {
-  "currentState": "Brief description of where this conversation/deal currently stands (in Czech)",
+  "currentState": "Brief description of where this conversation/deal currently stands (in Czech, addressing user as vy)",
   "risks": ["Risk 1 (in Czech)", "Risk 2 (in Czech)"],
   "nextSteps": ["Next step 1 (in Czech)", "Next step 2 (in Czech)"],
   "keyPoints": ["Key point 1 (in Czech)", "Key point 2 (in Czech)"],
@@ -213,6 +226,15 @@ CRITICAL - ACTION TYPE RULES:
 3. If the counterparty proposed a specific time → use SCHEDULE and fill suggestedTime.
 4. If the conversation implies any need for a physical meeting, even indirectly → use SCHEDULE.
 5. REPLY is ONLY for pure email responses with NO scheduling component whatsoever.
+
+CRITICAL - VOICE AND PERSPECTIVE:
+- You are Mila, the user's assistant. Address the user directly as "vy" (you).
+- NEVER refer to the user in 3rd person. NEVER write "uživatel" (the user). Write "vy" (you).
+- Example GOOD: "Zkontrolovala jsem váš kalendář" (I checked your calendar)
+- Example BAD: "Uživatel nahrál pas" (The user uploaded a passport)
+
+CRITICAL - FORMATTING:
+- Output PLAIN TEXT only. No markdown. No ** bold **. No * italic *. No # headers.
 
 CRITICAL - PROACTIVE INTENT RULES:
 intent_cs must describe what Mila HAS ALREADY DONE and what she WILL DO when user clicks UDĚLAT. Be maximally specific and concrete.
@@ -351,7 +373,7 @@ export async function generateBriefHeadline(
   console.log(`[AI:generateBriefHeadline] Running stage 'drafting'`)
   const eventsText = todayEvents.length > 0 ? todayEvents.map(e => `${e.time}: ${e.title}`).join('\n') : 'No meetings scheduled'
   const actionsText = pendingActions.sort((a, b) => b.urgency - a.urgency).slice(0, 5).map(a => `${a.type} for ${a.cpName} (urgency: ${a.urgency})`).join('\n')
-  const prompt = `Write a brief, personal executive assistant-style morning briefing headline (2-3 sentences) in CZECH.\n\nTODAY'S SCHEDULE:\n${eventsText}\n\nPENDING ACTIONS:\n${actionsText}\n\n${tomorrowHighlights ? `TOMORROW: ${tomorrowHighlights.join(', ')}` : ''}\n\nWrite as if you're a thoughtful executive assistant giving a quick morning status. Be warm but professional. Focus on what matters most today.`
+  const prompt = `Write a brief, personal executive assistant-style morning briefing headline (2-3 sentences) in CZECH. Address the user directly as "vy" (you). NEVER use "uživatel" (the user). No markdown, no ** bold **, no # headers. Plain text only.\n\nTODAY'S SCHEDULE:\n${eventsText}\n\nPENDING ACTIONS:\n${actionsText}\n\n${tomorrowHighlights ? `TOMORROW: ${tomorrowHighlights.join(', ')}` : ''}\n\nWrite as if you're a thoughtful executive assistant giving a quick morning status. Be warm but professional. Focus on what matters most today.`
   const text = await runAITask('drafting', prompt)
   return text.trim()
 }

@@ -11,10 +11,10 @@ export async function saveMessageEmbedding(
 
   const { error } = await supabase
     .from('message_embeddings')
-    .insert({
+    .upsert({
       message_id: messageId,
       embedding: embedding,
-    })
+    }, { onConflict: 'message_id' })
 
   if (error) {
     throw new Error(`Failed to save message embedding: ${error.message}`)
