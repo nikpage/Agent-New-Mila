@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { validateCronToken } from '@/lib/auth/tokens'
 import { publishBulkIngestStep } from '@/lib/qstash/client'
 import { fetchEmailsBatch } from '@/lib/google/gmail'
-import { probeAIAvailability } from '@/lib/ai/runner'
 import {
   processEmailBatch,
   phase2Thread,
@@ -52,7 +51,7 @@ export async function POST(request: NextRequest) {
     switch (step) {
       case 'phase1_inbox':
       case 'phase1_sent': {
-        await probeAIAvailability()
+
 
         const query = step === 'phase1_inbox'
           ? '-in:spam -in:trash -in:sent -in:draft'
@@ -131,7 +130,7 @@ export async function POST(request: NextRequest) {
       }
 
       case 'phase4': {
-        await probeAIAvailability()
+
         const logProgress = (p: Record<string, unknown>) =>
           console.log('[BulkIngest/Worker] Phase 4:', JSON.stringify(p))
         const p4 = await phase4Enrich(userId, logProgress, settings)

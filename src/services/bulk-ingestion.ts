@@ -27,7 +27,6 @@ import {
 } from '@/lib/google/gmail'
 import type { EmailMessage } from '@/lib/google/gmail'
 import { preFilterEmail, classifyEmail, enrichMessage } from '@/lib/ai/gemini'
-import { probeAIAvailability } from '@/lib/ai/runner'
 import { findOrCreateCP, isSameGmailAddress, normalizeGmailAddress, purgeUserAsCp } from '@/lib/db/counterparties'
 import { createMessage, messageExists, getUnprocessedMessages, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
@@ -686,9 +685,6 @@ export async function runBulkIngestion(
     },
     errors: [],
   }
-
-  // Probe AI availability once — skip Gemini for this run if it's geo-blocked
-  await probeAIAvailability()
 
   // Phase 1: Fetch & Store
   const p1 = await phase1FetchAndStore(userId, since, until, maxTotal, onProgress)

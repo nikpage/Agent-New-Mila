@@ -11,7 +11,6 @@ import { trackLeadsForUser } from './lead-tracking'
 import { getUnprocessedMessages } from '@/lib/db/messages'
 import { getUserById } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
-import { probeAIAvailability } from '@/lib/ai/runner'
 import type { ActionProposal } from '@/lib/supabase/types'
 
 export interface AgentRunResult {
@@ -91,9 +90,6 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       return result
     }
     console.log(`[Agent] Step 1: OK — user ${user.email || userId} verified`)
-
-    // Probe AI availability once — skip Gemini if it's geo-blocked
-    await probeAIAvailability()
 
     // Step 0: The user is NOT a counterparty. Purge any bad rows.
     try {

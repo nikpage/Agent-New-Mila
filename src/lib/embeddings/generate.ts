@@ -7,8 +7,6 @@
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai'
-import { isGeminiDisabled } from '@/lib/ai/runner'
-
 let genAI: GoogleGenerativeAI | null = null
 
 function getEmbeddingClient(): GoogleGenerativeAI {
@@ -152,9 +150,6 @@ function cleanWhatsAppText(text: string): string {
 // ─── Embedding Functions ────────────────────────────────────────────────────
 
 export async function generateEmbedding(text: string): Promise<number[]> {
-  if (isGeminiDisabled()) {
-    throw new Error('[Embeddings] Skipped — Gemini unavailable (geo-block or missing key)')
-  }
   console.log(`[Embeddings] Generating embedding via ${embeddings.model}`)
   const client = getEmbeddingClient()
   const model = client.getGenerativeModel({
