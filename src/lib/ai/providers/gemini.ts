@@ -19,13 +19,14 @@ function initClients(): GoogleGenerativeAI[] {
 
   const multiKeys = process.env.GEMINI_API_KEYS
   const keys = multiKeys
-    ? multiKeys.split(',').map(k => k.trim()).filter(Boolean)
+    ? multiKeys.split(',').map(k => k.replace(/\s/g, '')).filter(Boolean)
     : []
 
   if (keys.length === 0) {
     const singleKey = process.env.GEMINI_API_KEY
     if (!singleKey) throw new Error('GEMINI_API_KEY or GEMINI_API_KEYS not configured')
-    keys.push(singleKey)
+    const splitSingle = singleKey.split(',').map(k => k.replace(/\s/g, '')).filter(Boolean)
+    keys.push(...splitSingle)
   }
 
   clients = keys.map(key => new GoogleGenerativeAI(key))
