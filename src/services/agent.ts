@@ -11,7 +11,6 @@ import { trackLeadsForUser } from './lead-tracking'
 import { getUnprocessedMessages } from '@/lib/db/messages'
 import { getUserById } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
-import { tryAcquireUserLock, releaseUserLock } from '@/lib/db/locks'
 import { probeAIAvailability } from '@/lib/ai/runner'
 import type { ActionProposal } from '@/lib/supabase/types'
 
@@ -31,11 +30,6 @@ export interface AgentRunResult {
   errors: string[]
 }
 
-/**
- * In-memory fallback lock — used when the DB-based lock table doesn't exist yet.
- * Once the user_agent_locks migration has been applied, this is only reached
- * if the DB insert itself throws (network error, etc.).
- */
 const runningUsers = new Map<string, true>()
 
 /**
@@ -58,25 +52,6 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     errors: ['Skipped — concurrent run already in progress'],
   }
 
-  // --- Per-user concurrency guard (DB-level, works across Vercel instances) ---
-  let dbLockAcquired = false
-  let dbLockAvailable = true // false if the lock table doesn't exist yet
-
-  try {
-    dbLockAcquired = await tryAcquireUserLock(userId)
-  } catch {
-    // DB lock table may not exist yet — fall back to in-memory
-    dbLockAvailable = false
-    console.warn('[Agent] DB lock unavailable, falling back to in-memory lock')
-  }
-
-  if (!dbLockAcquired && dbLockAvailable) {
-    // DB lock exists but is held by another instance — skip
-    console.warn(`[Agent] Skipping — pipeline already running for ${userId} (cross-instance)`)
-    return emptyResult
-  }
-
-  // In-memory guard (primary lock when DB is unavailable, secondary when it is)
   if (runningUsers.has(userId)) {
     console.warn(`[Agent] Skipping — pipeline already running for ${userId}`)
     return emptyResult
@@ -230,13 +205,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     console.error('[Agent] Error:', error)
     result.errors.push(error instanceof Error ? error.message : 'Unknown error')
   } finally {
-    // Always release both locks
     runningUsers.delete(userId)
-    try {
-      await releaseUserLock(userId)
-    } catch {
-      console.error('[Agent] Failed to release DB lock for', userId)
-    }
   }
 
   return result
