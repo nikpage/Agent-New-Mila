@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server'
 import { validateBackfillToken } from '@/lib/auth/tokens'
 import { findOrCreateCP, blacklistCP, updateCP, getCPById } from '@/lib/db/counterparties'
-import { getConversationById } from '@/lib/db/conversations'
 import { generateActionsForConversations } from '@/services/planning'
-import { rebuildConversationSummary } from '@/services/threading'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import { VALID_CP_ROLES } from '@/lib/supabase/types'
 import { theme } from '@/config/theme'
+
+export const maxDuration = 60
 
 /**
  * Backfill report action handler.
@@ -76,16 +76,6 @@ export async function GET(request: NextRequest) {
             'Již přidáno do Mila',
             'Tato konverzace již byla přidána do procesu Mila. Uvidíte ji v příštím briefu.'
           )
-        }
-
-        // Ensure conversation has a summary — bulk ingestion doesn't generate them,
-        // but generateActionProposal needs summary_json to propose actions.
-        const conversation = await getConversationById(target)
-        if (!conversation) {
-          return htmlResponse('Konverzace nenalezena', 'Tato konverzace již neexistuje.', 404)
-        }
-        if (!conversation.summary_json) {
-          await rebuildConversationSummary(conversation)
         }
 
         const actions = await generateActionsForConversations([target])
