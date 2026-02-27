@@ -10,7 +10,6 @@ import { resolveProvider } from './providers'
 
 const MAX_RETRIES = 3
 
-/** Last successful AI call info — used by bulk ingestion to surface model/key in progress stream */
 let lastCallInfo: { stage: string; model: string } | null = null
 export function getLastAICallInfo(): { stage: string; model: string } | null { return lastCallInfo }
 

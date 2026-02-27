@@ -50,6 +50,9 @@ function getModel(modelName: string): { model: GenerativeModel; keyLabel: string
   return { model: cache.get(modelName)!, keyLabel: `Gemini-${idx + 1}` }
 }
 
+let lastKeyLabel: string | null = null
+export function getLastKeyLabel(): string | null { return lastKeyLabel }
+
 export const geminiProvider: AIProvider = {
   async generateContent(model: string, prompt: string, options?: AIGenerateOptions): Promise<string> {
     const { model: m, keyLabel } = getModel(model)
@@ -63,9 +66,6 @@ export const geminiProvider: AIProvider = {
   },
 }
 
-/** Last key label used — for per-call tracking in progress streams */
-let lastKeyLabel: string | null = null
-export function getLastKeyLabel(): string | null { return lastKeyLabel }
 
 /** Get key usage counts and reset. Call at end of worker step for summary logging. */
 export function getKeyUsageSummary(): string {

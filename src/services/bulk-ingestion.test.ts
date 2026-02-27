@@ -38,6 +38,13 @@ vi.mock('@/lib/ai/gemini', () => ({
 
 vi.mock('@/lib/ai/runner', () => ({
   runAITask: vi.fn(),
+  getLastAICallInfo: vi.fn().mockReturnValue(null),
+}))
+
+vi.mock('@/lib/ai/providers/gemini', () => ({
+  getLastKeyLabel: vi.fn().mockReturnValue(null),
+  getKeyUsageSummary: vi.fn().mockReturnValue('no Gemini calls'),
+  geminiProvider: {},
 }))
 
 vi.mock('@/lib/embeddings/generate', async (importOriginal) => {
