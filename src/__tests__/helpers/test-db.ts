@@ -104,16 +104,18 @@ export async function createTestConversation(overrides: Record<string, unknown> 
 }
 
 export async function createTestMessage(overrides: Record<string, unknown> = {}) {
+  const msgId = uuidv4()
   const { data, error } = await db()
     .from('messages')
     .insert({
-      id: uuidv4(),
+      id: msgId,
       user_id: TEST_USER_ID,
       direction: 'inbound',
       raw_text: 'Dobrý den, mám zájem o byt na Vinohradech za 8.5M CZK.',
       cleaned_text: 'Dobrý den, mám zájem o byt na Vinohradech za 8.5M CZK.',
       enriched_text: 'Zájemce: Jan Novák. Nemovitost: byt Vinohrady 3+kk. Cena: 8.5M CZK. Zájem o prohlídku.',
-      channel_id: 'email',
+      channel_id: null,
+      universal_message_id: msgId,
       tag_primary: 'inquiry',
       tag_secondary: 'high',
       timestamp: new Date().toISOString(),
@@ -128,6 +130,16 @@ export async function createTestMessage(overrides: Record<string, unknown> = {})
 }
 
 export async function createTestAction(overrides: Record<string, unknown> = {}) {
+  // Auto-create CP and conversation if not provided (FK constraints require them)
+  if (!overrides.cp_id) {
+    const cp = await createTestCP()
+    overrides = { ...overrides, cp_id: cp.id }
+  }
+  if (!overrides.conversation_id) {
+    const conv = await createTestConversation()
+    overrides = { ...overrides, conversation_id: conv.id }
+  }
+
   const { data, error } = await db()
     .from('action_proposals')
     .insert({

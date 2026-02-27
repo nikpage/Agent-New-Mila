@@ -289,7 +289,21 @@ export async function POST(
       return NextResponse.json({ success: true, message: 'Action completed' })
     }
 
-    // For other action types, just mark as completed
+    // TODO: user handles it themselves, just mark as completed
+    if (action.action_type === 'TODO') {
+      await completeAction(actionId)
+      return NextResponse.json({ success: true, message: 'Todo marked as done' })
+    }
+
+    // WAIT and ARCHIVE are internal states — not executable
+    if (action.action_type === 'WAIT' || action.action_type === 'ARCHIVE') {
+      return NextResponse.json(
+        { error: `Action type ${action.action_type} is not executable` },
+        { status: 400 }
+      )
+    }
+
+    // For any other action types, just mark as completed
     await completeAction(actionId)
     return NextResponse.json({ success: true, message: 'Action completed' })
 

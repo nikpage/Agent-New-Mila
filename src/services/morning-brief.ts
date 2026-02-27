@@ -58,8 +58,6 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     const briefActions: BriefAction[] = []
 
     for (const action of actions) {
-      if (briefActions.length >= 10) break
-
       const [cp, conversation] = await Promise.all([
         getCPById(action.cp_id),
         getConversationById(action.conversation_id),

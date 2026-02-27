@@ -8,11 +8,11 @@ import { theme } from '@/config/theme'
 // ─── Shared Constants ────────────────────────────────────────────────────────
 
 export const TYPE_LABEL: Record<string, string> = {
-  REPLY: 'Odpověď', SCHEDULE: 'Schůzka', WAIT: 'Čekat', FILE: 'Úkol', DELEGATE: 'Delegovat', CALL: 'Hovor',
+  REPLY: 'Odpověď', SCHEDULE: 'Schůzka', TODO: 'Úkol', WAIT: 'Čekat', ARCHIVE: 'Archiv',
 }
 
 export const TYPE_VARIANT: Record<string, 'accent' | 'warning' | 'success' | 'default'> = {
-  REPLY: 'accent', SCHEDULE: 'warning', WAIT: 'default', FILE: 'success', DELEGATE: 'warning', CALL: 'accent',
+  REPLY: 'accent', SCHEDULE: 'warning', TODO: 'success', WAIT: 'default', ARCHIVE: 'default',
 }
 
 // ─── Email Badge Colors ─────────────────────────────────────────────────────

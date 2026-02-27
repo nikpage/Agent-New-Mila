@@ -607,7 +607,7 @@ export type TodoInsert = Database['public']['Tables']['todos']['Insert']
 export type EventInsert = Database['public']['Tables']['events']['Insert']
 
 // Action types
-export type ActionType = 'REPLY' | 'SCHEDULE' | 'WAIT' | 'FILE' | 'DELEGATE'
+export type ActionType = 'REPLY' | 'SCHEDULE' | 'TODO' | 'WAIT' | 'ARCHIVE'
 export type ActionStatus = 'pending' | 'approved' | 'needs_revision' | 'completed' | 'dismissed'
 
 // Deal types — stored on conversation_threads.deal_type

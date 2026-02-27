@@ -37,7 +37,7 @@ vi.mock('@/lib/ai/gemini', () => ({
 }))
 
 vi.mock('@/lib/ai/runner', () => ({
-  probeAIAvailability: vi.fn().mockResolvedValue(undefined),
+  runAITask: vi.fn(),
 }))
 
 vi.mock('@/lib/embeddings/generate', async (importOriginal) => {

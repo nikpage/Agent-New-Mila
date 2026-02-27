@@ -78,6 +78,7 @@ export async function getPendingActionsForBrief(userId: string): Promise<ActionP
     .select('*')
     .eq('user_id', userId)
     .eq('status', 'pending')
+    .in('action_type', ['REPLY', 'SCHEDULE', 'TODO'])
     .order('priority_score', { ascending: false })
 
   if (error) {

@@ -37,14 +37,20 @@ Concurrency: The pipeline uses a **DB-level lock** (`user_agent_locks` table) to
 
 ### Action Types
 
+**User-facing actions** (surface in morning brief for approval):
+
 | Type | What Mila Does |
 |------|----------------|
 | **REPLY** | Prepares a draft email/WhatsApp response. User clicks APPROVE or EDIT, then Mila sends. |
 | **SCHEDULE** | Finds free calendar slots, blocks them in user's calendar, prepares email offering times to counterparty. |
-| **WAIT** | Flags the conversation as "no action needed now" with a reason. |
-| **FILE** | Archives — conversation requires no response. |
-| **TODO** | Creates a to-do item with optional due date. |
-| **DELEGATE** | Forwards to a delegate (e.g., assistant) with context. |
+| **TODO** | Something the user needs to do themselves (call lawyer, write proposal, plan photoshoot). Mila describes what needs doing — no draft. |
+
+**Internal states** (not shown to user, no action needed):
+
+| Type | What Mila Does |
+|------|----------------|
+| **WAIT** | Flags the conversation as "no action needed now" — Mila keeps watching. |
+| **ARCHIVE** | Conversation is finished — no response needed, nothing to watch. |
 
 ### Draft Generation
 

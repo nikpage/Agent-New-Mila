@@ -47,9 +47,7 @@ vi.mock('@/lib/ai/gemini', () => ({
 }))
 
 vi.mock('@/lib/ai/runner', () => ({
-  probeAIAvailability: vi.fn(),
   runAITask: vi.fn(),
-  isGeminiDisabled: vi.fn().mockReturnValue(false),
 }))
 
 vi.mock('@/lib/embeddings/generate', async (importOriginal) => {
@@ -269,7 +267,7 @@ describe.skipIf(!HAS_DB)('Integration: Morning Brief workflow (real DB)', () => 
     expect(emailArgs.htmlBody).toContain('Dobré ráno')
 
     // Real action tokens are verifiable
-    const tokenMatch = emailArgs.htmlBody.match(/token=([^&"]+)/)
+    const tokenMatch = emailArgs.htmlBody!.match(/token=([^&"]+)/)
     expect(tokenMatch).not.toBeNull()
     const token = tokenMatch![1]
     const validated = validateActionToken(token, action.id, TEST_USER_ID)
@@ -306,7 +304,7 @@ describe.skipIf(!HAS_DB)('Integration: Morning Brief workflow (real DB)', () => 
     expect(sendEmail).not.toHaveBeenCalled()
   })
 
-  it('caps at 10 actions per brief', async () => {
+  it('sends all actions without cap', async () => {
     const { sendMorningBrief } = await import('./morning-brief')
 
     const cp = await createTestCP()
@@ -326,7 +324,7 @@ describe.skipIf(!HAS_DB)('Integration: Morning Brief workflow (real DB)', () => 
     expect(result).toBe(true)
     expect(sendEmail).toHaveBeenCalledOnce()
     const [, emailArgs] = vi.mocked(sendEmail).mock.calls[0]
-    expect(emailArgs.subject).toContain('10')
+    expect(emailArgs.subject).toContain('15')
   })
 
   it('uses afternoon greeting for afternoon brief type', async () => {
@@ -376,6 +374,7 @@ describe.skipIf(!HAS_DB)('Integration: Bulk Ingestion pipeline (real DB)', () =>
         id: 'email-1', from: 'Jan Novák <jan@example.com>', to: [TEST_USER_EMAIL],
         subject: 'Zájem o byt', body: 'Mám zájem o byt na Vinohradech.',
         date: new Date('2025-01-15'), threadId: 'thread-1', labels: ['INBOX'],
+        isUnread: true,
       }])
       .mockResolvedValueOnce([]) // no sent emails
 
@@ -400,6 +399,7 @@ describe.skipIf(!HAS_DB)('Integration: Bulk Ingestion pipeline (real DB)', () =>
         id: 'blocked-1', from: 'noreply@google.com', to: [TEST_USER_EMAIL],
         subject: 'Notification', body: 'Automated', date: new Date('2025-01-15'),
         threadId: 'thread-blocked', labels: ['INBOX'],
+        isUnread: true,
       }])
       .mockResolvedValueOnce([])
 
@@ -417,6 +417,7 @@ describe.skipIf(!HAS_DB)('Integration: Bulk Ingestion pipeline (real DB)', () =>
         id: 'promo-1', from: 'shop@store.com', to: [TEST_USER_EMAIL],
         subject: '50% off!', body: 'Buy now', date: new Date('2025-01-15'),
         threadId: 'thread-promo', labels: ['INBOX', 'CATEGORY_PROMOTIONS'],
+        isUnread: true,
       }])
       .mockResolvedValueOnce([])
 
@@ -431,8 +432,8 @@ describe.skipIf(!HAS_DB)('Integration: Bulk Ingestion pipeline (real DB)', () =>
 
     vi.mocked(fetchEmailsPaginated)
       .mockResolvedValueOnce([
-        { id: 'ok-1', from: 'jan@example.com', to: [TEST_USER_EMAIL], subject: 'A', body: 'Good email', date: new Date('2025-01-15'), threadId: 't1', labels: ['INBOX'] },
-        { id: 'fail-1', from: 'petr@example.com', to: [TEST_USER_EMAIL], subject: 'B', body: 'Another', date: new Date('2025-01-16'), threadId: 't2', labels: ['INBOX'] },
+        { id: 'ok-1', from: 'jan@example.com', to: [TEST_USER_EMAIL], subject: 'A', body: 'Good email', date: new Date('2025-01-15'), threadId: 't1', labels: ['INBOX'], isUnread: true },
+        { id: 'fail-1', from: 'petr@example.com', to: [TEST_USER_EMAIL], subject: 'B', body: 'Another', date: new Date('2025-01-16'), threadId: 't2', labels: ['INBOX'], isUnread: true },
       ])
       .mockResolvedValueOnce([])
 
@@ -478,6 +479,7 @@ describe.skipIf(!HAS_DB)('Integration: Ingestion → Threading flow (real DB)', 
       id: 'gmail-1', from: 'Jan Novák <jan@example.com>', to: [TEST_USER_EMAIL],
       subject: 'Zájem o byt', body: 'Mám zájem o byt.', date: new Date(),
       threadId: 'thread-1', labels: ['INBOX', 'UNREAD'],
+      isUnread: true,
     }])
 
     const results = await ingestEmailsForUser(TEST_USER_ID)
@@ -507,6 +509,7 @@ describe.skipIf(!HAS_DB)('Integration: Ingestion → Threading flow (real DB)', 
       id: 'noreply-1', from: 'noreply@google.com', to: [TEST_USER_EMAIL],
       subject: 'Security alert', body: 'Someone signed in', date: new Date(),
       threadId: 'thread-nr', labels: ['INBOX'],
+      isUnread: true,
     }])
 
     const results = await ingestEmailsForUser(TEST_USER_ID)
@@ -523,6 +526,7 @@ describe.skipIf(!HAS_DB)('Integration: Ingestion → Threading flow (real DB)', 
       id: 'dup-1', from: 'jan@example.com', to: [TEST_USER_EMAIL],
       subject: 'Test', body: 'Body', date: new Date(),
       threadId: 'thread-dup', labels: ['INBOX'],
+      isUnread: true,
     }])
     await ingestEmailsForUser(TEST_USER_ID)
 
@@ -535,6 +539,7 @@ describe.skipIf(!HAS_DB)('Integration: Ingestion → Threading flow (real DB)', 
       id: 'dup-1', from: 'jan@example.com', to: [TEST_USER_EMAIL],
       subject: 'Test', body: 'Body', date: new Date(),
       threadId: 'thread-dup', labels: ['INBOX'],
+      isUnread: true,
     }])
 
     const results2 = await ingestEmailsForUser(TEST_USER_ID)
