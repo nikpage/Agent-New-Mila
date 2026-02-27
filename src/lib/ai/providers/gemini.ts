@@ -58,9 +58,14 @@ export const geminiProvider: AIProvider = {
       generationConfig: options?.temperature !== undefined ? { temperature: options.temperature } : undefined,
     })
     keyUsage.set(keyLabel, (keyUsage.get(keyLabel) || 0) + 1)
+    lastKeyLabel = keyLabel
     return result.response.text()
   },
 }
+
+/** Last key label used — for per-call tracking in progress streams */
+let lastKeyLabel: string | null = null
+export function getLastKeyLabel(): string | null { return lastKeyLabel }
 
 /** Get key usage counts and reset. Call at end of worker step for summary logging. */
 export function getKeyUsageSummary(): string {

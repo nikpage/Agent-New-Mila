@@ -33,6 +33,8 @@ import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
 import { cleanMessageText, generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
+import { getLastAICallInfo } from '@/lib/ai/runner'
+import { getLastKeyLabel } from '@/lib/ai/providers/gemini'
 import { isBlockedSender } from './ingestion'
 import { processMessagesForThreading } from './threading'
 import { generateAndSendBackfillReport } from './backfill-report'
@@ -160,10 +162,12 @@ export async function processEmailBatch(
 
       try {
         const filter = await preFilterEmail(email.subject, email.body, email.from)
+        const pfModel = getLastAICallInfo()?.model ?? null
+        const pfKey = getLastKeyLabel()
         if (!filter.relevant) {
           stats.skippedPreFilter++
           trackFilteredSender(filteredSenders, cpEmail, cpName, 'Automatický / nerelevantní')
-          console.log(`[BulkIngest] [${i + 1}/${totalEmails}] SKIP pre-filter: ${email.id} from ${cpEmail}`)
+          console.log(`[BulkIngest] [${i + 1}/${totalEmails}] SKIP pre-filter: ${email.id} from ${cpEmail} model=${pfModel} key=${pfKey}`)
           continue
         }
       } catch (error) {
@@ -194,8 +198,12 @@ export async function processEmailBatch(
       stats.stored++
 
       // Enrich message: extract key info, save enriched text, embed it
+      let enrModel: string | null = null
+      let enrKey: string | null = null
       try {
         const enrichedText = await enrichMessage(cleanedText, 'email', direction as 'inbound' | 'outbound', undefined, settings ?? undefined)
+        enrModel = getLastAICallInfo()?.model ?? null
+        enrKey = getLastKeyLabel()
         await updateMessage(messageId, { enriched_text: enrichedText })
 
         const embedding = await generateMessageEmbedding(enrichedText, 'email')
@@ -206,7 +214,7 @@ export async function processEmailBatch(
         console.error(`[BulkIngest] [${i + 1}/${totalEmails}] Enrichment failed for ${messageId}:`, enrichError)
       }
 
-      console.log(`[BulkIngest] [${i + 1}/${totalEmails}] ${direction} ${email.id} → stored=${stats.stored} enriched=${stats.enriched} failed=${stats.enrichmentFailed} skipped=${stats.skippedCategory + stats.skippedBlocked + stats.skippedPreFilter + stats.skippedDuplicate}`)
+      console.log(`[BulkIngest] [${i + 1}/${totalEmails}] ${direction} ${email.id} → stored=${stats.stored} enriched=${stats.enriched} failed=${stats.enrichmentFailed} skipped=${stats.skippedCategory + stats.skippedBlocked + stats.skippedPreFilter + stats.skippedDuplicate} enrich=${enrModel}/${enrKey}`)
     } catch (error) {
       console.error(`[BulkIngest] [${i + 1}/${totalEmails}] Error processing email ${email.id}:`, error)
       errors.push(`Email ${email.id}: ${error instanceof Error ? error.message : 'Unknown'}`)
@@ -369,11 +377,21 @@ async function phase1FetchAndStore(
       }
 
       // Pre-filter (cheap AI call)
+      let preFilterModel: string | null = null
+      let preFilterKey: string | null = null
       try {
         const filter = await preFilterEmail(email.subject, email.body, email.from)
+        preFilterModel = getLastAICallInfo()?.model ?? null
+        preFilterKey = getLastKeyLabel()
         if (!filter.relevant) {
           stats.skippedPreFilter++
           trackFiltered(cpEmail, cpName, 'Automatický / nerelevantní')
+          onProgress({
+            phase: 1, step: 'skip_prefilter', processed: i + 1, total: allEmails.length,
+            email: email.id, cp: cpEmail, direction, model: preFilterModel, key: preFilterKey,
+            stored: stats.stored, enriched: stats.enriched, enrichFailed: stats.enrichmentFailed,
+            skipped: stats.skippedCategory + stats.skippedBlocked + stats.skippedPreFilter + stats.skippedDuplicate,
+          })
           continue
         }
       } catch (error) {
@@ -407,9 +425,13 @@ async function phase1FetchAndStore(
       stats.stored++
 
       // Enrich message: extract key info, save enriched text, embed it
+      let enrichModel: string | null = null
+      let enrichKey: string | null = null
       try {
         const cleanedText = cleanMessageText(email.body, 'email')
         const enrichedText = await enrichMessage(cleanedText, 'email', direction as 'inbound' | 'outbound', undefined, settings ?? undefined)
+        enrichModel = getLastAICallInfo()?.model ?? null
+        enrichKey = getLastKeyLabel()
         await updateMessage(messageId, { enriched_text: enrichedText })
 
         const embedding = await generateMessageEmbedding(enrichedText, 'email')
@@ -420,17 +442,15 @@ async function phase1FetchAndStore(
         console.error(`[BulkIngest] Enrichment failed for ${messageId}:`, error)
       }
 
-      // Stream progress every 5 emails
-      if ((i + 1) % 5 === 0 || i === allEmails.length - 1) {
-        onProgress({
-          phase: 1,
-          step: 'storing',
-          processed: i + 1,
-          total: allEmails.length,
-          stored: stats.stored,
-          skipped: stats.skippedCategory + stats.skippedBlocked + stats.skippedPreFilter + stats.skippedDuplicate,
-        })
-      }
+      // Stream progress for EVERY email
+      onProgress({
+        phase: 1, step: 'stored', processed: i + 1, total: allEmails.length,
+        email: email.id, cp: cpEmail, direction,
+        preFilter: { model: preFilterModel, key: preFilterKey },
+        enrich: { model: enrichModel, key: enrichKey },
+        stored: stats.stored, enriched: stats.enriched, enrichFailed: stats.enrichmentFailed,
+        skipped: stats.skippedCategory + stats.skippedBlocked + stats.skippedPreFilter + stats.skippedDuplicate,
+      })
     } catch (error) {
       console.error(`[BulkIngest] Error processing email ${email.id}:`, error)
       stats.errors.push(`Email ${email.id}: ${error instanceof Error ? error.message : 'Unknown'}`)
@@ -574,11 +594,17 @@ export async function phase4Enrich(
 
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i]
+    let clsModel: string | null = null
+    let clsKey: string | null = null
+    let enrichModel: string | null = null
+    let enrichKey: string | null = null
     try {
       const bodyText = msg.raw_text || msg.cleaned_text || ''
 
       // Classify the email (subject/from not stored separately — body is the primary signal)
       const classification = await classifyEmail('', bodyText, '')
+      clsModel = getLastAICallInfo()?.model ?? null
+      clsKey = getLastKeyLabel()
 
       // Update message with classification results (replaces 'bulk_import' tag)
       await updateMessage(msg.id, {
@@ -592,6 +618,8 @@ export async function phase4Enrich(
         try {
           const direction = (msg.direction as 'inbound' | 'outbound') || 'inbound'
           enrichedText = await enrichMessage(bodyText, 'email', direction, undefined, settings ?? undefined)
+          enrichModel = getLastAICallInfo()?.model ?? null
+          enrichKey = getLastKeyLabel()
           await updateMessage(msg.id, { enriched_text: enrichedText })
         } catch (enrichErr) {
           console.error(`[BulkIngest] Phase 4: enrichMessage failed for ${msg.id}:`, enrichErr)
@@ -607,7 +635,6 @@ export async function phase4Enrich(
         }
       } catch (embError) {
         console.error(`[BulkIngest] Phase 4: Embedding failed for ${msg.id}:`, embError)
-        // Embedding failure is non-fatal — classification still succeeded
       }
 
       result.enriched++
@@ -621,17 +648,14 @@ export async function phase4Enrich(
       result.errors.push(`Enrich ${msg.id}: ${error instanceof Error ? error.message : 'Unknown'}`)
     }
 
-    // Stream progress every 5 messages
-    if ((i + 1) % 5 === 0 || i === messages.length - 1) {
-      onProgress({
-        phase: 4,
-        step: 'enriching',
-        processed: i + 1,
-        total: messages.length,
-        enriched: result.enriched,
-        enrichmentFailed: result.enrichmentFailed,
-      })
-    }
+    // Stream progress for EVERY message
+    onProgress({
+      phase: 4, step: 'enriching', processed: i + 1, total: messages.length,
+      msgId: msg.id,
+      classify: { model: clsModel, key: clsKey },
+      enrich: { model: enrichModel, key: enrichKey },
+      enriched: result.enriched, enrichmentFailed: result.enrichmentFailed,
+    })
   }
 
   console.log(`\n[BulkIngest] Phase 4 complete:`)

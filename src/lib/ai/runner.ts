@@ -10,6 +10,10 @@ import { resolveProvider } from './providers'
 
 const MAX_RETRIES = 3
 
+/** Last successful AI call info — used by bulk ingestion to surface model/key in progress stream */
+let lastCallInfo: { stage: string; model: string } | null = null
+export function getLastAICallInfo(): { stage: string; model: string } | null { return lastCallInfo }
+
 function isRetryableError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   const msg = error.message.toLowerCase()
@@ -26,6 +30,7 @@ export async function runAITask(stage: AIStage, prompt: string): Promise<string>
       try {
         const provider = resolveProvider(models[i])
         const result = await provider.generateContent(models[i], prompt, options)
+        lastCallInfo = { stage, model: models[i] }
         console.log(`[AI] ${stage} → ${models[i]}`)
         return result
       } catch (error) {
