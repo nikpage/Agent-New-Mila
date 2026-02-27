@@ -31,7 +31,7 @@ export async function runAITask(stage: AIStage, prompt: string): Promise<string>
       } catch (error) {
         if (isRetryableError(error) && retry < MAX_RETRIES) {
           const delay = Math.pow(2, retry) * 1000 // 1s, 2s, 4s
-          console.warn(`[AI] ${stage} rate-limited on ${models[i]}, retry ${retry + 1}/${MAX_RETRIES} in ${delay}ms`)
+          console.warn(`[AI] ${stage} retrying ${models[i]} (${retry + 1}/${MAX_RETRIES}) in ${delay}ms`)
           await new Promise(resolve => setTimeout(resolve, delay))
           continue
         }

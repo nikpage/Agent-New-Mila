@@ -11,8 +11,9 @@ import { GoogleGenerativeAI, type GenerativeModel } from '@google/generative-ai'
 import type { AIProvider, AIGenerateOptions } from './types'
 
 let clients: GoogleGenerativeAI[] = []
-let callIndex = 0
+let callIndex = Math.floor(Math.random() * 1000)
 const modelCaches = new Map<number, Map<string, GenerativeModel>>()
+const keyUsage = new Map<string, number>()
 
 function initClients(): GoogleGenerativeAI[] {
   if (clients.length > 0) return clients
@@ -56,7 +57,17 @@ export const geminiProvider: AIProvider = {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: options?.temperature !== undefined ? { temperature: options.temperature } : undefined,
     })
-    console.log(`[Gemini] ${keyLabel} → ${model}`)
+    keyUsage.set(keyLabel, (keyUsage.get(keyLabel) || 0) + 1)
     return result.response.text()
   },
+}
+
+/** Get key usage counts and reset. Call at end of worker step for summary logging. */
+export function getKeyUsageSummary(): string {
+  if (keyUsage.size === 0) return 'no Gemini calls'
+  const parts = Array.from(keyUsage.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([label, count]) => `${label}=${count}`)
+  keyUsage.clear()
+  return parts.join(' ')
 }

@@ -11,6 +11,7 @@ import {
 } from '@/services/bulk-ingestion'
 import { generateAndSendBackfillReport } from '@/services/backfill-report'
 import { getUserSettings } from '@/lib/db/users'
+import { getKeyUsageSummary } from '@/lib/ai/providers/gemini'
 
 export const maxDuration = 300
 
@@ -89,7 +90,7 @@ export async function POST(request: NextRequest) {
           settings,
         )
 
-        console.log(`[BulkIngest/Worker] ${step}: batch=${batchEmails.length}, stored=${job.phase1Stats.stored}, enriched=${job.phase1Stats.enriched}, enrichFailed=${job.phase1Stats.enrichmentFailed}, skipped=${job.phase1Stats.skippedCategory + job.phase1Stats.skippedBlocked + job.phase1Stats.skippedPreFilter + job.phase1Stats.skippedDuplicate}, totalFetched=${job[totalFetchedKey]}`)
+        console.log(`[BulkIngest/Worker] ${step}: batch=${batchEmails.length}, stored=${job.phase1Stats.stored}, enriched=${job.phase1Stats.enriched}, enrichFailed=${job.phase1Stats.enrichmentFailed}, skipped=${job.phase1Stats.skippedCategory + job.phase1Stats.skippedBlocked + job.phase1Stats.skippedPreFilter + job.phase1Stats.skippedDuplicate}, totalFetched=${job[totalFetchedKey]}, keys=[${getKeyUsageSummary()}]`)
 
         const newRemaining = job.maxTotal - job[totalFetchedKey]
         if (batchResult.nextPageToken && newRemaining > 0) {
@@ -108,7 +109,7 @@ export async function POST(request: NextRequest) {
         const logProgress = (p: Record<string, unknown>) =>
           console.log('[BulkIngest/Worker] Phase 2:', JSON.stringify(p))
         const p2 = await phase2Thread(userId, logProgress)
-        console.log(`[BulkIngest/Worker] Phase 2 complete: ${p2.messagesProcessed} msgs, ${p2.conversationsCreated} convs`)
+        console.log(`[BulkIngest/Worker] Phase 2 complete: ${p2.messagesProcessed} msgs, ${p2.conversationsCreated} convs, keys=[${getKeyUsageSummary()}]`)
 
         await publishBulkIngestStep({ ...job, step: 'phase3' })
         return NextResponse.json({ ok: true, next: 'phase3' })
@@ -134,7 +135,7 @@ export async function POST(request: NextRequest) {
         const logProgress = (p: Record<string, unknown>) =>
           console.log('[BulkIngest/Worker] Phase 4:', JSON.stringify(p))
         const p4 = await phase4Enrich(userId, logProgress, settings)
-        console.log(`[BulkIngest/Worker] Phase 4 complete: ${p4.enriched} enriched, ${p4.enrichmentFailed} failed`)
+        console.log(`[BulkIngest/Worker] Phase 4 complete: ${p4.enriched} enriched, ${p4.enrichmentFailed} failed, keys=[${getKeyUsageSummary()}]`)
 
         return NextResponse.json({ ok: true, done: true, enriched: p4.enriched })
       }
