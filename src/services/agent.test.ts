@@ -50,6 +50,16 @@ vi.mock('@/lib/db/counterparties', () => ({
   purgeUserAsCp: vi.fn().mockResolvedValue(0),
 }))
 
+vi.mock('@/lib/db/conversations', () => ({
+  getConversationsForUser: vi.fn().mockResolvedValue([]),
+}))
+
+vi.mock('@/lib/supabase/client', () => ({
+  getSupabaseAdmin: vi.fn().mockReturnValue({
+    from: () => ({ update: () => ({ in: () => ({ data: null, error: null }) }) }),
+  }),
+}))
+
 import { runAgentForUser } from './agent'
 import { ingestEmailsForUser, ingestOutboundEmails } from './ingestion'
 import { ingestCalendarEvents } from './calendar-ingestion'

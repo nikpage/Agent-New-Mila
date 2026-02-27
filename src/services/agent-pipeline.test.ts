@@ -70,7 +70,13 @@ vi.mock('@/lib/google/gmail', () => ({
 
 vi.mock('@/lib/google/calendar', () => ({
   listCalendarEvents: vi.fn().mockResolvedValue([]),
+  getUpcomingCalendarEvents: vi.fn().mockResolvedValue([]),
+  getPendingInvitations: vi.fn().mockResolvedValue([]),
+  isIncomingInvitation: vi.fn().mockReturnValue(false),
   createCalendarEvent: vi.fn().mockResolvedValue({}),
+  confirmCalendarEvent: vi.fn().mockResolvedValue(undefined),
+  deleteCalendarEvent: vi.fn().mockResolvedValue(undefined),
+  MILA_MANAGED_KEY: 'milaManaged',
 }))
 
 vi.mock('@/lib/google/auth', () => ({

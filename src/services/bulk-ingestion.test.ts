@@ -34,6 +34,19 @@ vi.mock('@/lib/ai/gemini', () => ({
     priority: 'medium',
   }),
   enrichMessage: vi.fn().mockResolvedValue('Enriched: key facts extracted'),
+  extractTopic: vi.fn().mockResolvedValue('Test topic'),
+  analyzeConversation: vi.fn().mockResolvedValue({
+    currentState: 'Active', nextSteps: ['Reply'], keyPoints: ['Key'],
+    risks: [], confidence: 0.8, confidenceReason: 'Test', dealType: null,
+  }),
+  shouldJoinConversation: vi.fn().mockResolvedValue(false),
+  proposeAction: vi.fn().mockResolvedValue({
+    actionType: 'WAIT', rationale_cs: 'Test', intent_cs: null,
+    missingInfo: [], dollarValue: 0, urgency: 1, painFactor: 1,
+    weight: 1, dealType: null,
+  }),
+  generateFinalDraft: vi.fn().mockResolvedValue({ subject: 'Test', body: 'Test' }),
+  generateBriefHeadline: vi.fn().mockResolvedValue('Test headline'),
 }))
 
 vi.mock('@/lib/ai/runner', () => ({

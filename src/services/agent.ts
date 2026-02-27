@@ -86,7 +86,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       return result
     }
 
-    if (!user.google_oauth_tokens) {
+    if (!user.google_oauth_tokens && !user.encrypted_google_tokens) {
       console.log(`[Agent] Step 1: FAILED — no Google credentials`)
       result.errors.push('User has no Google credentials')
       return result

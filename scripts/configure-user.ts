@@ -205,6 +205,13 @@ async function main() {
 
   console.log(`\nFound user: ${user.email}`)
 
+  // Warn if OAuth not completed yet
+  if (!user.google_oauth_tokens && !user.encrypted_google_tokens) {
+    console.warn('\n⚠ WARNING: This user has NOT completed Google OAuth yet.')
+    console.warn('  The agent will not work until the user visits /auth/connect and grants access.')
+    console.warn('  You can still configure settings now — just complete OAuth before running the agent.\n')
+  }
+
   // Load existing settings (with defaults applied)
   const existing = await getUserSettings(userId)
 
@@ -284,7 +291,8 @@ async function main() {
       console.error('You can set them up manually later or re-run this script.')
     }
   } else {
-    console.log('\nSkipping QStash schedule setup (QSTASH_TOKEN not set).')
+    console.warn('\n⚠ QSTASH_TOKEN not set — morning/afternoon briefs will NOT be sent automatically.')
+    console.warn('  Set QSTASH_TOKEN in .env.local and re-run this script to enable briefs.')
   }
 
   console.log(`\nUser ${user.email} (${userId}) is now configured.`)

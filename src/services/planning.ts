@@ -327,5 +327,24 @@ export async function regenerateDraft(
   actionId: string,
   userIntent: string
 ): Promise<{ subject: string; body: string }> {
-  return { subject: '', body: '' }
+  const action = await import('@/lib/db/actions').then(m => m.getActionById(actionId))
+  if (!action) throw new Error(`Action ${actionId} not found`)
+
+  const conversation = await getConversationById(action.conversation_id)
+  if (!conversation) throw new Error(`Conversation ${action.conversation_id} not found`)
+
+  const cp = await getCPById(action.cp_id)
+  const settings = await getUserSettings(action.user_id)
+
+  const channel = ((action.payload as Record<string, unknown>)?.channel as 'email' | 'whatsapp') || 'email'
+
+  return generateFinalDraft(
+    conversation.summary_json,
+    userIntent || action.intent_cs || action.rationale_cs || action.rationale,
+    settings,
+    undefined,
+    (action.missing_info as { label: string; value: string | null }[] | null) || undefined,
+    cp?.name || cp?.primary_identifier || undefined,
+    channel
+  )
 }
