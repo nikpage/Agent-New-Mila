@@ -3,7 +3,7 @@
  * Routes a model name to the correct AI provider.
  */
 
-import type { AIProvider } from './types'
+import type { AIProvider, AIGenerateOptions } from './types'
 import { geminiProvider } from './gemini'
 import { anthropicProvider } from './anthropic'
 
@@ -14,4 +14,4 @@ export function resolveProvider(modelName: string): AIProvider {
   throw new Error(`Unknown AI provider for model: ${modelName}`)
 }
 
-export type { AIProvider }
+export type { AIProvider, AIGenerateOptions }

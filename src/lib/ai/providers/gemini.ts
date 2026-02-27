@@ -8,7 +8,7 @@
  */
 
 import { GoogleGenerativeAI, type GenerativeModel } from '@google/generative-ai'
-import type { AIProvider } from './types'
+import type { AIProvider, AIGenerateOptions } from './types'
 
 let clients: GoogleGenerativeAI[] = []
 let callIndex = 0
@@ -34,7 +34,7 @@ function initClients(): GoogleGenerativeAI[] {
   return clients
 }
 
-function getModel(modelName: string): GenerativeModel {
+function getModel(modelName: string): { model: GenerativeModel; keyLabel: string } {
   const allClients = initClients()
   const idx = callIndex % allClients.length
   callIndex++
@@ -46,13 +46,17 @@ function getModel(modelName: string): GenerativeModel {
   if (!cache.has(modelName)) {
     cache.set(modelName, allClients[idx].getGenerativeModel({ model: modelName }))
   }
-  return cache.get(modelName)!
+  return { model: cache.get(modelName)!, keyLabel: `Gemini-${idx + 1}` }
 }
 
 export const geminiProvider: AIProvider = {
-  async generateContent(model: string, prompt: string): Promise<string> {
-    const m = getModel(model)
-    const result = await m.generateContent(prompt)
+  async generateContent(model: string, prompt: string, options?: AIGenerateOptions): Promise<string> {
+    const { model: m, keyLabel } = getModel(model)
+    const result = await m.generateContent({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: options?.temperature !== undefined ? { temperature: options.temperature } : undefined,
+    })
+    console.log(`[Gemini] ${keyLabel} → ${model}`)
     return result.response.text()
   },
 }

@@ -10,25 +10,26 @@ import { resolveProvider } from './providers'
 
 const MAX_RETRIES = 3
 
-function isRateLimitError(error: unknown): boolean {
+function isRetryableError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   const msg = error.message.toLowerCase()
-  return msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('rate limit') || msg.includes('rate_limit')
+  return msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('rate limit') || msg.includes('rate_limit') || msg.includes('503') || msg.includes('service unavailable')
 }
 
 export async function runAITask(stage: AIStage, prompt: string): Promise<string> {
   const chain = AI_TASK_MODELS[stage]
   const models = [chain.primary, chain.fallback1, chain.fallback2].filter((m): m is string => m !== null)
+  const options = chain.temperature !== undefined ? { temperature: chain.temperature } : undefined
 
   for (let i = 0; i < models.length; i++) {
     for (let retry = 0; retry <= MAX_RETRIES; retry++) {
       try {
         const provider = resolveProvider(models[i])
-        const result = await provider.generateContent(models[i], prompt)
+        const result = await provider.generateContent(models[i], prompt, options)
         console.log(`[AI] ${stage} → ${models[i]}`)
         return result
       } catch (error) {
-        if (isRateLimitError(error) && retry < MAX_RETRIES) {
+        if (isRetryableError(error) && retry < MAX_RETRIES) {
           const delay = Math.pow(2, retry) * 1000 // 1s, 2s, 4s
           console.warn(`[AI] ${stage} rate-limited on ${models[i]}, retry ${retry + 1}/${MAX_RETRIES} in ${delay}ms`)
           await new Promise(resolve => setTimeout(resolve, delay))

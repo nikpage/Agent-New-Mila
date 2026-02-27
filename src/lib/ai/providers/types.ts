@@ -3,6 +3,10 @@
  * Each provider (Gemini, OpenAI, Anthropic) implements this.
  */
 
+export interface AIGenerateOptions {
+  temperature?: number
+}
+
 export interface AIProvider {
-  generateContent(model: string, prompt: string): Promise<string>
+  generateContent(model: string, prompt: string, options?: AIGenerateOptions): Promise<string>
 }

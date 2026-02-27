@@ -18,35 +18,40 @@ export interface ModelChain {
   primary: string
   fallback1: string
   fallback2: string | null
+  temperature?: number
 }
 
 export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
-  // Pre-filter / spam — lite model (fast, cheap)
+  // Pre-filter / spam — deterministic (temperature 0)
   preFilter: {
     primary: 'gemini-2.5-flash-lite',
     fallback1: 'claude-haiku-4-5-20251001',
     fallback2: null,
+    temperature: 0,
   },
 
-  // Classification — email category + priority
+  // Classification — deterministic (temperature 0)
   classify: {
     primary: 'gemini-2.5-flash-lite',
     fallback1: 'claude-haiku-4-5-20251001',
     fallback2: null,
+    temperature: 0,
   },
 
-  // Enrichment — per-message key info extraction (runs per message, cost-sensitive)
+  // Enrichment — deterministic (temperature 0)
   enrichment: {
     primary: 'gemini-2.5-flash-lite',
     fallback1: 'gemini-2.5-flash',
     fallback2: null,
+    temperature: 0,
   },
 
-  // Threading — extractTopic, shouldJoinConversation
+  // Threading — deterministic (temperature 0)
   threading: {
     primary: 'gemini-2.5-flash',
     fallback1: 'claude-sonnet-4-6',
     fallback2: null,
+    temperature: 0,
   },
 
   // Analysis — analyzeConversation

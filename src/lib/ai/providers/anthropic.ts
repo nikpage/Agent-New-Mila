@@ -4,7 +4,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk'
-import type { AIProvider } from './types'
+import type { AIProvider, AIGenerateOptions } from './types'
 
 let client: Anthropic | null = null
 
@@ -19,11 +19,12 @@ function getClient(): Anthropic {
 }
 
 export const anthropicProvider: AIProvider = {
-  async generateContent(model: string, prompt: string): Promise<string> {
+  async generateContent(model: string, prompt: string, options?: AIGenerateOptions): Promise<string> {
     const c = getClient()
     const message = await c.messages.create({
       model,
       max_tokens: 4096,
+      temperature: options?.temperature ?? undefined,
       messages: [{ role: 'user', content: prompt }],
     })
 
