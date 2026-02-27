@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server'
 import { validateBackfillToken } from '@/lib/auth/tokens'
 import { findOrCreateCP, blacklistCP, updateCP, getCPById } from '@/lib/db/counterparties'
-import { generateActionsForConversations } from '@/services/planning'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import { VALID_CP_ROLES } from '@/lib/supabase/types'
 import { theme } from '@/config/theme'
@@ -63,8 +62,26 @@ export async function GET(request: NextRequest) {
       }
 
       case 'add': {
-        // Idempotent — check if actions already exist for this conversation
         const supabase = getSupabaseAdmin()
+
+        // Idempotent — check if already flagged or has actions
+        const { data: conv } = await supabase
+          .from('conversation_threads')
+          .select('id, state')
+          .eq('id', target)
+          .single()
+
+        if (!conv) {
+          return htmlResponse('Konverzace nenalezena', 'Tato konverzace již neexistuje.', 404)
+        }
+
+        if (conv.state === 'needs_proposals') {
+          return htmlResponse(
+            'Již přidáno do Mila',
+            'Tato konverzace již čeká na zpracování. Uvidíte ji v příštím briefu.'
+          )
+        }
+
         const { data: existing } = await supabase
           .from('action_proposals')
           .select('id')
@@ -78,11 +95,15 @@ export async function GET(request: NextRequest) {
           )
         }
 
-        const actions = await generateActionsForConversations([target])
-        const count = actions.length
+        // Flag for processing — agent pipeline picks this up on next run
+        await supabase
+          .from('conversation_threads')
+          .update({ state: 'needs_proposals' })
+          .eq('id', target)
+
         return htmlResponse(
           'Přidáno do Mila',
-          `Konverzace byla přidána do procesu Mila. Vytvořeno ${count} akčních návrhů — uvidíte je v příštím briefu.`
+          'Konverzace byla přidána do procesu Mila. Uvidíte ji v příštím briefu.'
         )
       }
 

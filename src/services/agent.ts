@@ -9,8 +9,10 @@ import { generateActionsForConversations } from './planning'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { trackLeadsForUser } from './lead-tracking'
 import { getUnprocessedMessages } from '@/lib/db/messages'
+import { getConversationsForUser } from '@/lib/db/conversations'
 import { getUserById } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
+import { getSupabaseAdmin } from '@/lib/supabase/client'
 import type { ActionProposal } from '@/lib/supabase/types'
 
 export interface AgentRunResult {
@@ -166,13 +168,45 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
         // Step 5: Generate action proposals for updated conversations
         const conversationIds = Array.from(conversations.keys())
-        console.log(`[Agent] Step 5: Generating action proposals for ${conversationIds.length} conversations`)
+
+        // Also pick up conversations flagged via backfill report "Přidat do Mila"
+        const flagged = await getConversationsForUser(userId, { state: 'needs_proposals' })
+        for (const fc of flagged) {
+          if (!conversationIds.includes(fc.id)) conversationIds.push(fc.id)
+        }
+
+        console.log(`[Agent] Step 5: Generating action proposals for ${conversationIds.length} conversations (${flagged.length} from backfill)`)
         const actions = await generateActionsForConversations(conversationIds)
         result.actionsGenerated += actions.length
         result.actions = actions
         console.log(`[Agent] Step 5: Generated ${actions.length} actions`)
+
+        // Clear the flag on processed conversations
+        if (flagged.length > 0) {
+          const supabase = getSupabaseAdmin()
+          await supabase
+            .from('conversation_threads')
+            .update({ state: null })
+            .in('id', flagged.map(f => f.id))
+        }
       } else {
-        console.log(`[Agent] Steps 4-5: Skipped — no unprocessed messages`)
+        // No unprocessed messages, but still check for backfill-flagged conversations
+        const flagged = await getConversationsForUser(userId, { state: 'needs_proposals' })
+        if (flagged.length > 0) {
+          console.log(`[Agent] Step 5: Processing ${flagged.length} backfill-flagged conversations`)
+          const actions = await generateActionsForConversations(flagged.map(f => f.id))
+          result.actionsGenerated += actions.length
+          result.actions = actions
+          console.log(`[Agent] Step 5: Generated ${actions.length} actions from backfill`)
+
+          const supabase = getSupabaseAdmin()
+          await supabase
+            .from('conversation_threads')
+            .update({ state: null })
+            .in('id', flagged.map(f => f.id))
+        } else {
+          console.log(`[Agent] Steps 4-5: Skipped — no unprocessed messages`)
+        }
       }
     } catch (processingError) {
       console.error('[Agent] Steps 3-5 FAILED:', processingError instanceof Error ? processingError.message : processingError)
