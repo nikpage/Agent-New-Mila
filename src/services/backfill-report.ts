@@ -311,14 +311,14 @@ const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
 }
 
 const CP_ROLE_LABELS: Record<string, string> = {
-  buyer: 'kupující',
-  seller: 'prodávající',
-  tenant: 'nájemce',
-  agent: 'makléř',
-  other: 'jiný',
+  buyer: 'Kupující',
+  seller: 'Prodávající',
+  tenant: 'Nájemce',
+  agent: 'Makléř',
+  other: 'Jiný',
 }
 
-const QUICK_ROLES = ['buyer', 'seller', 'tenant', 'agent', 'other'] as const
+const QUICK_ROLES = ['buyer', 'seller', 'tenant', 'other'] as const
 
 const LEAD_STATUS_COLORS: Record<LeadStatus, string> = {
   active: theme.colors.success,
@@ -475,8 +475,8 @@ function generateReportHtml(userId: string, data: BackfillReportData): string {
       const roleCell = cp.role
         ? `<span style="font-size:13px;">${CP_ROLE_LABELS[cp.role] || cp.role}</span>`
         : QUICK_ROLES.map(r =>
-            `<a href="${setRoleUrl(userId, cp.id, r)}" style="font-size:11px;color:${theme.colors.primaryLight};text-decoration:none;padding:1px 4px;">${CP_ROLE_LABELS[r]}</a>`
-          ).join('<span style="color:${theme.colors.border};">·</span>')
+            `<a href="${setRoleUrl(userId, cp.id, r)}" style="font-size:11px;color:${theme.colors.primaryLight};text-decoration:none;padding:1px 4px;white-space:nowrap;">${CP_ROLE_LABELS[r]}</a>`
+          ).join(`<span style="color:${theme.colors.border};">·</span>`)
       html += `<tr>
         <td style="padding:10px 12px;${borderStyle}">
           <div style="font-size:14px;font-weight:500;">${escapeHtml(cp.name)}</div>

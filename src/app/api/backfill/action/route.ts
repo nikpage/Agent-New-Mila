@@ -1,7 +1,9 @@
 import { NextRequest } from 'next/server'
 import { validateBackfillToken } from '@/lib/auth/tokens'
 import { findOrCreateCP, blacklistCP, updateCP, getCPById } from '@/lib/db/counterparties'
+import { getConversationById } from '@/lib/db/conversations'
 import { generateActionsForConversations } from '@/services/planning'
+import { rebuildConversationSummary } from '@/services/threading'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import { VALID_CP_ROLES } from '@/lib/supabase/types'
 import { theme } from '@/config/theme'
@@ -76,6 +78,16 @@ export async function GET(request: NextRequest) {
           )
         }
 
+        // Ensure conversation has a summary — bulk ingestion doesn't generate them,
+        // but generateActionProposal needs summary_json to propose actions.
+        const conversation = await getConversationById(target)
+        if (!conversation) {
+          return htmlResponse('Konverzace nenalezena', 'Tato konverzace již neexistuje.', 404)
+        }
+        if (!conversation.summary_json) {
+          await rebuildConversationSummary(conversation)
+        }
+
         const actions = await generateActionsForConversations([target])
         const count = actions.length
         return htmlResponse(
@@ -97,13 +109,19 @@ export async function GET(request: NextRequest) {
           return htmlResponse('Neznámá role', `Role "${escapeHtml(role)}" není platná.`, 400)
         }
 
-        // Idempotent — check if role already set
+        const ROLE_LABELS: Record<string, string> = {
+          buyer: 'Kupující', seller: 'Prodávající', landlord: 'Pronajímatel',
+          tenant: 'Nájemce', agent: 'Makléř', developer: 'Developer', other: 'Jiný',
+        }
+
+        // Check CP exists
         const existingCP = await getCPById(cpId)
-        if (existingCP?.role === role) {
-          const ROLE_LABELS: Record<string, string> = {
-            buyer: 'kupující', seller: 'prodávající', landlord: 'pronajímatel',
-            tenant: 'nájemce', agent: 'makléř', developer: 'developer', other: 'jiný',
-          }
+        if (!existingCP) {
+          return htmlResponse('Kontakt nenalezen', 'Tento kontakt již neexistuje.', 404)
+        }
+
+        // Idempotent — check if role already set
+        if (existingCP.role === role) {
           return htmlResponse(
             'Role již nastavena',
             `Kontakt <strong>${escapeHtml(existingCP.name || existingCP.primary_identifier)}</strong> má již roli <strong>${ROLE_LABELS[role] || role}</strong>.`
@@ -111,14 +129,9 @@ export async function GET(request: NextRequest) {
         }
 
         await updateCP(cpId, { role })
-        const updatedCP = await getCPById(cpId)
-        const ROLE_LABELS: Record<string, string> = {
-          buyer: 'kupující', seller: 'prodávající', landlord: 'pronajímatel',
-          tenant: 'nájemce', agent: 'makléř', developer: 'developer', other: 'jiný',
-        }
         return htmlResponse(
           'Role nastavena',
-          `Kontakt <strong>${escapeHtml(updatedCP?.name || updatedCP?.primary_identifier || cpId)}</strong> má nyní roli <strong>${ROLE_LABELS[role] || role}</strong>.`
+          `Kontakt <strong>${escapeHtml(existingCP.name || existingCP.primary_identifier)}</strong> má nyní roli <strong>${ROLE_LABELS[role] || role}</strong>.`
         )
       }
 
@@ -126,8 +139,9 @@ export async function GET(request: NextRequest) {
         return htmlResponse('Neznámá akce', `Operace "${escapeHtml(op)}" není podporována.`, 400)
     }
   } catch (error) {
-    console.error(`[Backfill Action] ${op} failed for uid=${uid}:`, error)
-    return htmlResponse('Chyba', 'Akce se nezdařila. Zkuste to prosím znovu.', 500)
+    const msg = error instanceof Error ? error.message : String(error)
+    console.error(`[Backfill Action] ${op} failed for uid=${uid} target=${target}:`, msg, error)
+    return htmlResponse('Chyba', `Akce se nezdařila: ${escapeHtml(msg)}`, 500)
   }
 }
 
