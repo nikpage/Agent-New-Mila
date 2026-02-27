@@ -5,7 +5,7 @@
 Before onboarding anyone, make sure the Mila instance is deployed and healthy:
 - Next.js app running (Vercel or local)
 - Supabase database provisioned with schema
-- Environment variables set (see Vercel dashboard or `src/config/env.ts` for required vars)
+- Environment variables set (see Vercel dashboard or `CLAUDE.md` Security section for required vars)
 - Google OAuth credentials configured (Client ID + Secret)
 
 ---

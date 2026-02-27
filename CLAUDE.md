@@ -109,7 +109,6 @@ src/
 ├── config/
 │   ├── client.ts               # Per-client config (identity, business, AI persona, leads, WA, calendar, scoring)
 │   ├── ai-models.ts            # 7 AI stages × 2-model fallback chains
-│   ├── env.ts                  # Environment config with validation
 │   └── theme.ts                # Design tokens
 │
 └── scripts/
