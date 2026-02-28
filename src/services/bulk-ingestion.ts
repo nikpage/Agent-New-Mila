@@ -35,8 +35,6 @@ import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
 import { cleanMessageText, generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
-import { getLastAICallInfo } from '@/lib/ai/runner'
-import { getLastKeyLabel } from '@/lib/ai/providers/gemini'
 import { isBlockedSender } from './ingestion'
 import { processMessagesForThreading } from './threading'
 import { generateAndSendBackfillReport } from './backfill-report'
@@ -133,10 +131,14 @@ export async function processEmailBatch(
   const totalEmails = emails.length
   console.log(`[BulkIngest] Batch start: ${totalEmails} emails to process`)
 
+  const trackFiltered = (email: string, name: string | null, reason: string) => {
+    trackFilteredSender(filteredSenders, email, name, reason)
+  }
+
   for (let i = 0; i < totalEmails; i += CONCURRENCY) {
     const chunk = emails.slice(i, i + CONCURRENCY)
     const results = await Promise.allSettled(
-      chunk.map(email => processOneEmailForStore(userId, userEmail, email, stats, filteredSenders))
+      chunk.map(email => processOneEmailForStore(userId, userEmail, email, stats, trackFiltered))
     )
 
     for (const result of results) {
@@ -154,15 +156,15 @@ export async function processEmailBatch(
 /**
  * Process a single email for Phase 1: dedup → category check → blocked check
  * → AI filter → find/create CP → store. No enrichment.
- * Mutates stats and filteredSenders in place (safe for allSettled — each email
- * increments different counters or appends to arrays).
+ * Used by both QStash worker (processEmailBatch) and local pipeline (phase1FetchAndStore).
+ * Mutates stats in place (safe for allSettled — each email increments different counters).
  */
 async function processOneEmailForStore(
   userId: string,
   userEmail: string,
   email: EmailMessage,
   stats: BulkIngestionPhase1Result,
-  filteredSenders: FilteredSender[],
+  trackFiltered: (email: string, name: string | null, reason: string) => void,
 ): Promise<void> {
   if (await messageExists(userId, email.id)) {
     stats.skippedDuplicate++
@@ -172,7 +174,7 @@ async function processOneEmailForStore(
   if (email.labels.some(l => GMAIL_SKIP_CATEGORIES.includes(l))) {
     stats.skippedCategory++
     const senderAddr = extractEmailAddress(email.from)
-    trackFilteredSender(filteredSenders, senderAddr, extractName(email.from), 'Kategorie Gmail')
+    trackFiltered(senderAddr, extractName(email.from), 'Kategorie Gmail')
     return
   }
 
@@ -195,7 +197,7 @@ async function processOneEmailForStore(
 
   if (isBlockedSender(cpEmail)) {
     stats.skippedBlocked++
-    trackFilteredSender(filteredSenders, cpEmail, cpName, 'Blokovaný odesílatel')
+    trackFiltered(cpEmail, cpName, 'Blokovaný odesílatel')
     return
   }
 
@@ -207,7 +209,7 @@ async function processOneEmailForStore(
     const filter = await filterEmail(email.subject, email.body, email.from)
     if (!filter.relevant) {
       stats.skippedFilter++
-      trackFilteredSender(filteredSenders, cpEmail, cpName, 'Automatický / nerelevantní')
+      trackFiltered(cpEmail, cpName, 'Automatický / nerelevantní')
       return
     }
   } catch {
@@ -235,6 +237,7 @@ async function processOneEmailForStore(
   })
 
   stats.stored++
+  console.log(`[BulkIngest] ${direction} ${email.id} cp=${cpEmail}`)
 }
 
 // ─── Phase 1: Fetch & Store ─────────────────────────────────────────────────
@@ -343,7 +346,7 @@ async function phase1FetchAndStore(
   for (let i = 0; i < allEmails.length; i += CONCURRENCY) {
     const chunk = allEmails.slice(i, i + CONCURRENCY)
     const results = await Promise.allSettled(
-      chunk.map(email => processOnePhase1Email(userId, userEmail, email, stats, trackFiltered))
+      chunk.map(email => processOneEmailForStore(userId, userEmail, email, stats, trackFiltered))
     )
 
     for (const result of results) {
@@ -380,96 +383,6 @@ async function phase1FetchAndStore(
   console.log(`[BulkIngest]   Filtered senders: ${stats.filteredSenders.length} unique`)
   onProgress({ phase: 1, step: 'complete', ...stats, filteredSenders: stats.filteredSenders.length })
   return stats
-}
-
-/**
- * Process a single email for phase1FetchAndStore (local NDJSON path).
- * Same logic as processOneEmailForStore but uses the trackFiltered closure.
- */
-async function processOnePhase1Email(
-  userId: string,
-  userEmail: string,
-  email: EmailMessage,
-  stats: Phase1InternalResult,
-  trackFiltered: (email: string, name: string | null, reason: string) => void,
-): Promise<void> {
-  if (await messageExists(userId, email.id)) {
-    stats.skippedDuplicate++
-    return
-  }
-
-  if (email.labels.some(l => GMAIL_SKIP_CATEGORIES.includes(l))) {
-    stats.skippedCategory++
-    const senderAddr = extractEmailAddress(email.from)
-    trackFiltered(senderAddr, extractName(email.from), 'Kategorie Gmail')
-    return
-  }
-
-  const senderEmail = extractEmailAddress(email.from)
-  const isOutbound = isSameGmailAddress(senderEmail, userEmail)
-  const direction = isOutbound ? 'outbound' : 'inbound'
-
-  let cpEmail: string
-  let cpName: string | null
-  if (isOutbound) {
-    if (!email.to || email.to.length === 0) return
-    cpEmail = extractEmailAddress(email.to[0])
-    cpName = extractName(email.to[0])
-  } else {
-    cpEmail = senderEmail
-    cpName = extractName(email.from)
-  }
-
-  if (isSameGmailAddress(cpEmail, userEmail)) return
-
-  if (isBlockedSender(cpEmail)) {
-    stats.skippedBlocked++
-    trackFiltered(cpEmail, cpName, 'Blokovaný odesílatel')
-    return
-  }
-
-  // Skip empty/near-empty messages — nothing to enrich, embed, or act on
-  const cleanedBody = cleanMessageText(email.body, 'email').slice(0, 5000)
-  if (cleanedBody.trim().length < 20) return
-
-  let filterModel: string | null = null
-  let filterKey: string | null = null
-  try {
-    const filter = await filterEmail(email.subject, email.body, email.from)
-    filterModel = getLastAICallInfo()?.model ?? null
-    filterKey = getLastKeyLabel()
-    if (!filter.relevant) {
-      stats.skippedFilter++
-      trackFiltered(cpEmail, cpName, 'Automatický / nerelevantní')
-      return
-    }
-  } catch (error) {
-    stats.filterFailOpen++
-    console.error(`[BulkIngest] Filter failed for ${email.id}, allowing (fail-open #${stats.filterFailOpen}):`, error)
-  }
-
-  const cp = await findOrCreateCP(userId, cpEmail, cpName || undefined)
-  if (!cp) return
-
-  const messageId = uuidv4()
-  await createMessage({
-    id: messageId,
-    user_id: userId,
-    cp_id: cp.id,
-    external_id: email.id,
-    external_thread_id: email.threadId,
-    universal_message_id: email.id,
-    direction,
-    raw_text: email.body,
-    cleaned_text: cleanedBody,
-    tag_primary: 'bulk_import',
-    tag_secondary: null,
-    timestamp: email.date.toISOString(),
-    occurred_at: email.date.toISOString(),
-  })
-
-  stats.stored++
-  console.log(`[BulkIngest] ${direction} ${email.id} cp=${cpEmail} filter=${filterModel}/${filterKey}`)
 }
 
 // ─── Phase 2: Enrich + Embed ────────────────────────────────────────────────
@@ -531,7 +444,7 @@ export async function phase2Enrich(
         result.enriched++
 
         try {
-          const embedding = await generateMessageEmbedding(enrichedText, 'email')
+          const embedding = await generateMessageEmbedding(enrichedText, 'email', true)
           await saveMessageEmbedding(msg.id, embedding)
           result.embedded++
         } catch (embError) {
@@ -637,7 +550,7 @@ export async function phase4Classify(
   const supabase = getSupabaseAdmin()
   const { data: messages, error } = await supabase
     .from('messages')
-    .select('id, raw_text, cleaned_text')
+    .select('id, raw_text, cleaned_text, enriched_text')
     .eq('user_id', userId)
     .eq('tag_primary', 'bulk_import')
     .order('timestamp', { ascending: true })
@@ -660,7 +573,7 @@ export async function phase4Classify(
     const chunk = messages.slice(i, i + CONCURRENCY)
     const results = await Promise.allSettled(
       chunk.map(async (msg) => {
-        const bodyText = msg.raw_text || msg.cleaned_text || ''
+        const bodyText = msg.enriched_text || msg.cleaned_text || msg.raw_text || ''
         const classification = await classifyEmail('', bodyText, '')
         await updateMessage(msg.id, {
           tag_primary: classification.category,

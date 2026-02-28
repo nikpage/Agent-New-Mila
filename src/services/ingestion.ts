@@ -300,8 +300,8 @@ async function processOneInboundEmail(
     const enrichedText = await enrichMessage(cleanedText, 'email', 'inbound', undefined, settings ?? undefined)
     await updateMessage(messageId, { enriched_text: enrichedText })
 
-    // Embed the enriched text (not the raw body)
-    const embedding = await generateMessageEmbedding(enrichedText, 'email')
+    // Embed the enriched text (not the raw body) — skip cleaning since enriched text is AI-generated
+    const embedding = await generateMessageEmbedding(enrichedText, 'email', true)
     await saveMessageEmbedding(messageId, embedding)
   } catch (error) {
     console.error(`Failed to enrich/embed message ${messageId}:`, error)
@@ -425,8 +425,8 @@ async function processOneOutboundEmail(
     const enrichedText = await enrichMessage(cleanedText, 'email', 'outbound', undefined, settings ?? undefined)
     await updateMessage(messageId, { enriched_text: enrichedText })
 
-    // Embed the enriched text (not the raw body)
-    const embedding = await generateMessageEmbedding(enrichedText, 'email')
+    // Embed the enriched text (not the raw body) — skip cleaning since enriched text is AI-generated
+    const embedding = await generateMessageEmbedding(enrichedText, 'email', true)
     await saveMessageEmbedding(messageId, embedding)
   } catch (error) {
     console.error(`Failed to enrich/embed outbound message ${messageId}:`, error)

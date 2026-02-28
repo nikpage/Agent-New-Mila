@@ -167,12 +167,17 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 
 /**
  * Generate embedding for a single message.
- * Cleans channel-specific noise before embedding.
+ * When skipCleaning is true (e.g. for enriched text), embeds the text as-is.
+ * Otherwise cleans channel-specific noise before embedding.
  */
 export async function generateMessageEmbedding(
   messageText: string,
-  channel: MessageChannel = 'email'
+  channel: MessageChannel = 'email',
+  skipCleaning: boolean = false
 ): Promise<number[]> {
+  if (skipCleaning) {
+    return generateEmbedding(messageText)
+  }
   const cleaned = cleanMessageText(messageText, channel)
   return generateEmbedding(cleaned || messageText)
 }

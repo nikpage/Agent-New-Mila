@@ -13,8 +13,9 @@
  */
 
 import { getConversationsForUser, getRecentMessages } from '@/lib/db/conversations'
-import { hasPendingAction, createAction, calculatePriorityScore, getActionsForUser } from '@/lib/db/actions'
+import { hasPendingAction, createAction, calculatePriorityScore, getActionsForConversation } from '@/lib/db/actions'
 import { getCPById } from '@/lib/db/counterparties'
+import { getLatestMessageFromCP } from '@/lib/db/messages'
 import { getUserSettings } from '@/lib/db/users'
 import { containsHighValueSignals } from '@/config/client'
 import { selectOfferMultiplier } from './planning'
@@ -41,15 +42,15 @@ export function getLeadStatus(daysSinceActivity: number, settings: UserSettings)
 
 /**
  * Count how many follow-up actions have already been created for a conversation.
- * Looks at completed + pending actions with follow-up indicators in the payload.
+ * Uses DB query filtered by conversation_id — no limit issues.
  */
 async function countExistingFollowUps(
   userId: string,
   conversationId: string
 ): Promise<number> {
-  const actions = await getActionsForUser(userId, { limit: 50 })
+  const actions = await getActionsForConversation(conversationId)
   return actions.filter(a =>
-    a.conversation_id === conversationId &&
+    a.user_id === userId &&
     a.payload &&
     typeof a.payload === 'object' &&
     (a.payload as Record<string, unknown>).is_follow_up === true
@@ -119,14 +120,24 @@ async function processConversationForLeadTracking(
   result: LeadTrackingResult,
   settings: UserSettings
 ): Promise<void> {
-  // Calculate days since last activity
-  const lastUpdate = conversation.last_updated
-    ? new Date(conversation.last_updated)
+  // Find the counterparty from recent messages
+  const recentMessages = await getRecentMessages(conversation.id, 5)
+  const latestWithCP = recentMessages.filter(m => m.cp_id).pop()
+  if (!latestWithCP?.cp_id) return
+
+  const cp = await getCPById(latestWithCP.cp_id)
+  if (!cp || cp.is_blacklisted) return
+
+  // Measure days since last INBOUND message from the counterparty,
+  // not conversation.last_updated (which resets on every summary rebuild).
+  const latestInbound = await getLatestMessageFromCP(userId, cp.id)
+  const lastContactDate = latestInbound?.timestamp
+    ? new Date(latestInbound.timestamp)
     : conversation.created_at
       ? new Date(conversation.created_at)
       : new Date()
   const daysSinceActivity = Math.floor(
-    (Date.now() - lastUpdate.getTime()) / (1000 * 60 * 60 * 24)
+    (Date.now() - lastContactDate.getTime()) / (1000 * 60 * 60 * 24)
   )
 
   const status = getLeadStatus(daysSinceActivity, settings)
@@ -156,14 +167,6 @@ async function processConversationForLeadTracking(
     console.log(`[LeadTracking]   skip — max follow-ups reached (${followUpCount}/${settings.max_auto_follow_ups})`)
     return
   }
-
-  // Find the counterparty from recent messages
-  const recentMessages = await getRecentMessages(conversation.id, 5)
-  const latestWithCP = recentMessages.filter(m => m.cp_id).pop()
-  if (!latestWithCP?.cp_id) return
-
-  const cp = await getCPById(latestWithCP.cp_id)
-  if (!cp || cp.is_blacklisted) return
 
   // Check if the conversation involves high-value signals
   const conversationText = recentMessages.map(m => m.cleaned_text || m.raw_text || '').join(' ')
