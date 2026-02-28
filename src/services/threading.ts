@@ -84,9 +84,14 @@ export async function assignToConversation(
   // new CPs join existing conversations only via Gmail thread ID (CC, reply-all).
   if (message.cp_id) {
     try {
+      const hasEnrichedText = !!message.enriched_text
       const messageText = message.enriched_text || message.cleaned_text || message.raw_text || ''
       if (messageText.length > 0) {
-        const messageEmbedding = await generateMessageEmbedding(messageText)
+        const messageEmbedding = await generateMessageEmbedding(
+          messageText,
+          'email',
+          hasEnrichedText // skip cleaning for already-enriched text
+        )
 
         const candidates = await getConversationsWithEmbeddingsByCP(
           message.user_id,
