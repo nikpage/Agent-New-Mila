@@ -29,6 +29,34 @@ export interface AgentRunResult {
   coldLeads: number
   actions: ActionProposal[]
   errors: string[]
+  logs: string[]
+}
+
+/** Captures console.log/warn/error output during a function's execution. */
+export function createLogCollector(): { logs: string[]; capture: () => () => void } {
+  const logs: string[] = []
+  function capture() {
+    const origLog = console.log
+    const origWarn = console.warn
+    const origError = console.error
+
+    const intercept = (prefix: string, orig: typeof console.log) => (...args: unknown[]) => {
+      const line = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')
+      logs.push(prefix ? `${prefix} ${line}` : line)
+      orig.apply(console, args)
+    }
+
+    console.log = intercept('', origLog)
+    console.warn = intercept('[WARN]', origWarn)
+    console.error = intercept('[ERROR]', origError)
+
+    return () => {
+      console.log = origLog
+      console.warn = origWarn
+      console.error = origError
+    }
+  }
+  return { logs, capture }
 }
 
 const runningUsers = new Map<string, true>()
@@ -37,6 +65,9 @@ const runningUsers = new Map<string, true>()
  * Run the full agent pipeline for a user
  */
 export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
+  const { logs, capture } = createLogCollector()
+  const restore = capture()
+
   const emptyResult: AgentRunResult = {
     success: true,
     emailsIngested: 0,
@@ -51,10 +82,12 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     coldLeads: 0,
     actions: [],
     errors: ['Skipped — concurrent run already in progress'],
+    logs,
   }
 
   if (runningUsers.has(userId)) {
     console.warn(`[Agent] Skipping — pipeline already running for ${userId}`)
+    restore()
     return emptyResult
   }
 
@@ -74,6 +107,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     coldLeads: 0,
     actions: [],
     errors: [],
+    logs,
   }
 
   try {
@@ -236,6 +270,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     result.errors.push(error instanceof Error ? error.message : 'Unknown error')
   } finally {
     runningUsers.delete(userId)
+    restore()
   }
 
   return result

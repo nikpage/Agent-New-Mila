@@ -45,6 +45,7 @@ export async function POST(request: NextRequest) {
     }
     console.log(`[Agent] ============================================\n`)
 
+    // result.logs already contains all logs captured during runAgentForUser
     return NextResponse.json(result)
   } catch (error) {
     console.error('[Agent] Run FAILED:', error instanceof Error ? error.message : error)
