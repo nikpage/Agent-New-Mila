@@ -102,8 +102,7 @@ export async function assignToConversation(
           }
         }
 
-        // Three-tier decision: auto-join if high confidence, ask AI if uncertain,
-        // fall back to same-CP grouping if similarity is low
+        // Two-tier decision: auto-join if high confidence, ask AI if uncertain
         let shouldJoin = false
 
         if (bestCandidate && bestCandidate.similarity >= SIMILARITY_THRESHOLD) {
@@ -134,11 +133,6 @@ export async function assignToConversation(
           } catch (tiebreakError) {
             console.error('[Threading] AI tiebreaker failed:', tiebreakError)
           }
-        } else if (bestCandidate) {
-          // Tier 3: Same CP fallback — messages from the same counterparty
-          // belong together even when embedding similarity is low (e.g. short
-          // outbound emails, empty bodies, different topics with same person)
-          shouldJoin = true
         }
 
         if (shouldJoin && bestCandidate) {
