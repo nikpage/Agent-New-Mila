@@ -19,7 +19,7 @@ export const TEST_USER_EMAIL = 'mila-integration-test@test.local'
  * Check if real database is available for integration tests.
  * Tests use: describe.skipIf(!HAS_DB)(...)
  */
-export const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY)
+export const HAS_DB = !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY && process.env.RUN_DB_TESTS)
 
 function db() {
   return getSupabaseAdmin()

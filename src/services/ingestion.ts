@@ -11,7 +11,7 @@ import {
   getUserEmail,
   type EmailMessage,
 } from '@/lib/google/gmail'
-import { classifyEmail, enrichMessage } from '@/lib/ai/gemini'
+import { preFilterEmail, classifyEmail, enrichMessage } from '@/lib/ai/gemini'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
@@ -211,7 +211,36 @@ async function processOneInboundEmail(
 
   // Hard-block known automated / no-reply senders before classification
   if (isBlockedSender(senderEmail)) {
+    console.log(`[Ingest] SKIP blocked sender: ${senderEmail}`)
     return null
+  }
+
+  // AI pre-filter: catch newsletters, automated notifications, marketing
+  try {
+    const filter = await preFilterEmail(email.subject, email.body, email.from)
+    if (!filter.relevant) {
+      console.log(`[Ingest] SKIP pre-filter (not relevant): ${senderEmail} — "${email.subject}"`)
+      // Store minimal record so we don't re-process next run
+      await createMessage({
+        id: uuidv4(),
+        user_id: userId,
+        cp_id: null,
+        external_id: email.id,
+        external_thread_id: email.threadId,
+        universal_message_id: email.id,
+        direction: 'inbound',
+        raw_text: '',
+        cleaned_text: null,
+        tag_primary: 'pre_filter_skip',
+        tag_secondary: null,
+        timestamp: email.date.toISOString(),
+        occurred_at: email.date.toISOString(),
+      })
+      return null
+    }
+  } catch (error) {
+    // Fail-open: if pre-filter AI is unavailable, let the email through
+    console.error(`[Ingest] Pre-filter failed for ${email.id}, allowing (fail-open):`, error)
   }
 
   // Classify the email
@@ -363,7 +392,10 @@ async function processOneOutboundEmail(
   if (isSameGmailAddress(recipientEmail, userEmail)) return false
 
   // Skip blocked senders (in case user replies to automated)
-  if (isBlockedSender(recipientEmail)) return false
+  if (isBlockedSender(recipientEmail)) {
+    console.log(`[Ingest] SKIP outbound to blocked recipient: ${recipientEmail}`)
+    return false
+  }
 
   // Find or create CP for the recipient (null = user's own email, skip)
   const cp = await findOrCreateCP(userId, recipientEmail, recipientName || undefined)

@@ -79,6 +79,7 @@ export async function trackLeadsForUser(userId: string): Promise<LeadTrackingRes
     })
 
     result.conversationsScanned = conversations.length
+    console.log(`[LeadTracking] Scanning ${conversations.length} conversations`)
 
     // Process conversations in parallel batches — each conversation is
     // independent (different CPs, different actions) so safe to parallelize.
@@ -94,16 +95,21 @@ export async function trackLeadsForUser(userId: string): Promise<LeadTrackingRes
 
       for (const r of results) {
         if (r.status === 'rejected') {
+          const msg = r.reason instanceof Error ? r.reason.message : 'Unknown error'
+          console.error(`[LeadTracking] Batch error: ${msg}`)
           result.errors.push(
-            `Lead tracking: ${r.reason instanceof Error ? r.reason.message : 'Unknown error'}`
+            `Lead tracking: ${msg}`
           )
         }
       }
     }
   } catch (error) {
-    result.errors.push(error instanceof Error ? error.message : 'Unknown error')
+    const msg = error instanceof Error ? error.message : 'Unknown error'
+    console.error(`[LeadTracking] Fatal error: ${msg}`)
+    result.errors.push(msg)
   }
 
+  console.log(`[LeadTracking] Done — ${result.coolingLeads} cooling, ${result.coldLeads} cold, ${result.deadLeads} dead, ${result.followUpsCreated} follow-ups created`)
   return result
 }
 
@@ -128,20 +134,26 @@ async function processConversationForLeadTracking(
   // Active leads don't need intervention
   if (status === 'active') return
 
+  const topic = conversation.topic || conversation.id.slice(0, 8)
+
   // Track counts
   if (status === 'cooling') result.coolingLeads++
   if (status === 'cold') result.coldLeads++
   if (status === 'dead') result.deadLeads++
 
+  console.log(`[LeadTracking] ${status.toUpperCase()} — "${topic}" (${daysSinceActivity}d inactive)`)
+
   // Skip if there's already a pending action for this conversation
   const hasPending = await hasPendingAction(conversation.id)
-  if (hasPending) return
+  if (hasPending) {
+    console.log(`[LeadTracking]   skip — pending action exists`)
+    return
+  }
 
   // Check how many follow-ups we've already sent
   const followUpCount = await countExistingFollowUps(userId, conversation.id)
   if (followUpCount >= settings.max_auto_follow_ups) {
-    // Max follow-ups reached — for dead leads, we could create an escalation
-    // but for now, just skip. The user will see these in their dashboard.
+    console.log(`[LeadTracking]   skip — max follow-ups reached (${followUpCount}/${settings.max_auto_follow_ups})`)
     return
   }
 
@@ -232,6 +244,7 @@ async function processConversationForLeadTracking(
 
   if (action) {
     result.followUpsCreated++
+    console.log(`[LeadTracking]   follow-up #${followUpCount + 1} created for ${cpName} (priority: ${boostedPriority})`)
   }
 }
 
