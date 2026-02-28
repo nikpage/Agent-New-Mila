@@ -7,6 +7,7 @@
 
 import { AI_TASK_MODELS, type AIStage } from '@/config/ai-models'
 import { resolveProvider } from './providers'
+import { getLastFingerprint } from './providers/gemini'
 
 const MAX_RETRIES = 3
 
@@ -30,7 +31,8 @@ export async function runAITask(stage: AIStage, prompt: string): Promise<string>
         const provider = resolveProvider(models[i])
         const result = await provider.generateContent(models[i], prompt, options)
         lastCallInfo = { stage, model: models[i] }
-        console.log(`[AI] ${stage} → ${models[i]}`)
+        const fp = models[i].startsWith('gemini-') ? getLastFingerprint() : null
+        console.log(`[AI] ${stage} → ${models[i]}${fp ? `\n  ${fp}` : ''}`)
         return result
       } catch (error) {
         if (isRetryableError(error) && retry < MAX_RETRIES) {
