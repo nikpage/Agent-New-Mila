@@ -44,9 +44,6 @@ export async function POST(request: NextRequest) {
 
   const effectiveMaxTotal = (maxTotal as number) || 500
 
-  const { logs, capture } = createLogCollector()
-  const restore = capture()
-
   console.log(`\n[BulkIngest] ========== Starting bulk ingestion ==========`)
   console.log(`[BulkIngest] User:  ${userId}`)
   console.log(`[BulkIngest] Since: ${sinceDate.toISOString()}`)
@@ -60,6 +57,9 @@ export async function POST(request: NextRequest) {
   const appBaseUrl = process.env['APP_BASE_URL'] || ''
   const isLocalhost = !appBaseUrl || /localhost|127\.0\.0\.1|\[::1\]/i.test(appBaseUrl)
   if (process.env['QSTASH_TOKEN'] && !isLocalhost) {
+    // Collect logs only for QStash path (returns JSON, not a stream)
+    const { logs, capture } = createLogCollector()
+    const restore = capture()
     try {
       const user = await getUserById(userId as string)
       if (!user?.email) {
