@@ -113,33 +113,52 @@ export async function POST(request: NextRequest) {
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (data: Record<string, unknown>) => {
+      const line = (text: string) => {
         try {
-          controller.enqueue(encoder.encode(JSON.stringify(data) + '\n'))
+          controller.enqueue(encoder.encode(text + '\n'))
         } catch {
           // Stream may already be closed
         }
       }
 
       try {
-        send({ event: 'started', userId, since: sinceDate.toISOString() })
+        line(`\n═══ BULK INGEST: ${userId}`)
+        line(`    since=${sinceDate.toISOString()} max=${effectiveMaxTotal}`)
 
         const result = await runBulkIngestion(
           userId as string,
           sinceDate,
           untilDate,
           effectiveMaxTotal,
-          (progress) => send({ event: 'progress', ...progress })
+          (progress) => {
+            const p = progress.phase
+            const s = progress.step
+            if (s === 'complete') {
+              if (p === 1) line(`  ✓ Phase 1 FETCH: ${progress.stored} stored, ${progress.skippedCategory || 0} cat/${progress.skippedFilter || 0} filter/${progress.skippedBlocked || 0} blocked/${progress.skippedDuplicate || 0} dup skipped`)
+              else if (p === 2) line(`  ✓ Phase 2 ENRICH: ${progress.enriched} enriched, ${progress.enrichmentFailed || 0} failed, ${progress.embedded} embedded`)
+              else if (p === 3) line(`  ✓ Phase 3 THREAD: ${progress.messagesProcessed} msgs → ${progress.conversationsCreated} conversations`)
+              else if (p === 4) line(`  ✓ Phase 4 CLASSIFY: ${progress.classified} classified, ${progress.classifyFailed || 0} failed`)
+              else if (p === 5) line(`  ✓ Phase 5 REPORT: ${progress.reportSent ? 'sent' : 'FAILED'}${progress.reportError ? ' — ' + progress.reportError : ''}`)
+            } else if (s === 'fetched') {
+              line(`    fetched ${progress.inbox} inbox + ${progress.sent} sent`)
+            } else if (s === 'stored' && p === 1) {
+              line(`    ${progress.processed}/${progress.total} processed, ${progress.stored} stored`)
+            } else if (s === 'enriching' && typeof progress.processed === 'number') {
+              line(`    ${progress.processed}/${progress.total} enriched=${progress.enriched} failed=${progress.enrichmentFailed}`)
+            } else if (s === 'classifying' && typeof progress.processed === 'number') {
+              line(`    ${progress.processed}/${progress.total} classified=${progress.classified} failed=${progress.classifyFailed}`)
+            }
+          }
         )
 
-        send({ event: 'done', success: true, ...result })
+        const errs = result.errors.length
+        line(`\n═══ DONE`)
+        line(`    stored=${result.phase1.stored} enriched=${result.phase2.enriched} threads=${result.phase3.conversationsCreated} classified=${result.phase4.classified} report=${result.report.sent ? 'sent' : 'FAILED'}`)
+        if (errs > 0) line(`    ${errs} error(s): ${result.errors.map(e => e.slice(0, 80)).join(' | ')}`)
+        line('')
       } catch (error) {
         console.error('[BulkIngest] Error:', error)
-        send({
-          event: 'error',
-          error: 'Bulk ingestion failed',
-          details: error instanceof Error ? error.message : 'Unknown error',
-        })
+        line(`\n✗ FAILED: ${error instanceof Error ? error.message : 'Unknown error'}`)
       } finally {
         controller.close()
       }
@@ -148,7 +167,7 @@ export async function POST(request: NextRequest) {
 
   return new Response(stream, {
     headers: {
-      'Content-Type': 'application/x-ndjson',
+      'Content-Type': 'text/plain',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     },
