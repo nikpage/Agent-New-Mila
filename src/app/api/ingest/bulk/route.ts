@@ -4,6 +4,7 @@ import { verifyApiKey } from '@/lib/auth/api'
 import { getUserById } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
 import { publishBulkIngestStep } from '@/lib/qstash/client'
+import { createLogCollector } from '@/services/agent'
 
 export const maxDuration = 300
 
@@ -43,6 +44,9 @@ export async function POST(request: NextRequest) {
 
   const effectiveMaxTotal = (maxTotal as number) || 500
 
+  const { logs, capture } = createLogCollector()
+  const restore = capture()
+
   console.log(`\n[BulkIngest] ========== Starting bulk ingestion ==========`)
   console.log(`[BulkIngest] User:  ${userId}`)
   console.log(`[BulkIngest] Since: ${sinceDate.toISOString()}`)
@@ -78,11 +82,9 @@ export async function POST(request: NextRequest) {
           sentFetched: 0,
           skippedCategory: 0,
           skippedBlocked: 0,
-          skippedPreFilter: 0,
+          skippedFilter: 0,
           skippedDuplicate: 0,
-          preFilterFailOpen: 0,
-          enriched: 0,
-          enrichmentFailed: 0,
+          filterFailOpen: 0,
           stored: 0,
         },
         filteredSenders: [] as { email: string; name: string | null; count: number; reason: string }[],
@@ -92,14 +94,16 @@ export async function POST(request: NextRequest) {
       const messageId = await publishBulkIngestStep(job)
       console.log(`[BulkIngest] Queued via QStash: ${messageId}`)
 
+      restore()
       return NextResponse.json(
-        { started: true, mode: 'queued', qstashMessageId: messageId },
+        { started: true, mode: 'queued', qstashMessageId: messageId, logs },
         { status: 202 }
       )
     } catch (error) {
       console.error('[BulkIngest] Failed to queue via QStash:', error)
+      restore()
       return NextResponse.json(
-        { error: 'Failed to queue bulk ingestion', details: error instanceof Error ? error.message : 'Unknown' },
+        { error: 'Failed to queue bulk ingestion', details: error instanceof Error ? error.message : 'Unknown', logs },
         { status: 500 }
       )
     }

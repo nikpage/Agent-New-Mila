@@ -5,18 +5,21 @@ Historical backfill — imports a user's email history and sets up Mila's unders
 
 **Route:** `POST /api/ingest/bulk` (API key auth, 5-min timeout). Streams NDJSON progress events: `started`, `progress`, `done`, `error`.
 
-**4-phase pipeline:**
-1. **Phase 1 — Fetch & Store:** Paginates through INBOX + SENT. Skips blocked senders, Gmail categories (PROMOTIONS, SOCIAL, etc.), duplicates. Runs `preFilterEmail()` AI + `enrichMessage()` AI per email. Tracks: `inboxFetched`, `sentFetched`, `skippedCategory`, `skippedBlocked`, `skippedPreFilter`, `skippedDuplicate`, `preFilterFailOpen`, `enriched`, `enrichmentFailed`, `stored`.
-2. **Phase 2 — Thread:** Calls `processMessagesForThreading()` on all stored messages (chronological). Same threading logic as agent Step 4.
-3. **Phase 3 — Backfill Report:** Generates and sends a "Welcome to Mila" summary email.
-4. **Phase 4 — Enrich:** Retry pass — classifies and embeds any messages that failed enrichment during Phase 1. Runs after the report so the user gets their summary even if enrichment times out.
+**5-phase pipeline:**
+1. **Phase 1 — Fetch & Store:** Fetches INBOX + SENT in parallel. Skips blocked senders, Gmail categories (PROMOTIONS, SOCIAL, etc.), duplicates. Runs `filterEmail()` AI per email. Stores with `tag_primary='bulk_import'`. 20 emails processed in parallel. Tracks: `inboxFetched`, `sentFetched`, `skippedCategory`, `skippedBlocked`, `skippedFilter`, `skippedDuplicate`, `filterFailOpen`, `stored`.
+2. **Phase 2 — Enrich + Embed:** Queries `tag_primary='bulk_import' AND enriched_text IS NULL`. Runs `enrichMessage()` + `generateMessageEmbedding()` per message, 20 in parallel. Tracks: `enriched`, `enrichmentFailed`, `embedded`, `embeddingFailed`.
+3. **Phase 3 — Thread:** Calls `processMessagesForThreading()` on all unprocessed messages (chronological). Same threading logic as agent Step 4. Embeddings from Phase 2 enable semantic matching.
+4. **Phase 4 — Classify:** Queries `tag_primary='bulk_import'`. Runs `classifyEmail()` per message, 20 in parallel. Updates `tag_primary` to real category (replaces `bulk_import`). Tracks: `classified`, `classifyFailed`.
+5. **Phase 5 — Backfill Report:** Generates and sends a "Welcome to Mila" summary email. Runs last so all data is complete.
+
+**`tag_primary='bulk_import'` flow:** Phase 1 sets it → Phase 2 enriches (tag unchanged) → Phase 3 threads (tag unchanged) → Phase 4 classifies (tag changes to real category) → Phase 5 reports on complete data.
 
 **Filtered senders** are tracked (email + count + reason) and passed to the backfill report for "Allow as Contact" links.
 
 ## Backfill Report (`src/services/backfill-report.ts`)
 Generates a comprehensive HTML email sent from the user's Gmail to themselves. Sections:
 - **Inbox health:** totals, inbound/outbound ratio
-- **Filtered senders:** blocked/pre-filtered emails with "Allow as Contact" signed links
+- **Filtered senders:** blocked/filtered emails with "Allow as Contact" signed links
 - **Counterparties:** discovered contacts with message counts, deal stage, "Blacklist" links
 - **Conversations:** threads with summary, CP names, lead status, "Add to Mila" links
 - **Unanswered inbound:** emails from last 7 days with no outbound reply
@@ -48,18 +51,20 @@ POST /api/ingest/bulk (orchestrator)
   │
   ▼ QStash worker chain (/api/ingest/bulk/worker)
   │
-  ├─ phase1_inbox  ─► fetch 50 inbox emails, preFilter+store, chain next page
+  ├─ phase1_inbox    ─► fetch 50 inbox emails, filter+store (20 parallel), chain next page
   │   └─ repeats until maxTotal reached or no more pages
-  ├─ phase1_sent   ─► fetch 50 sent emails, preFilter+store, chain next page
+  ├─ phase1_sent     ─► fetch 50 sent emails, filter+store (20 parallel), chain next page
   │   └─ repeats until maxTotal reached or no more pages
-  ├─ phase2        ─► thread all unprocessed messages into conversations
-  ├─ phase3        ─► generate & send backfill report email to user
-  └─ phase4        ─► enrich stored messages (classify + embed)
+  ├─ phase2_enrich   ─► enrich + embed all unenriched bulk_import messages (20 parallel)
+  ├─ phase3_thread   ─► thread all unprocessed messages into conversations
+  ├─ phase4_classify ─► classify all bulk_import messages (20 parallel)
+  └─ phase5_report   ─► generate & send backfill report email to user
 ```
 
 ### Key Details
 - **Batch size:** 50 emails per QStash hop (Phase 1)
-- **Budget:** 500 emails ≈ 12 QStash calls (10 for Phase 1 + 1 each for Phase 2–4)
+- **Concurrency:** 20 emails processed in parallel within each hop (Phases 1, 2, 4)
+- **Budget:** 500 emails ≈ 14 QStash calls (10 for Phase 1 + 1 each for Phases 2–5)
 - **State passing:** Job state (stats, filteredSenders, pageToken) is passed in the QStash message body between hops
 - **Auth:** Worker endpoint uses `CRON_SECRET` Bearer token (same as morning-brief)
 - **Orchestrator returns:** `{ started: true, mode: "queued", qstashMessageId }` with HTTP 202
@@ -67,7 +72,7 @@ POST /api/ingest/bulk (orchestrator)
 
 ### Implementation
 - **Orchestrator:** `src/app/api/ingest/bulk/route.ts` — QStash path (requires `QSTASH_TOKEN` + non-localhost `APP_BASE_URL`) or NDJSON fallback
-- **Worker:** `src/app/api/ingest/bulk/worker/route.ts` — state machine handling all 4 phases (phase1_inbox, phase1_sent, phase2, phase3, phase4)
+- **Worker:** `src/app/api/ingest/bulk/worker/route.ts` — state machine handling all 5 phases (phase1_inbox, phase1_sent, phase2_enrich, phase3_thread, phase4_classify, phase5_report)
 - **Batch fetch:** `fetchEmailsBatch()` in `src/lib/google/gmail.ts` — single-page Gmail fetch with `nextPageToken`
-- **Batch process:** `processEmailBatch()` in `src/services/bulk-ingestion.ts` — dedup, filter, preFilter AI, store
+- **Batch process:** `processEmailBatch()` in `src/services/bulk-ingestion.ts` — dedup, filter AI, store (20 parallel)
 - **QStash publish:** `publishBulkIngestStep()` in `src/lib/qstash/client.ts`

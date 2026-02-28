@@ -36,7 +36,7 @@ import {
 
 vi.mock('@/lib/ai/gemini', () => ({
   classifyEmail: vi.fn(),
-  preFilterEmail: vi.fn(),
+  filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
   proposeAction: vi.fn(),
   extractTopic: vi.fn(),
@@ -97,7 +97,7 @@ vi.mock('@/lib/google/maps', () => ({
 
 // ─── Static imports (vi.mock hoisted above these) ──────────────────────────
 
-import { proposeAction, generateBriefHeadline, classifyEmail, enrichMessage, preFilterEmail } from '@/lib/ai/gemini'
+import { proposeAction, generateBriefHeadline, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
 import { sendEmail, fetchUnreadEmails, fetchEmailsPaginated, getUserEmail } from '@/lib/google/gmail'
 import { generateActionToken, validateActionToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template'
@@ -132,7 +132,7 @@ beforeEach(() => {
   vi.mocked(enrichMessage).mockResolvedValue(
     'Zájemce: Jan Novák. Nemovitost: byt Vinohrady 3+kk. Cena: 8.5M CZK.'
   )
-  vi.mocked(preFilterEmail).mockResolvedValue({ relevant: true } as never)
+  vi.mocked(filterEmail).mockResolvedValue({ relevant: true } as never)
   vi.mocked(getUserEmail).mockResolvedValue(TEST_USER_EMAIL)
 })
 
@@ -450,8 +450,9 @@ describe.skipIf(!HAS_DB)('Integration: Bulk Ingestion pipeline (real DB)', () =>
     const result = await runBulkIngestion(TEST_USER_ID, new Date('2025-01-01'))
 
     expect(result.phase1.stored).toBe(2)
-    expect(result.phase1.enriched).toBe(1)
-    expect(result.phase1.enrichmentFailed).toBe(1)
+    // Enrichment is now Phase 2 (separate from Phase 1 fetch+store)
+    expect(result.phase2.enriched).toBe(1)
+    expect(result.phase2.enrichmentFailed).toBe(1)
   })
 
   it('returns early when user not found', async () => {

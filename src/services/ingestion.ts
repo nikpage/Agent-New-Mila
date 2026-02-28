@@ -11,7 +11,7 @@ import {
   getUserEmail,
   type EmailMessage,
 } from '@/lib/google/gmail'
-import { preFilterEmail, classifyEmail, enrichMessage } from '@/lib/ai/gemini'
+import { filterEmail, classifyEmail, enrichMessage } from '@/lib/ai/gemini'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
@@ -215,11 +215,11 @@ async function processOneInboundEmail(
     return null
   }
 
-  // AI pre-filter: catch newsletters, automated notifications, marketing
+  // AI filter: catch newsletters, automated notifications, marketing
   try {
-    const filter = await preFilterEmail(email.subject, email.body, email.from)
+    const filter = await filterEmail(email.subject, email.body, email.from)
     if (!filter.relevant) {
-      console.log(`[Ingest] SKIP pre-filter (not relevant): ${senderEmail} — "${email.subject}"`)
+      console.log(`[Ingest] SKIP filter (not relevant): ${senderEmail} — "${email.subject}"`)
       // Store minimal record so we don't re-process next run
       await createMessage({
         id: uuidv4(),
@@ -231,7 +231,7 @@ async function processOneInboundEmail(
         direction: 'inbound',
         raw_text: '',
         cleaned_text: null,
-        tag_primary: 'pre_filter_skip',
+        tag_primary: 'filter_skip',
         tag_secondary: null,
         timestamp: email.date.toISOString(),
         occurred_at: email.date.toISOString(),
@@ -239,8 +239,8 @@ async function processOneInboundEmail(
       return null
     }
   } catch (error) {
-    // Fail-open: if pre-filter AI is unavailable, let the email through
-    console.error(`[Ingest] Pre-filter failed for ${email.id}, allowing (fail-open):`, error)
+    // Fail-open: if filter AI is unavailable, let the email through
+    console.error(`[Ingest] Filter failed for ${email.id}, allowing (fail-open):`, error)
   }
 
   // Classify the email

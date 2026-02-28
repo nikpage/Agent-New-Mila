@@ -1,11 +1,15 @@
 /**
- * Bulk Ingestion Tests — Phase 4 Enrichment (real DB)
+ * Bulk Ingestion Tests — 5-phase pipeline (real DB)
  *
- * Tests that Phase 4 enrichment correctly classifies, updates, and embeds
- * messages that were stored during Phase 1 without enrichment.
+ * Tests that the 5-phase bulk ingestion correctly processes emails:
+ *   Phase 1: Fetch & store (filter only)
+ *   Phase 2: Enrich + embed
+ *   Phase 3: Thread
+ *   Phase 4: Classify (replaces bulk_import tag)
+ *   Phase 5: Report
  *
  * REAL: All DB operations, message updates, phase ordering
- * MOCKED: AI (classify, enrich), embeddings (generate), Google APIs, backfill report
+ * MOCKED: AI (filter, classify, enrich), embeddings (generate), Google APIs, backfill report
  *
  * Gated: skips when SUPABASE_URL is not available.
  */
@@ -27,7 +31,7 @@ const callOrder: string[] = []
 // ─── Mock ONLY external boundaries ─────────────────────────────────────────
 
 vi.mock('@/lib/ai/gemini', () => ({
-  preFilterEmail: vi.fn().mockResolvedValue({ relevant: true }),
+  filterEmail: vi.fn().mockResolvedValue({ relevant: true }),
   classifyEmail: vi.fn().mockResolvedValue({
     isActionable: true,
     category: 'question',
@@ -83,7 +87,7 @@ vi.mock('@/lib/google/auth', () => ({
 
 vi.mock('./backfill-report', () => ({
   generateAndSendBackfillReport: vi.fn().mockImplementation(async () => {
-    callOrder.push('phase3_report')
+    callOrder.push('phase5_report')
     return { sent: true }
   }),
 }))
@@ -105,7 +109,7 @@ beforeEach(() => {
 
 // ═════════════════════════════════════════════════════════════════════════════
 
-describe.skipIf(!HAS_DB)('Bulk Ingestion — Phase 4 enrichment (real DB)', () => {
+describe.skipIf(!HAS_DB)('Bulk Ingestion — 5-phase pipeline (real DB)', () => {
   beforeEach(async () => {
     await setupTestUser()
   })
@@ -114,76 +118,89 @@ describe.skipIf(!HAS_DB)('Bulk Ingestion — Phase 4 enrichment (real DB)', () =
     await cleanupTestData()
   })
 
-  it('Phase 3 report is sent before Phase 4 enrichment starts', async () => {
+  it('Phase 4 classify runs before Phase 5 report', async () => {
     // Track when Phase 4 classify happens
     vi.mocked(classifyEmail).mockImplementation(async () => {
       callOrder.push('phase4_classify')
       return { isActionable: true, category: 'question', priority: 'medium' }
     })
 
-    // Pre-create an unenriched message (simulates Phase 1 output)
+    // Pre-create a bulk_import message with enriched_text set
+    // (simulates Phase 1 store + Phase 2 enrich already done)
     await createTestMessage({
       tag_primary: 'bulk_import',
-      enriched_text: null, // not yet enriched
+      enriched_text: 'Already enriched',
     })
 
     await runBulkIngestion(TEST_USER_ID, new Date('2024-01-01'))
 
-    const reportIndex = callOrder.indexOf('phase3_report')
+    const reportIndex = callOrder.indexOf('phase5_report')
     const classifyIndex = callOrder.indexOf('phase4_classify')
-    expect(reportIndex).toBeGreaterThanOrEqual(0)
     expect(classifyIndex).toBeGreaterThanOrEqual(0)
-    expect(reportIndex).toBeLessThan(classifyIndex)
+    expect(reportIndex).toBeGreaterThanOrEqual(0)
+    expect(classifyIndex).toBeLessThan(reportIndex)
   })
 
-  it('report is sent even when Phase 4 enrichment fails for all messages', async () => {
+  it('report is sent even when Phase 4 classify fails for all messages', async () => {
     vi.mocked(classifyEmail).mockRejectedValue(new Error('AI down'))
 
-    await createTestMessage({ tag_primary: 'bulk_import', enriched_text: null })
-    await createTestMessage({ tag_primary: 'bulk_import', enriched_text: null, raw_text: 'Another msg', cleaned_text: 'Another msg' })
+    await createTestMessage({ tag_primary: 'bulk_import', enriched_text: 'Enriched' })
+    await createTestMessage({ tag_primary: 'bulk_import', enriched_text: 'Enriched', raw_text: 'Another msg', cleaned_text: 'Another msg' })
 
     const result = await runBulkIngestion(TEST_USER_ID, new Date('2024-01-01'))
 
     expect(generateAndSendBackfillReport).toHaveBeenCalled()
     expect(result.report.sent).toBe(true)
-    expect(result.enrichment.enriched).toBe(0)
-    expect(result.enrichment.enrichmentFailed).toBe(2)
+    expect(result.phase4.classified).toBe(0)
+    expect(result.phase4.classifyFailed).toBe(2)
   })
 
-  it('enriches messages: classifyEmail + updateMessage + embedding in real DB', async () => {
+  it('classifies messages: classifyEmail → update tag in real DB', async () => {
     vi.mocked(classifyEmail).mockResolvedValue({
       isActionable: true,
       category: 'meeting_request',
       priority: 'high',
     })
-    vi.mocked(enrichMessage).mockResolvedValue('Enriched: meeting request details')
 
     const msg = await createTestMessage({
       tag_primary: 'bulk_import',
-      enriched_text: null,
-      raw_text: 'Meeting tomorrow?',
-      cleaned_text: 'Meeting tomorrow?',
+      enriched_text: 'Enriched: meeting request details',
     })
 
     const result = await runBulkIngestion(TEST_USER_ID, new Date('2024-01-01'))
 
-    expect(result.enrichment.enriched).toBe(1)
-    expect(result.enrichment.enrichmentFailed).toBe(0)
+    expect(result.phase4.classified).toBe(1)
+    expect(result.phase4.classifyFailed).toBe(0)
 
     // Verify message updated in real DB
     const msgs = await getTestMessages()
     const updated = msgs.find(m => m.id === msg.id)
     expect(updated?.tag_primary).toBe('meeting_request')
     expect(updated?.tag_secondary).toBe('high')
-    expect(updated?.enriched_text).toBe('Enriched: meeting request details')
   })
 
-  it('counts enriched message even when embedding fails', async () => {
-    vi.mocked(classifyEmail).mockResolvedValue({
-      isActionable: true,
-      category: 'question',
-      priority: 'medium',
+  it('enriches messages in Phase 2 and embeds them', async () => {
+    vi.mocked(enrichMessage).mockResolvedValue('Enriched: key info')
+
+    const msg = await createTestMessage({
+      tag_primary: 'bulk_import',
+      enriched_text: null, // not yet enriched
     })
+
+    const result = await runBulkIngestion(TEST_USER_ID, new Date('2024-01-01'))
+
+    expect(result.phase2.enriched).toBe(1)
+    expect(result.phase2.enrichmentFailed).toBe(0)
+    expect(result.phase2.embedded).toBe(1)
+
+    // Verify enriched text saved in real DB
+    const msgs = await getTestMessages()
+    const updated = msgs.find(m => m.id === msg.id)
+    expect(updated?.enriched_text).toBe('Enriched: key info')
+  })
+
+  it('counts enrichment failure when embedding fails', async () => {
+    vi.mocked(enrichMessage).mockResolvedValue('Enriched text')
     vi.mocked(generateMessageEmbedding).mockRejectedValue(new Error('Embedding model down'))
 
     await createTestMessage({
@@ -193,11 +210,12 @@ describe.skipIf(!HAS_DB)('Bulk Ingestion — Phase 4 enrichment (real DB)', () =
 
     const result = await runBulkIngestion(TEST_USER_ID, new Date('2024-01-01'))
 
-    expect(result.enrichment.enriched).toBe(1)
-    expect(result.enrichment.enrichmentFailed).toBe(0)
+    // Enrichment succeeds, embedding fails
+    expect(result.phase2.enriched).toBe(1)
+    expect(result.phase2.embeddingFailed).toBe(1)
   })
 
-  it('streams Phase 4 progress via onProgress callback', async () => {
+  it('streams progress for Phase 2 and Phase 4', async () => {
     vi.mocked(classifyEmail).mockResolvedValue({
       isActionable: true,
       category: 'update',
@@ -214,21 +232,26 @@ describe.skipIf(!HAS_DB)('Bulk Ingestion — Phase 4 enrichment (real DB)', () =
       progressEvents.push(p)
     })
 
+    // Phase 2 (enrich) events
+    const phase2Events = progressEvents.filter(p => p.phase === 2)
+    expect(phase2Events.length).toBeGreaterThanOrEqual(2)
+    const phase2Complete = phase2Events.find(p => p.step === 'complete')
+    expect(phase2Complete).toBeDefined()
+
+    // Phase 4 (classify) events
     const phase4Events = progressEvents.filter(p => p.phase === 4)
     expect(phase4Events.length).toBeGreaterThanOrEqual(2)
-
-    const completeEvent = phase4Events.find(p => p.step === 'complete')
-    expect(completeEvent).toBeDefined()
-    expect(completeEvent?.enriched).toBe(1)
+    const phase4Complete = phase4Events.find(p => p.step === 'complete')
+    expect(phase4Complete).toBeDefined()
   })
 
-  it('returns zero enrichment when no unenriched messages exist', async () => {
-    // All messages already have enriched_text (default from createTestMessage)
+  it('returns zero counts when no bulk_import messages exist', async () => {
+    // All messages already have real tags (not bulk_import)
     await createTestMessage({ tag_primary: 'inquiry' })
 
     const result = await runBulkIngestion(TEST_USER_ID, new Date('2024-01-01'))
 
-    expect(result.enrichment.enriched).toBe(0)
-    expect(result.enrichment.enrichmentFailed).toBe(0)
+    expect(result.phase2.enriched).toBe(0)
+    expect(result.phase4.classified).toBe(0)
   })
 })

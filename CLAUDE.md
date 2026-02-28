@@ -71,7 +71,7 @@ src/
 │   ├── planning.ts             # Action generation with channel detection (parallel batches of 5)
 │   ├── threading.ts            # Email/WA conversation grouping (enriched embeddings + external thread ID)
 │   ├── ingestion.ts            # Email ingestion (parallel batches of 5)
-│   ├── bulk-ingestion.ts       # Historical backfill — 4-phase: fetch → thread → report → enrich
+│   ├── bulk-ingestion.ts       # Historical backfill — 5-phase: fetch → enrich → thread → classify → report
 │   ├── backfill-report.ts      # "Welcome to Mila" report email after bulk ingestion (772 lines)
 │   ├── calendar-ingestion.ts   # Calendar sync + personal event filtering
 │   ├── lead-tracking.ts        # Cooling/cold/dead lead detection (parallel batches of 10)
@@ -244,7 +244,7 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 
 | Stage | Purpose | Primary → Fallback1 → Fallback2 |
 |-------|---------|----------------------------------|
-| `preFilter` | Spam detection | `gemini-2.5-flash-lite` → `claude-haiku-4-5-20251001` |
+| `filter` | Spam detection | `gemini-2.5-flash-lite` → `claude-haiku-4-5-20251001` |
 | `classify` | Email category + priority | `gemini-2.5-flash-lite` → `claude-haiku-4-5-20251001` |
 | `enrichment` | Per-message key info extraction | `gemini-2.5-flash-lite` → `gemini-2.5-flash` |
 | `threading` | extractTopic, shouldJoinConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` |
@@ -274,7 +274,7 @@ Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/nul
 - Saves to `messages.enriched_text` column. Embedding generated from enriched text (not raw body).
 - Stage: `enrichment` (gemini-2.5-flash-lite → gemini-2.5-flash). Cost-sensitive — runs per message.
 - Accepts optional `UserSettings` for business context injection. All callers (`ingestion.ts`, `bulk-ingestion.ts`, QStash worker) fetch and pass user settings.
-- Runs in **both** regular ingestion (`ingestion.ts`) **and** bulk historical ingestion (`bulk-ingestion.ts`). Bulk enrichment tracks success/failure counts (`enriched`, `enrichmentFailed`, `preFilterFailOpen` in `BulkIngestionPhase1Result`).
+- Runs in **both** regular ingestion (`ingestion.ts`) **and** bulk historical ingestion (`bulk-ingestion.ts`). Bulk enrichment runs in Phase 2 (`Phase2EnrichResult` tracks `enriched`, `enrichmentFailed`, `embedded`, `embeddingFailed`).
 
 **Pipeline** (`src/services/threading.ts`):
 1. **External thread ID match** (primary) — exact match on `external_thread_id` (Gmail thread ID, Exchange conversation ID, `wa:+phone`). Only matches messages already assigned to a conversation (`conversation_id IS NOT NULL`) — unassigned messages are skipped to prevent 1:1 message-to-conversation creation during bulk ingestion.
@@ -335,7 +335,7 @@ Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_valu
 
 ## Bulk Ingestion & Backfill Report
 
-Historical email backfill with 4-phase pipeline (fetch → thread → report → enrich). Uses QStash worker chaining on Vercel, NDJSON streaming locally. See `docs/BULK-INGESTION.md` for full details including QStash architecture, batch sizes, and backfill action handler.
+Historical email backfill with 5-phase pipeline (fetch → enrich → thread → classify → report). Phases 1/2/4 run 20 emails in parallel. Uses QStash worker chaining on Vercel, NDJSON streaming locally. See `docs/BULK-INGESTION.md` for full details including QStash architecture, batch sizes, and backfill action handler.
 
 ## WhatsApp Integration
 
@@ -453,7 +453,7 @@ All services use **batched `Promise.allSettled`** for fault isolation — one it
 | `ingestion.ts` | Emails batched (inbound + outbound) | 5 | classifyEmail AI call is the bottleneck |
 | `lead-tracking.ts` | Conversations batched | 10 | Independent conversations, DB-heavy |
 | `threading.ts` | Pre-assigned lookups + CP fetches | All | `Promise.all` for reads; serial for `assignToConversation` (prevents duplicate creation) |
-| `bulk-ingestion.ts` | QStash worker chaining (Vercel) | 50/batch | Phase 1 splits into 50-email hops via QStash; Phases 2–4 each a single hop |
+| `bulk-ingestion.ts` | QStash worker chaining (Vercel) + batched allSettled | 20 parallel / 50 per QStash hop | Phase 1 splits into 50-email hops via QStash; Phases 2–5 each a single hop. Phases 1/2/4 process 20 emails in parallel within each hop |
 
 ## Superadmin
 - Dashboard at `/superadmin`

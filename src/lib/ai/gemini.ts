@@ -3,16 +3,16 @@ import { runAITask } from './runner'
 import { getAISystemPrompt, containsHighValueSignals } from '@/config/client'
 
 /**
- * Pre-filter: Quick spam/junk detection using cheapest model.
+ * Filter: Quick spam/junk detection using cheapest model.
  * Returns { relevant: true/false }. Gate before full classification.
- * Stage: preFilter (gemini-2.5-flash-lite → claude-haiku)
+ * Stage: filter (gemini-2.5-flash-lite → claude-haiku)
  */
-export async function preFilterEmail(
+export async function filterEmail(
   subject: string,
   body: string,
   from: string
 ): Promise<{ relevant: boolean }> {
-  console.log(`[AI:preFilterEmail] Running stage 'preFilter'`)
+  console.log(`[AI:filterEmail] Running stage 'filter'`)
   const prompt = `Is this email from a real person requiring human attention? Answer ONLY with valid JSON: {"relevant": true} or {"relevant": false}
 
 Relevant: Business inquiry, question, meeting proposal, follow-up, negotiation, personal message, deal-related.
@@ -22,7 +22,7 @@ FROM: ${from}
 SUBJECT: ${subject}
 BODY: ${body.slice(0, 500)}`
 
-  const text = await runAITask('preFilter', prompt)
+  const text = await runAITask('filter', prompt)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) return { relevant: false }
   try {

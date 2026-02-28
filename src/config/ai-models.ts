@@ -6,7 +6,7 @@
  */
 
 export type AIStage =
-  | 'preFilter'
+  | 'filter'
   | 'classify'
   | 'enrichment'
   | 'threading'
@@ -22,8 +22,8 @@ export interface ModelChain {
 }
 
 export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
-  // Pre-filter / spam — deterministic (temperature 0)
-  preFilter: {
+  // Filter / spam — deterministic (temperature 0)
+  filter: {
     primary: 'gemini-2.5-flash-lite',
     fallback1: 'claude-haiku-4-5-20251001',
     fallback2: null,

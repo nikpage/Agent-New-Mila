@@ -348,7 +348,7 @@ function linkButton(href: string, label: string, primary: boolean = false): stri
 function generateReportHtml(userId: string, data: BackfillReportData): string {
   const { userName, phase1, filteredSenders, counterparties, conversations, leads, unanswered, events, dateRange } = data
 
-  const totalFiltered = phase1.skippedBlocked + phase1.skippedPreFilter + phase1.skippedCategory
+  const totalFiltered = phase1.skippedBlocked + phase1.skippedFilter + phase1.skippedCategory
   const sinceStr = dateRange.since.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'long', year: 'numeric' })
   const untilStr = dateRange.until.toLocaleDateString('cs-CZ', { day: 'numeric', month: 'long', year: 'numeric' })
 
@@ -666,7 +666,7 @@ function generateReportHtml(userId: string, data: BackfillReportData): string {
 
 function generateReportText(data: BackfillReportData): string {
   const { userName, phase1, filteredSenders, counterparties, conversations, leads, unanswered, events, dateRange } = data
-  const totalFiltered = phase1.skippedBlocked + phase1.skippedPreFilter + phase1.skippedCategory
+  const totalFiltered = phase1.skippedBlocked + phase1.skippedFilter + phase1.skippedCategory
 
   let text = `Ahoj ${userName},\n\n`
   text += `Jsem Mila, vaše nová asistentka. Prošla jsem vaši poštu a připravila přehled.\n\n`
