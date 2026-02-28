@@ -199,6 +199,10 @@ async function processOneEmailForStore(
     return
   }
 
+  // Skip empty/near-empty messages — nothing to enrich, embed, or act on
+  const cleanedBody = cleanMessageText(email.body, 'email').slice(0, 5000)
+  if (cleanedBody.trim().length < 20) return
+
   try {
     const filter = await filterEmail(email.subject, email.body, email.from)
     if (!filter.relevant) {
@@ -223,7 +227,7 @@ async function processOneEmailForStore(
     universal_message_id: email.id,
     direction,
     raw_text: email.body,
-    cleaned_text: cleanMessageText(email.body, 'email').slice(0, 5000),
+    cleaned_text: cleanedBody,
     tag_primary: 'bulk_import',
     tag_secondary: null,
     timestamp: email.date.toISOString(),
@@ -424,6 +428,10 @@ async function processOnePhase1Email(
     return
   }
 
+  // Skip empty/near-empty messages — nothing to enrich, embed, or act on
+  const cleanedBody = cleanMessageText(email.body, 'email').slice(0, 5000)
+  if (cleanedBody.trim().length < 20) return
+
   let filterModel: string | null = null
   let filterKey: string | null = null
   try {
@@ -453,7 +461,7 @@ async function processOnePhase1Email(
     universal_message_id: email.id,
     direction,
     raw_text: email.body,
-    cleaned_text: cleanMessageText(email.body, 'email').slice(0, 5000),
+    cleaned_text: cleanedBody,
     tag_primary: 'bulk_import',
     tag_secondary: null,
     timestamp: email.date.toISOString(),
