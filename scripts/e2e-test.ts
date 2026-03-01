@@ -32,7 +32,7 @@ const args = process.argv.slice(2)
 const flags = new Set(args.filter(a => a.startsWith('--')))
 const positional = args.filter(a => !a.startsWith('--'))
 
-const USER_ID = positional[0] || 'd1a403fd-121b-4dcc-96aa-0efa3af114a8'
+const USER_ID = positional[0] || '9e59bc06-7276-453d-bc2e-f224a0a327e3'
 const BASE_URL = flags.has('--prod')
   ? 'https://mila.specialagents.pro'
   : (process.env.E2E_BASE_URL || process.env.APP_BASE_URL || 'http://localhost:3000')
