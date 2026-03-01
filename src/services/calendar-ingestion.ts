@@ -24,6 +24,7 @@ import { getUserSettings } from '@/lib/db/users'
 import { getCPByIdentifier, findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { addParticipant } from '@/lib/db/conversations'
 import { createAction, hasPendingAction, calculatePriorityScore } from '@/lib/db/actions'
+import { createTodo } from '@/lib/db/todos'
 import { isPersonalEvent } from '@/config/client'
 import type { UserSettings } from '@/lib/supabase/types'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
@@ -77,7 +78,7 @@ export async function ingestCalendarEvents(
           continue
         }
 
-        await syncGoogleEventToLocal(userId, gcalEvent, settings.timezone)
+        await syncGoogleEventToLocal(userId, gcalEvent, settings.timezone, settings)
         result.eventsSynced++
       } catch (error) {
         result.errors.push(`Failed to sync event ${gcalEvent.id}: ${error instanceof Error ? error.message : 'Unknown error'}`)
@@ -119,8 +120,20 @@ export async function ingestCalendarEvents(
 async function syncGoogleEventToLocal(
   userId: string,
   gcalEvent: CalendarEvent,
-  timezone: string
+  timezone: string,
+  settings: UserSettings
 ): Promise<void> {
+  const supabase = getSupabaseAdmin()
+
+  // Check if this event already exists locally (for ToDo creation — only on first sync)
+  const { data: existingEvents } = await supabase
+    .from('events')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('google_event_id', gcalEvent.id)
+    .limit(1)
+  const isNewEvent = !existingEvents || existingEvents.length === 0
+
   // Find CP from attendees (if any)
   let cpId: string | null = null
   if (gcalEvent.attendees && gcalEvent.attendees.length > 0) {
@@ -159,6 +172,25 @@ async function syncGoogleEventToLocal(
     start_time: gcalEvent.startTime.toISOString(),
     end_time: gcalEvent.endTime.toISOString(),
   })
+
+  // For NEW non-personal events: create a ToDo for the user to set weight (and optionally CP)
+  if (isNewEvent && !isPersonalEvent(gcalEvent.summary || '', settings)) {
+    try {
+      const dateStr = gcalEvent.startTime.toLocaleDateString('cs-CZ', {
+        day: 'numeric',
+        month: 'long',
+      })
+      await createTodo({
+        user_id: userId,
+        cp_id: cpId,
+        description: `Nastavit váhu${!cpId ? ' a protistranu' : ''} pro: "${gcalEvent.summary}" (${dateStr})`,
+        status: 'pending',
+        due_date: gcalEvent.startTime.toISOString().split('T')[0],
+      })
+    } catch (error) {
+      console.error(`Failed to create weight-setting todo for event ${gcalEvent.id}:`, error)
+    }
+  }
 }
 
 /**

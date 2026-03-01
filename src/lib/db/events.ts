@@ -293,18 +293,22 @@ export async function getEventsByBlockGroup(preBlockGroupId: string): Promise<Ev
 export async function cleanupBlockGroup(
   preBlockGroupId: string,
   confirmedEventId: string
-): Promise<string[]> {
+): Promise<{ deletedIds: string[]; deletedGoogleEventIds: string[] }> {
   const events = await getEventsByBlockGroup(preBlockGroupId)
   const deletedIds: string[] = []
+  const deletedGoogleEventIds: string[] = []
 
   for (const event of events) {
     if (event.id !== confirmedEventId && event.status === 'tentative') {
+      if (event.google_event_id) {
+        deletedGoogleEventIds.push(event.google_event_id)
+      }
       await deleteEvent(event.id)
       deletedIds.push(event.id)
     }
   }
 
-  return deletedIds
+  return { deletedIds, deletedGoogleEventIds }
 }
 
 /**
@@ -318,6 +322,8 @@ export async function createHoldEvent(params: {
   endTime: Date
   preBlockGroupId: string
   location?: string
+  googleEventId?: string
+  weight?: number
 }): Promise<Event> {
   return createEvent({
     user_id: params.userId,
@@ -330,6 +336,8 @@ export async function createHoldEvent(params: {
     start_time: params.startTime.toISOString(),
     end_time: params.endTime.toISOString(),
     pre_block_group_id: params.preBlockGroupId,
+    google_event_id: params.googleEventId || null,
+    weight: params.weight ?? null,
   })
 }
 
@@ -344,6 +352,8 @@ export async function createTravelBuffer(params: {
   fromLocation: string
   toLocation: string
   travelDurationText: string
+  googleEventId?: string
+  weight?: number
 }): Promise<Event> {
   return createEvent({
     user_id: params.userId,
@@ -354,6 +364,8 @@ export async function createTravelBuffer(params: {
     status: 'confirmed',
     start_time: params.startTime.toISOString(),
     end_time: params.endTime.toISOString(),
+    google_event_id: params.googleEventId || null,
+    weight: params.weight ?? null,
   })
 }
 

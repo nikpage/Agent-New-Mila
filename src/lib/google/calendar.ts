@@ -260,7 +260,8 @@ export async function findFreeSlots(
   date: Date,
   durationMinutes: number,
   workingHoursStart: number = 9,
-  workingHoursEnd: number = 18
+  workingHoursEnd: number = 18,
+  bufferMinutes: number = 0
 ): Promise<{ start: Date; end: Date }[]> {
   const events = await getEventsForDay(userId, date)
 
@@ -287,9 +288,10 @@ export async function findFreeSlots(
       })
     }
 
-    // Move current time to end of this event
-    if (event.endTime > currentTime) {
-      currentTime = event.endTime
+    // Move current time to end of this event + buffer
+    const eventEndWithBuffer = new Date(event.endTime.getTime() + bufferMinutes * 60 * 1000)
+    if (eventEndWithBuffer > currentTime) {
+      currentTime = eventEndWithBuffer
     }
   }
 

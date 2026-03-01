@@ -105,12 +105,14 @@ export async function findBestSlots(
     }
 
     // Find free slots on this day from Google Calendar
+    // meeting_buffer_minutes ensures a gap between events (transition time)
     const freeSlots = await findFreeSlots(
       userId,
       searchDate,
       durationMinutes,
       settings.working_hours_start,
-      settings.working_hours_end
+      settings.working_hours_end,
+      settings.meeting_buffer_minutes
     )
 
     for (const slot of freeSlots) {
@@ -172,7 +174,9 @@ async function calculateTravelForSlot(
   if (!travelTime) return null
 
   const travelMinutes = Math.ceil(travelTime.durationSeconds / 60)
-  const bufferMinutes = Math.max(travelMinutes + 10, MIN_TRAVEL_BUFFER_MINUTES) // 10 min extra + minimum 15
+  const travelBufferMinutes = Math.max(travelMinutes + 10, MIN_TRAVEL_BUFFER_MINUTES) // 10 min extra + minimum 15
+  // Total = standard meeting buffer + travel buffer
+  const bufferMinutes = settings.meeting_buffer_minutes + travelBufferMinutes
 
   const departureTime = new Date(slotStart.getTime() - bufferMinutes * 60 * 1000)
 
@@ -193,7 +197,8 @@ export async function blockSlotsForProposal(
   cpId: string,
   slots: SlotProposal[],
   durationMinutes: number,
-  location?: string
+  location?: string,
+  weight?: number
 ): Promise<SchedulingResult> {
   const cp = await getCPById(cpId)
   if (!cp) {
@@ -227,7 +232,7 @@ export async function blockSlotsForProposal(
 
       gcalEventIds.push(gcalEvent.id)
 
-      // Create local event record with block group
+      // Create local event record with block group — link to GCal event
       const localEvent = await createHoldEvent({
         userId,
         cpId,
@@ -236,6 +241,8 @@ export async function blockSlotsForProposal(
         endTime: slot.end,
         preBlockGroupId,
         location: location,
+        googleEventId: gcalEvent.id,
+        weight: weight ?? undefined,
       })
 
       blockedSlots.push(localEvent)
@@ -268,7 +275,7 @@ export async function confirmSlot(
   location?: string,
   newTitle?: string
 ): Promise<{ event: Event; travelBuffer?: Event }> {
-  // Confirm the selected event
+  // Confirm the selected event in local DB
   let confirmedEvent = await confirmEvent(confirmedEventId)
 
   // Update title if provided
@@ -276,24 +283,37 @@ export async function confirmSlot(
     confirmedEvent = await updateEvent(confirmedEventId, { title: newTitle })
   }
 
-  // Clean up other tentative holds in the same group
-  const deletedIds = await cleanupBlockGroup(preBlockGroupId, confirmedEventId)
+  // Clean up other tentative holds in the same group (local DB + collect GCal IDs)
+  const { deletedGoogleEventIds } = await cleanupBlockGroup(preBlockGroupId, confirmedEventId)
 
-  // Delete the corresponding Google Calendar holds
-  for (const deletedId of deletedIds) {
+  // Delete the orphaned Google Calendar holds
+  for (const gcalId of deletedGoogleEventIds) {
     try {
-      // Note: we'd need to track gcal IDs mapping, for now the gcal tentative events
-      // will be cleaned up by the Google Calendar sync on next run
+      await deleteCalendarEvent(userId, gcalId, 'none')
     } catch (error) {
-      console.error(`Failed to delete gcal hold:`, error)
+      console.error(`Failed to delete gcal hold ${gcalId}:`, error)
     }
   }
 
-  // If CP email provided, confirm on Google Calendar and send invite
-  if (cpEmail) {
+  // Confirm the chosen hold on Google Calendar (patch existing, don't create duplicate)
+  if (confirmedEvent.google_event_id) {
     try {
-      // Create a confirmed event with the CP as attendee
-      await createCalendarEvent(userId, {
+      await confirmCalendarEvent(
+        userId,
+        confirmedEvent.google_event_id,
+        cpEmail ? [cpEmail] : undefined,
+        {
+          summary: newTitle || confirmedEvent.title || 'Meeting',
+          location: location || confirmedEvent.location || undefined,
+        }
+      )
+    } catch (error) {
+      console.error('Failed to confirm gcal event:', error)
+    }
+  } else if (cpEmail) {
+    // Fallback: no stored GCal ID — create a new confirmed event
+    try {
+      const gcalEvent = await createCalendarEvent(userId, {
         summary: confirmedEvent.title || 'Meeting',
         description: confirmedEvent.description || undefined,
         location: location || confirmedEvent.location || undefined,
@@ -302,6 +322,8 @@ export async function confirmSlot(
         attendees: [cpEmail],
         sendUpdates: 'all',
       })
+      // Store the GCal ID for future reference
+      confirmedEvent = await updateEvent(confirmedEventId, { google_event_id: gcalEvent.id })
     } catch (error) {
       console.error('Failed to create confirmed gcal event with attendee:', error)
     }
@@ -347,15 +369,32 @@ async function bookTravelBuffer(
   if (!travelTime) return null
 
   const travelMinutes = Math.ceil(travelTime.durationSeconds / 60)
-  const bufferMinutes = Math.max(travelMinutes + 10, MIN_TRAVEL_BUFFER_MINUTES)
+  // Travel buffer = standard meeting buffer + actual travel time (+ 10 min padding, min 15 min travel)
+  const travelBufferMinutes = Math.max(travelMinutes + 10, MIN_TRAVEL_BUFFER_MINUTES)
+  const totalBufferMinutes = settings.meeting_buffer_minutes + travelBufferMinutes
 
-  const bufferStart = new Date(eventStart.getTime() - bufferMinutes * 60 * 1000)
+  const bufferStart = new Date(eventStart.getTime() - totalBufferMinutes * 60 * 1000)
   const bufferEnd = new Date(eventStart)
 
   // User can leave before working hours (e.g., 8:30 departure for 9:00 meeting)
   // So we don't enforce working hours on the buffer start time
 
-  // Create travel buffer in local DB
+  // Create travel buffer in Google Calendar first to get the GCal ID
+  let gcalEventId: string | undefined
+  try {
+    const gcalBuffer = await createTentativeCalendarEvent(userId, {
+      summary: `🚗 Travel to ${parentEvent.title || 'meeting'}`,
+      description: `Travel from ${origin} to ${meetingLocation} (${travelTime.durationText}). Auto-managed by Mila.`,
+      startTime: bufferStart,
+      endTime: bufferEnd,
+      status: 'confirmed',
+    })
+    gcalEventId = gcalBuffer.id
+  } catch (error) {
+    console.error('Failed to create travel buffer in Google Calendar:', error)
+  }
+
+  // Create travel buffer in local DB — inherit weight from parent event
   const buffer = await createTravelBuffer({
     userId,
     parentEventId: parentEvent.id,
@@ -364,20 +403,9 @@ async function bookTravelBuffer(
     fromLocation: origin,
     toLocation: meetingLocation,
     travelDurationText: travelTime.durationText,
+    googleEventId: gcalEventId,
+    weight: parentEvent.weight ?? undefined,
   })
-
-  // Also create in Google Calendar (no notifications)
-  try {
-    await createTentativeCalendarEvent(userId, {
-      summary: `🚗 Travel to ${parentEvent.title || 'meeting'}`,
-      description: `Travel from ${origin} to ${meetingLocation} (${travelTime.durationText}). Auto-managed by Mila.`,
-      startTime: bufferStart,
-      endTime: bufferEnd,
-      status: 'confirmed',
-    })
-  } catch (error) {
-    console.error('Failed to create travel buffer in Google Calendar:', error)
-  }
 
   return buffer
 }
@@ -400,11 +428,20 @@ export async function handleConflict(
   const conflictInfos: ConflictInfo[] = []
 
   for (const existing of conflicts) {
-    // Calculate existing event's score
-    // User-created events default weight = 100
+    // If weight is NULL, user hasn't set it — don't move this event
+    if (existing.weight == null) {
+      conflictInfos.push({
+        existingEvent: existing,
+        existingScore: Infinity,
+        newScore: newEventScore,
+        recommendation: 'suggest_alternate',
+      })
+      continue
+    }
+
+    // Use the stored weight from the event record
     const existingScore = calculateEventScore({
-      weight: 100, // User-created events get weight 100
-      isUserCreated: true,
+      weight: existing.weight,
     })
 
     const recommendation: 'move_existing' | 'suggest_alternate' =

@@ -405,6 +405,7 @@ export interface Database {
           status: string | null
           start_time: string
           end_time: string
+          weight: number | null
           created_at: string | null
         }
         Insert: {
@@ -421,6 +422,7 @@ export interface Database {
           status?: string | null
           start_time: string
           end_time: string
+          weight?: number | null
           created_at?: string | null
         }
         Update: {
@@ -437,6 +439,7 @@ export interface Database {
           status?: string | null
           start_time?: string
           end_time?: string
+          weight?: number | null
           created_at?: string | null
         }
       }

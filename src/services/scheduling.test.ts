@@ -28,7 +28,7 @@ vi.mock('@/lib/db/events', () => ({
   deleteEvent: vi.fn(),
   confirmEvent: vi.fn(),
   cancelEventWithCleanup: vi.fn(),
-  cleanupBlockGroup: vi.fn(),
+  cleanupBlockGroup: vi.fn().mockResolvedValue({ deletedIds: [], deletedGoogleEventIds: [] }),
   cleanupTravelBuffers: vi.fn(),
   getEventsByBlockGroup: vi.fn(),
   calculateEventScore: vi.fn().mockReturnValue(0),
