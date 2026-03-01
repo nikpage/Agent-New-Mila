@@ -1,6 +1,121 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getActionById, updateActionDraft, updateAction, dismissAction, dismissAllPendingActions } from '@/lib/db/actions'
+import { getConversationById } from '@/lib/db/conversations'
+import { getCPById } from '@/lib/db/counterparties'
+import { getUserSettings } from '@/lib/db/users'
 import { validateActionToken } from '@/lib/auth/tokens'
+import { generateFinalDraft } from '@/lib/ai/gemini'
+
+/**
+ * POST — Generate a draft for an action without executing it.
+ * Returns { subject, body, to } for the user to review/edit before sending.
+ */
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id: actionId } = await params
+    const body = await request.json()
+    const { token } = body
+
+    if (!token) {
+      return NextResponse.json({ error: 'Missing token' }, { status: 401 })
+    }
+
+    const action = await getActionById(actionId)
+    if (!action) {
+      return NextResponse.json({ error: 'Action not found' }, { status: 404 })
+    }
+
+    if (!validateActionToken(token, actionId, action.user_id)) {
+      return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
+    }
+
+    const cp = await getCPById(action.cp_id)
+    if (!cp) {
+      return NextResponse.json({ error: 'Counterparty not found' }, { status: 404 })
+    }
+
+    const sendTo = ((action.payload as Record<string, unknown>)?.editedTo as string) || cp.primary_identifier
+
+    // If draft already exists, return it
+    if (action.draft_body_text) {
+      return NextResponse.json({
+        subject: action.draft_subject || '',
+        body: action.draft_body_text,
+        to: sendTo,
+      })
+    }
+
+    // Generate a new draft
+    const conversation = await getConversationById(action.conversation_id)
+    const settings = await getUserSettings(action.user_id)
+    const payload = action.payload as Record<string, unknown> | null
+    const userNotes = (payload?.userNotes as string) || undefined
+    const missingInfo = (action.missing_info as { label: string; placeholder: string; value: string | null }[] | null) || undefined
+
+    let draftIntent = action.intent_cs || action.rationale_cs || action.rationale
+
+    // For SCHEDULE actions with selected slots, build slot-specific intent
+    if (action.action_type === 'SCHEDULE' && payload) {
+      const blockedSlots = payload.blocked_slots as { id: string; start: string; end: string; location?: string }[] | undefined
+      const slotSelection = (payload.slotSelection as string) || ''
+
+      if (blockedSlots && blockedSlots.length > 0 && slotSelection) {
+        const formatTime = (d: Date) => d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+        const formatDate = (d: Date) => d.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
+
+        let slotsToSend = blockedSlots
+        const selectedNumbers = slotSelection.split(/[,\s]+/).map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n >= 1 && n <= blockedSlots.length)
+
+        if (selectedNumbers.length > 0) {
+          slotsToSend = selectedNumbers.map(n => blockedSlots[n - 1])
+        }
+
+        if (selectedNumbers.length === 1) {
+          const slot = slotsToSend[0]
+          const start = new Date(slot.start)
+          const end = new Date(slot.end)
+          draftIntent = `Potvrzuji termín schůzky: ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}. Pozvánka v kalendáři byla odeslána.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`
+        } else {
+          const formattedSlots = slotsToSend.map((s, i) => {
+            const start = new Date(s.start)
+            const end = new Date(s.end)
+            return `${i + 1}. ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}`
+          })
+          const locationStr = (payload.location as string) || ''
+          draftIntent = `Navrhuji schůzku. Nabízím tyto termíny:\n${formattedSlots.join('\n')}${locationStr ? `\nMísto: ${locationStr}` : ''}\nProsím dejte vědět, který termín vám vyhovuje.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`
+        }
+      }
+    }
+
+    const draft = await generateFinalDraft(
+      conversation?.summary_json,
+      draftIntent,
+      settings,
+      userNotes,
+      missingInfo,
+      cp.name || cp.primary_identifier
+    )
+
+    // Save the generated draft
+    await updateActionDraft(actionId, draft.subject, draft.body)
+
+    return NextResponse.json({
+      subject: draft.subject,
+      body: draft.body,
+      to: sendTo,
+    })
+
+  } catch (error) {
+    console.error('Error generating draft:', error)
+    return NextResponse.json(
+      { error: 'Failed to generate draft' },
+      { status: 500 }
+    )
+  }
+}
 
 /** Commands the user can type to dismiss this action or all pending actions */
 const CANCEL_ALL_COMMANDS = ['cancel all', 'zrušit vše', 'zrušit všechno', 'zruš vše', 'zruš všechno']

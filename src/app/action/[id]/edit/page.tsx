@@ -1,8 +1,9 @@
 'use client'
 
 import { Suspense, useEffect, useState } from 'react'
-import { useParams, useSearchParams, useRouter } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { EditForm } from '@/components/action/EditForm'
+import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { theme } from '@/config/theme'
 import type { ActionProposal, ConversationThread, CP } from '@/lib/supabase/types'
@@ -16,13 +17,13 @@ interface ActionPageData {
 function EditContent() {
   const params = useParams()
   const searchParams = useSearchParams()
-  const router = useRouter()
   const actionId = params.id as string
   const token = searchParams.get('token')
 
   const [data, setData] = useState<ActionPageData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     loadAction()
@@ -62,12 +63,13 @@ function EditContent() {
       throw new Error(errorData.error || 'Failed to save draft')
     }
 
-    // Redirect back to action details
-    router.push(`/action/${actionId}?token=${token}`)
+    // Show saved confirmation with link to send
+    setSaved(true)
   }
 
   function handleCancel() {
-    router.push(`/action/${actionId}?token=${token}`)
+    // Go back to email / close tab
+    window.close()
   }
 
   if (loading) {
@@ -124,6 +126,58 @@ function EditContent() {
       <div style={{ textAlign: 'center' }}>
         <p style={{ color: theme.colors.textMuted }}>Akce nenalezena</p>
       </div>
+    )
+  }
+
+  // After save: show confirmation + link to send
+  if (saved) {
+    return (
+      <Card style={{ width: '100%', maxWidth: '672px', margin: '0 auto', padding: theme.spacing.lg, textAlign: 'center' }}>
+        <div style={{
+          width: '64px',
+          height: '64px',
+          backgroundColor: theme.colors.successBg,
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          margin: `0 auto ${theme.spacing.md} auto`
+        }}>
+          <svg
+            style={{ width: '32px', height: '32px', color: theme.colors.success }}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+        <h2 style={{ fontSize: theme.typography.sizes.xl, fontWeight: theme.typography.weights.semibold, color: theme.colors.text, marginBottom: theme.spacing.sm }}>
+          Uloženo
+        </h2>
+        <p style={{ color: theme.colors.textMuted, marginBottom: theme.spacing.lg }}>
+          Vaše úpravy byly uloženy.
+        </p>
+        <div style={{ display: 'flex', gap: theme.spacing.sm, justifyContent: 'center' }}>
+          <Button
+            variant="primary"
+            onClick={() => {
+              window.location.href = `/action/${actionId}?token=${token}&do=execute`
+            }}
+          >
+            Zkontrolovat a odeslat
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setSaved(false)
+              loadAction()
+            }}
+          >
+            Upravit znovu
+          </Button>
+        </div>
+      </Card>
     )
   }
 
