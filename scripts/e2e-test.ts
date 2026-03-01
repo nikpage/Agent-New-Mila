@@ -147,12 +147,17 @@ async function injectTestEmails(userId: string): Promise<string[]> {
   log('inject', `Injecting ${TEST_EMAILS.length} test emails into inbox...`)
 
   const gmail = await getGmailClient(userId)
+
+  // Fetch user's actual email for the To: header
+  const profile = await gmail.users.getProfile({ userId: 'me' })
+  const userEmail = profile.data.emailAddress || 'test@example.com'
+
   const injectedIds: string[] = []
 
   for (const email of TEST_EMAILS) {
     const rfc2822 = [
       `From: ${email.from}`,
-      `To: podtwo@gmail.com`,
+      `To: ${userEmail}`,
       `Subject: ${email.subject}`,
       `Date: ${new Date().toUTCString()}`,
       `Message-ID: <${RUN_ID}-${injectedIds.length}@e2e-test.local>`,
@@ -168,9 +173,13 @@ async function injectTestEmails(userId: string): Promise<string[]> {
       .replace(/\//g, '_')
       .replace(/=+$/, '')
 
-    const res = await gmail.users.messages.import({
+    // Use insert (not import) so we control labels directly.
+    // import() runs SMTP-like classification (spam, Promotions, etc.)
+    // which often strips INBOX/UNREAD from test emails, causing the
+    // agent's fetchUnreadEmails() to miss them.
+    const res = await gmail.users.messages.insert({
       userId: 'me',
-      requestBody: { raw },
+      requestBody: { raw, labelIds: ['INBOX', 'UNREAD'] },
       internalDateSource: 'dateHeader',
     })
 
