@@ -8,6 +8,7 @@
 - NEVER default to generic patterns. Every decision must be specific to THIS project (Mila, nikpage/Agent-New-Mila, shared multi-tenant deployment)
 - NEVER use placeholders, stubs, or "TODO" on the developer side. Use real values, real logic, real implementations
 - NEVER take shortcuts that create maintenance debt (e.g., clone-per-client instead of multi-tenant, hardcoded config instead of DB-driven)
+- NEVER modify expected values in pinning tests (files: `actions.test.ts`, `lead-tracking.test.ts`, `threading.test.ts`, `defaults.test.ts`). If a pinning test fails, REPORT the failure and WAIT. Do not update the test to match new output
 
 ## Base URLs & Testing
 - **Local**: `http://localhost:3000`

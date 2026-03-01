@@ -1,0 +1,51 @@
+name: CI — Tests & Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  pinning-test-guard:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for pinning test changes
+        run: |
+          PINNING_FILES=(
+            "src/lib/db/actions.test.ts"
+            "src/services/lead-tracking.test.ts"
+            "src/services/threading.test.ts"
+            "src/lib/supabase/defaults.test.ts"
+          )
+          CHANGED=""
+          for f in "${PINNING_FILES[@]}"; do
+            if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q "^${f}$"; then
+              CHANGED="${CHANGED}\n- ${f}"
+            fi
+          done
+          if [ -n "$CHANGED" ]; then
+            echo "::warning::PINNING TEST VALUES CHANGED — requires manual justification:${CHANGED}"
+            echo "## ⚠️ Pinning Test Changes Detected" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "The following pinning test files were modified in this PR:" >> $GITHUB_STEP_SUMMARY
+            echo -e "$CHANGED" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**These tests guard critical business logic thresholds. Changes require explicit justification and @nikpage review.**" >> $GITHUB_STEP_SUMMARY
+          fi

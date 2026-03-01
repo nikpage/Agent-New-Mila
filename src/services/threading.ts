@@ -25,14 +25,17 @@ import type { Message, ConversationThread } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
 const MESSAGES_BEFORE_REBUILD = 5 // Rebuild summary after this many new messages
-const SIMILARITY_THRESHOLD = 0.78 // Cosine similarity — auto-join above this
-const TIEBREAKER_THRESHOLD = 0.55 // Cosine similarity — ask AI to decide between this and SIMILARITY_THRESHOLD
+/** @internal — exported for pinning tests */
+export const SIMILARITY_THRESHOLD = 0.78 // Cosine similarity — auto-join above this
+/** @internal — exported for pinning tests */
+export const TIEBREAKER_THRESHOLD = 0.55 // Cosine similarity — ask AI to decide between this and SIMILARITY_THRESHOLD
 
 /**
  * Compute cosine similarity between two embedding vectors.
  * Returns a value between -1 and 1, where 1 = identical.
+ * @internal — exported for pinning tests
  */
-function cosineSimilarity(a: number[], b: number[]): number {
+export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) return 0
   let dotProduct = 0
   let normA = 0
