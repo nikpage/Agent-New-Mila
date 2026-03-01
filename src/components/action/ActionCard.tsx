@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Textarea } from '@/components/ui/Input'
 import { Card } from '@/components/ui/Card'
+import { EditForm } from './EditForm'
 import { TYPE_LABEL, TYPE_VARIANT } from './action-card-template'
 import { theme } from '@/config/theme'
 import type { ActionProposal, ConversationThread, CP, ConversationSummary } from '@/lib/supabase/types'
@@ -80,7 +81,7 @@ export interface ActionCardProps {
   recentMessage?: string
   participants?: Participant[]
   onDoIt:        () => Promise<void>
-  onEdit:        (notes: string) => Promise<void>
+  onEdit:        (data: { notes: string; dynamicFields?: Record<string, string> }) => Promise<void>
   onIllDoIt:     () => Promise<void>
   onToDo?:       () => Promise<void>
   onBlacklist?:  () => Promise<void>
@@ -175,7 +176,31 @@ export function ActionCard({
       </div>
 
       {/* ─── EDIT PANEL ────────────────────────────────────────────── */}
-      {editOpen && (
+      {editOpen && hasBlockedSlots ? (
+        /* Full EditForm for SCHEDULE actions with slot selection */
+        <div style={{
+          margin: `0 ${theme.spacing.lg} ${theme.spacing.sm}`,
+          padding: theme.spacing.md,
+          backgroundColor: theme.colors.secondary,
+          borderRadius: theme.borderRadius.md,
+          border: `1px solid ${theme.colors.border}`
+        }}>
+          <EditForm
+            action={action}
+            onSubmit={async (data) => {
+              setLoading('edit-submit')
+              try {
+                await onEdit(data)
+                setEditOpen(false)
+              } finally {
+                setLoading(null)
+              }
+            }}
+            onCancel={() => setEditOpen(false)}
+          />
+        </div>
+      ) : editOpen ? (
+        /* Simple notes-only editor for non-slot actions */
         <div style={{
           margin: `0 ${theme.spacing.lg} ${theme.spacing.sm}`,
           padding: theme.spacing.md,
@@ -197,7 +222,7 @@ export function ActionCard({
               variant="primary"
               size="sm"
               onClick={run('edit-submit', async () => {
-                await onEdit(notes)
+                await onEdit({ notes })
                 setEditOpen(false)
                 setNotes('')
               })}
@@ -215,7 +240,7 @@ export function ActionCard({
             </Button>
           </div>
         </div>
-      )}
+      ) : null}
 
       {/* ─── ACTION CONTROLS ───────────────────────────────────────── */}
       <div style={{

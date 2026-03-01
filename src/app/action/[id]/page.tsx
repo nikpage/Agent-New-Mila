@@ -114,11 +114,11 @@ function ActionContent() {
     })
   }
 
-  async function handleEdit(notes: string) {
+  async function handleEdit(data: { notes: string; dynamicFields?: Record<string, string> }) {
     const response = await fetch(`/api/action/${actionId}/draft`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, notes }),
+      body: JSON.stringify({ token, notes: data.notes, dynamicFields: data.dynamicFields }),
     })
 
     if (!response.ok) {
