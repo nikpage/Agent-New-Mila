@@ -7,9 +7,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import { DEFAULT_USER_SETTINGS } from '@/lib/supabase/types'
-
-// We test getLeadStatus by reimporting and testing the exact thresholds
-// Since getLeadStatus is not exported, we test via the constants it reads from
+import { getLeadStatus } from './lead-tracking'
+import type { UserSettings } from '@/lib/supabase/types'
 
 describe('Lead Tracking — Threshold Pinning', () => {
 
@@ -89,5 +88,78 @@ describe('Lead Tracking — Urgency and Pain Factor Mapping', () => {
     const deadPain = 9
     expect(deadUrgency).toBe(9)
     expect(deadPain).toBe(9)
+  })
+})
+
+// ── getLeadStatus() Function-Level Pinning ──────────────────────────────────
+
+describe('Lead Tracking — getLeadStatus() Pinning', () => {
+  const settings = DEFAULT_USER_SETTINGS as UserSettings
+
+  // Active: < cooling_threshold_days (2)
+  it('0 days → active', () => {
+    expect(getLeadStatus(0, settings)).toBe('active')
+  })
+
+  it('1 day → active', () => {
+    expect(getLeadStatus(1, settings)).toBe('active')
+  })
+
+  // Cooling boundary: exactly cooling_threshold_days (2)
+  it('2 days → cooling (boundary)', () => {
+    expect(getLeadStatus(2, settings)).toBe('cooling')
+  })
+
+  it('3 days → cooling', () => {
+    expect(getLeadStatus(3, settings)).toBe('cooling')
+  })
+
+  it('4 days → cooling', () => {
+    expect(getLeadStatus(4, settings)).toBe('cooling')
+  })
+
+  // Cold boundary: exactly cold_threshold_days (5)
+  it('5 days → cold (boundary)', () => {
+    expect(getLeadStatus(5, settings)).toBe('cold')
+  })
+
+  it('10 days → cold', () => {
+    expect(getLeadStatus(10, settings)).toBe('cold')
+  })
+
+  it('13 days → cold', () => {
+    expect(getLeadStatus(13, settings)).toBe('cold')
+  })
+
+  // Dead boundary: exactly dead_threshold_days (14)
+  it('14 days → dead (boundary)', () => {
+    expect(getLeadStatus(14, settings)).toBe('dead')
+  })
+
+  it('100 days → dead', () => {
+    expect(getLeadStatus(100, settings)).toBe('dead')
+  })
+
+  // Order check: dead takes precedence over cold takes precedence over cooling
+  it('evaluation order is dead → cold → cooling → active', () => {
+    // If thresholds were evaluated in wrong order, results would differ
+    expect(getLeadStatus(14, settings)).toBe('dead')  // not 'cold' or 'cooling'
+    expect(getLeadStatus(5, settings)).toBe('cold')    // not 'cooling'
+    expect(getLeadStatus(2, settings)).toBe('cooling') // not 'active'
+  })
+
+  // Custom settings: verify the function reads from settings, not hardcoded values
+  it('respects custom thresholds from settings', () => {
+    const custom = {
+      ...DEFAULT_USER_SETTINGS,
+      cooling_threshold_days: 7,
+      cold_threshold_days: 14,
+      dead_threshold_days: 30,
+    } as UserSettings
+
+    expect(getLeadStatus(6, custom)).toBe('active')   // < 7
+    expect(getLeadStatus(7, custom)).toBe('cooling')   // = 7
+    expect(getLeadStatus(14, custom)).toBe('cold')     // = 14
+    expect(getLeadStatus(30, custom)).toBe('dead')     // = 30
   })
 })

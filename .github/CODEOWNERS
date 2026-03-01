@@ -1,0 +1,5 @@
+# Pinning tests — require explicit review before merge
+src/lib/db/actions.test.ts           @nikpage
+src/services/lead-tracking.test.ts   @nikpage
+src/services/threading.test.ts       @nikpage
+src/lib/supabase/defaults.test.ts    @nikpage
