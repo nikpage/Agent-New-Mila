@@ -613,35 +613,39 @@ async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise
   }
 
   // Phase 2: Search-based cleanup catches sent replies, other runs, etc.
-  // Quote the marker to prevent Gmail interpreting the hyphen as negation.
-  log('cleanup', `Searching for remaining emails matching "${TEST_MARKER}"...`)
-  let searchDeleted = 0
-  let pageToken: string | undefined
-  do {
-    const list = await gmail.users.messages.list({
-      userId: 'me',
-      q: `subject:"${TEST_MARKER}"`,
-      includeSpamTrash: true,
-      maxResults: 500,
-      ...(pageToken ? { pageToken } : {}),
-    })
+  // Search full message (not just subject:) to avoid Gmail hyphen-as-negation issues.
+  const searchQueries = [
+    `${TEST_MARKER}`,                  // Broad: "E2E-TEST" anywhere in message
+    `subject:(E2E TEST)`,              // Subject containing both words
+  ]
 
-    for (const msg of list.data.messages || []) {
-      if (!msg.id || trashedIds.has(msg.id)) continue
-      try {
-        await gmail.users.messages.trash({ userId: 'me', id: msg.id })
-        trashedIds.add(msg.id)
-        searchDeleted++
-      } catch {
-        // Already trashed or gone
+  for (const q of searchQueries) {
+    log('cleanup', `Searching Gmail with q="${q}" (includeSpamTrash=true)...`)
+    let pageToken: string | undefined
+    do {
+      const list = await gmail.users.messages.list({
+        userId: 'me',
+        q,
+        includeSpamTrash: true,
+        maxResults: 500,
+        ...(pageToken ? { pageToken } : {}),
+      })
+
+      const msgs = list.data.messages || []
+      log('cleanup', `  Found ${msgs.length} messages in this page`)
+
+      for (const msg of msgs) {
+        if (!msg.id || trashedIds.has(msg.id)) continue
+        try {
+          await gmail.users.messages.trash({ userId: 'me', id: msg.id })
+          trashedIds.add(msg.id)
+        } catch {
+          // Already trashed or gone
+        }
       }
-    }
 
-    pageToken = list.data.nextPageToken ?? undefined
-  } while (pageToken)
-
-  if (searchDeleted > 0) {
-    log('cleanup', `Trashed ${searchDeleted} additional test emails found by search`)
+      pageToken = list.data.nextPageToken ?? undefined
+    } while (pageToken)
   }
 
   log('cleanup', `Total: ${trashedIds.size} test emails cleaned up`)
@@ -653,7 +657,8 @@ async function cleanupTestCalendarEvents(userId: string): Promise<number> {
   const calendar = google.calendar({ version: 'v3', auth })
   let deleted = 0
 
-  log('cleanup', `Searching for calendar events matching "${TEST_MARKER}"...`)
+  // Search for events whose summary contains the test marker
+  log('cleanup', `Searching calendar events matching "${TEST_MARKER}"...`)
 
   let pageToken: string | undefined
   do {
@@ -665,7 +670,10 @@ async function cleanupTestCalendarEvents(userId: string): Promise<number> {
       ...(pageToken ? { pageToken } : {}),
     })
 
-    for (const event of list.data.items || []) {
+    const items = list.data.items || []
+    log('cleanup', `  Found ${items.length} calendar events in this page`)
+
+    for (const event of items) {
       if (!event.id) continue
       try {
         await calendar.events.delete({ calendarId: 'primary', eventId: event.id })
