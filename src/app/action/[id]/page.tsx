@@ -281,7 +281,7 @@ function QuickActionView({ actionId, token, doAction }: { actionId: string; toke
 // ─── Detail View (no ?do param — DETAILY link from email) ───────────────────
 // This is the only case where showing the full card makes sense.
 
-function DetailView({ actionId, token }: { actionId: string; token: string }) {
+function DetailView({ actionId, token, initialDetailOpen }: { actionId: string; token: string; initialDetailOpen?: boolean }) {
   const [data, setData] = useState<ActionPageData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -381,6 +381,7 @@ function DetailView({ actionId, token }: { actionId: string; token: string }) {
           cp={data.cp}
           recentMessage={data.recentMessage?.cleaned_text ?? data.recentMessage?.raw_text ?? undefined}
           participants={data.participants}
+          initialDetailOpen={initialDetailOpen}
           onDoIt={handleDoIt}
           onEdit={handleEdit}
           onIllDoIt={handleIllDoIt}
@@ -403,6 +404,7 @@ function ActionContent() {
   const actionId = params.id as string
   const token = searchParams.get('token')
   const doAction = searchParams.get('do')
+  const view = searchParams.get('view')
 
   if (!token) {
     return <ErrorDisplay message="Chybí autorizační token." />
@@ -419,7 +421,7 @@ function ActionContent() {
   }
 
   // No ?do → Detail view (DETAILY link from email, shows full card)
-  return <DetailView actionId={actionId} token={token} />
+  return <DetailView actionId={actionId} token={token} initialDetailOpen={view === 'details'} />
 }
 
 function LoadingFallback() {

@@ -1,5 +1,3 @@
-'use client'
-
 import { useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -80,6 +78,7 @@ export interface ActionCardProps {
   cp:            CP
   recentMessage?: string
   participants?: Participant[]
+  initialDetailOpen?: boolean
   onDoIt:        () => Promise<void>
   onEdit:        (data: { notes: string; dynamicFields?: Record<string, string> }) => Promise<void>
   onIllDoIt:     () => Promise<void>
@@ -90,11 +89,11 @@ export interface ActionCardProps {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function ActionCard({
-  action, conversation, cp, recentMessage,
+  action, conversation, cp, recentMessage, initialDetailOpen,
   onDoIt, onEdit, onIllDoIt, onBlacklist,
 }: ActionCardProps) {
   const [editOpen, setEditOpen]     = useState(false)
-  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailOpen, setDetailOpen] = useState(!!initialDetailOpen)
   const [notes, setNotes]           = useState('')
   const [loading, setLoading]       = useState<string | null>(null)
 
