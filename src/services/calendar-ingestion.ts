@@ -162,6 +162,7 @@ async function syncGoogleEventToLocal(
   // If the event already exists locally (matched by google_event_id + user_id),
   // it will be updated with the latest values from Google Calendar.
   // If it's new, a fresh record is created with google_event_id set.
+  const isNonPersonal = !isPersonalEvent(gcalEvent.summary || '', settings)
   await upsertEventByGoogleId(gcalEvent.id, userId, {
     cp_id: cpId,
     title: gcalEvent.summary,
@@ -171,6 +172,8 @@ async function syncGoogleEventToLocal(
     status: gcalEvent.status === 'cancelled' ? 'cancelled' : 'confirmed',
     start_time: gcalEvent.startTime.toISOString(),
     end_time: gcalEvent.endTime.toISOString(),
+    // Set default weight for new non-personal events; user can override via ToDo
+    ...(isNewEvent && isNonPersonal ? { weight: settings.default_event_weight } : {}),
   })
 
   // For NEW non-personal events: create a ToDo for the user to set weight (and optionally CP)

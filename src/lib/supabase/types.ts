@@ -701,6 +701,7 @@ export interface UserSettings {
   business_calendar_id: string
   personal_calendar_id: string | null
   personal_event_keywords: string[]
+  default_event_weight: number         // default 5 — weight assigned to non-Mila calendar events until user overrides via ToDo
 
   // QStash schedule IDs (managed automatically)
   qstash_morning_schedule_id: string | null
@@ -791,6 +792,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
     'vacation', 'holiday', 'narozeniny', 'birthday', 'výročí',
     'anniversary', 'škola', 'school', 'kroužek',
   ],
+  default_event_weight: 5,
 
   // QStash schedule IDs
   qstash_morning_schedule_id: null,

@@ -217,6 +217,10 @@ describe('DEFAULT_USER_SETTINGS — Full Snapshot', () => {
     expect(DEFAULT_USER_SETTINGS.personal_calendar_id).toBeNull()
   })
 
+  it('default_event_weight = 5', () => {
+    expect(DEFAULT_USER_SETTINGS.default_event_weight).toBe(5)
+  })
+
   it('personal_event_keywords contains expected keywords', () => {
     const kw = DEFAULT_USER_SETTINGS.personal_event_keywords
     expect(Array.isArray(kw)).toBe(true)
@@ -275,6 +279,6 @@ describe('DEFAULT_USER_SETTINGS — Full Snapshot', () => {
   it('has exactly the expected number of fields', () => {
     const fieldCount = Object.keys(DEFAULT_USER_SETTINGS).length
     // If you add a new field to UserSettings, add a test above AND update this count
-    expect(fieldCount).toBe(57)
+    expect(fieldCount).toBe(58)
   })
 })
