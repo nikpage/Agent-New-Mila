@@ -417,6 +417,7 @@ All settings stored in `users.settings` JSONB column. Configured via `scripts/co
 | `business_calendar_id` | string | `"primary"` | Google Calendar ID |
 | `personal_calendar_id` | string\|null | `null` | Personal calendar (blocks time, no actions) |
 | `personal_event_keywords` | string[] | `["osobni", "personal", ...]` | Keywords identifying personal events |
+| `default_event_weight` | number | `5` | Default weight for non-Mila calendar events until user overrides via ToDo (1-10 scale) |
 
 ## WhatsApp
 
