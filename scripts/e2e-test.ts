@@ -472,6 +472,33 @@ async function injectCPResponses(
   return responseIds
 }
 
+// ─── Instant notification ────────────────────────────────────────────────────
+
+interface InstantNotifyResult {
+  success: boolean
+  sent: number
+  failed: number
+  timestamp: string
+}
+
+async function runInstantNotify(): Promise<InstantNotifyResult> {
+  log('instant', 'Triggering instant notification poll...')
+
+  const { status, body } = await api(
+    'GET',
+    '/api/cron/instant-notify',
+    { headers: { authorization: `Bearer ${CRON_SECRET}` }, timeout: 60_000 }
+  )
+
+  if (status !== 200) {
+    fail('instant', `HTTP ${status}: ${JSON.stringify(body)}`)
+  }
+
+  const result = body as unknown as InstantNotifyResult
+  log('instant', `Result: sent=${result.sent}, failed=${result.failed}`)
+  return result
+}
+
 // ─── Morning brief ──────────────────────────────────────────────────────────
 
 async function runBrief(userId: string): Promise<void> {
@@ -609,6 +636,68 @@ async function main() {
     console.log()
     printChecks(r1Checks)
     allChecks.push(...r1Checks)
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // INSTANT NOTIFY: Poll for high-priority actions → send urgent emails
+    // ═══════════════════════════════════════════════════════════════════════
+    if (r1.actionsGenerated > 0) {
+      console.log()
+      console.log('─── Instant Notify: High-Priority Email ────────────────')
+
+      // Check if any actions qualify (score > 79)
+      const highPriority = (r1.actions || []).filter(a => a.priority_score > 79)
+      log('instant', `${highPriority.length}/${(r1.actions || []).length} actions have priority_score > 79`)
+      if (highPriority.length > 0) {
+        for (const a of highPriority) {
+          log('instant', `  ⚡ [${a.action_type}] score=${a.priority_score}: ${a.intent_cs || a.rationale}`)
+        }
+      }
+
+      const notifyResult = await runInstantNotify()
+
+      const instantChecks: CheckResult[] = []
+      instantChecks.push({
+        name: 'Instant: Endpoint returned success',
+        pass: notifyResult.success === true,
+        detail: `success=${notifyResult.success}`,
+      })
+      instantChecks.push({
+        name: 'Instant: No failures',
+        pass: notifyResult.failed === 0,
+        detail: `failed=${notifyResult.failed}`,
+      })
+
+      if (highPriority.length > 0) {
+        instantChecks.push({
+          name: 'Instant: High-priority actions notified',
+          pass: notifyResult.sent > 0,
+          detail: `sent=${notifyResult.sent} (${highPriority.length} actions had score > 79)`,
+        })
+      } else {
+        log('instant', 'No actions above threshold 79 — sent=0 is expected')
+        instantChecks.push({
+          name: 'Instant: No high-priority actions (expected)',
+          pass: notifyResult.sent === 0,
+          detail: `sent=${notifyResult.sent} (no actions above threshold)`,
+        })
+      }
+
+      console.log()
+      printChecks(instantChecks)
+      allChecks.push(...instantChecks)
+
+      // Run instant-notify a second time — should NOT re-send (idempotency)
+      log('instant', 'Running instant-notify again to verify no double-send...')
+      const notifyResult2 = await runInstantNotify()
+      const idempotencyCheck: CheckResult = {
+        name: 'Instant: No double-send on re-poll',
+        pass: notifyResult2.sent === 0,
+        detail: `sent=${notifyResult2.sent} on re-poll (should be 0)`,
+      }
+      console.log()
+      printChecks([idempotencyCheck])
+      allChecks.push(idempotencyCheck)
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // ROUND 2: Execute REPLY actions (Mila sends emails back to CPs)
