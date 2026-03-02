@@ -112,6 +112,36 @@ const TEST_EMAILS: TestEmail[] = [
   },
 ]
 
+/**
+ * High-priority email designed to guarantee a priority_score > 79.
+ * Massive deal value (45M CZK), immovable deadline (tomorrow), explicit urgency.
+ * Injected after Round 1 specifically to test instant notifications.
+ */
+const HIGH_PRIORITY_EMAIL: TestEmail = {
+  cpKey: 'urgent',
+  from: 'Jan Novotny <ainikpage+novotny.jan@gmail.com>',
+  subject: `[${RUN_ID}] URGENT: 45M CZK deal — notary signing tomorrow morning`,
+  body: [
+    'URGENTNÍ — NUTNÁ OKAMŽITÁ ODPOVĚĎ',
+    '',
+    'The buyer for the Vinohrady commercial building has confirmed 45,000,000 CZK.',
+    'The notary appointment is TOMORROW at 9:00 AM at Notářská kancelář Praha 2.',
+    '',
+    'We need your confirmation TODAY by 5pm or the deal falls through.',
+    'The buyer has another property lined up and will walk away.',
+    '',
+    'Documents required:',
+    '- Signed purchase agreement',
+    '- Power of attorney (original)',
+    '- Proof of financing from the bank',
+    '',
+    'This is the largest deal this quarter. Please respond IMMEDIATELY.',
+    '',
+    'Jan Novotný',
+    'Senior Broker, Prague Commercial',
+  ].join('\n'),
+}
+
 /** CP follow-up responses for Round 3 — keyed by cpKey */
 const CP_RESPONSES: Record<string, string> = {
   bob: [
@@ -309,6 +339,50 @@ async function injectTestEmails(userId: string): Promise<InjectedEmail[]> {
   }
 
   log('R1:inject', `Injected ${injected.length} emails. Waiting 3s for Gmail indexing...`)
+  await new Promise(r => setTimeout(r, 3000))
+
+  return injected
+}
+
+// ─── Inject high-priority email (for instant-notify test) ───────────────────
+
+async function injectHighPriorityEmail(userId: string): Promise<InjectedEmail> {
+  log('instant:inject', 'Injecting high-priority trigger email...')
+
+  const gmail = await getGmailClient(userId)
+  const userEmail = await getUserEmail(userId)
+
+  const email = HIGH_PRIORITY_EMAIL
+  const rfcMessageId = `<${RUN_ID}-urgent-0@e2e-test.local>`
+  const rfc2822 = [
+    `From: ${email.from}`,
+    `To: ${userEmail}`,
+    `Subject: ${email.subject}`,
+    `Date: ${new Date().toUTCString()}`,
+    `Message-ID: ${rfcMessageId}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset="UTF-8"',
+    '',
+    email.body,
+  ].join('\r\n')
+
+  const res = await gmail.users.messages.insert({
+    userId: 'me',
+    requestBody: { raw: encodeRaw(rfc2822), labelIds: ['INBOX', 'UNREAD'] },
+    internalDateSource: 'dateHeader',
+  })
+
+  const injected: InjectedEmail = {
+    gmailId: res.data.id || 'unknown',
+    threadId: res.data.threadId || 'unknown',
+    cpKey: email.cpKey,
+    from: email.from,
+    subject: email.subject,
+    rfcMessageId,
+  }
+
+  log('instant:inject', `  ✓ "${email.subject.replace(`[${RUN_ID}] `, '')}" → ${injected.gmailId} (thread: ${injected.threadId})`)
+  log('instant:inject', 'Waiting 3s for Gmail indexing...')
   await new Promise(r => setTimeout(r, 3000))
 
   return injected
@@ -638,66 +712,87 @@ async function main() {
     allChecks.push(...r1Checks)
 
     // ═══════════════════════════════════════════════════════════════════════
-    // INSTANT NOTIFY: Poll for high-priority actions → send urgent emails
+    // INSTANT NOTIFY: Inject high-priority email → agent → notify → verify
     // ═══════════════════════════════════════════════════════════════════════
-    if (r1.actionsGenerated > 0) {
-      console.log()
-      console.log('─── Instant Notify: High-Priority Email ────────────────')
+    console.log()
+    console.log('─── Instant Notify: High-Priority Email ────────────────')
 
-      // Check if any actions qualify (score > 79)
-      const highPriority = (r1.actions || []).filter(a => a.priority_score > 79)
-      log('instant', `${highPriority.length}/${(r1.actions || []).length} actions have priority_score > 79`)
-      if (highPriority.length > 0) {
-        for (const a of highPriority) {
-          log('instant', `  ⚡ [${a.action_type}] score=${a.priority_score}: ${a.intent_cs || a.rationale}`)
-        }
-      }
-
-      const notifyResult = await runInstantNotify()
-
-      const instantChecks: CheckResult[] = []
-      instantChecks.push({
-        name: 'Instant: Endpoint returned success',
-        pass: notifyResult.success === true,
-        detail: `success=${notifyResult.success}`,
-      })
-      instantChecks.push({
-        name: 'Instant: No failures',
-        pass: notifyResult.failed === 0,
-        detail: `failed=${notifyResult.failed}`,
-      })
-
-      if (highPriority.length > 0) {
-        instantChecks.push({
-          name: 'Instant: High-priority actions notified',
-          pass: notifyResult.sent > 0,
-          detail: `sent=${notifyResult.sent} (${highPriority.length} actions had score > 79)`,
-        })
-      } else {
-        log('instant', 'No actions above threshold 79 — sent=0 is expected')
-        instantChecks.push({
-          name: 'Instant: No high-priority actions (expected)',
-          pass: notifyResult.sent === 0,
-          detail: `sent=${notifyResult.sent} (no actions above threshold)`,
-        })
-      }
-
-      console.log()
-      printChecks(instantChecks)
-      allChecks.push(...instantChecks)
-
-      // Run instant-notify a second time — should NOT re-send (idempotency)
-      log('instant', 'Running instant-notify again to verify no double-send...')
-      const notifyResult2 = await runInstantNotify()
-      const idempotencyCheck: CheckResult = {
-        name: 'Instant: No double-send on re-poll',
-        pass: notifyResult2.sent === 0,
-        detail: `sent=${notifyResult2.sent} on re-poll (should be 0)`,
-      }
-      console.log()
-      printChecks([idempotencyCheck])
-      allChecks.push(idempotencyCheck)
+    // Step 1: Inject a purpose-built high-priority email (45M CZK, deadline tomorrow)
+    let urgentEmail: InjectedEmail | null = null
+    if (!flags.has('--skip-inject')) {
+      urgentEmail = await injectHighPriorityEmail(USER_ID)
+      allGmailIds.push(urgentEmail.gmailId)
+    } else {
+      log('instant:inject', 'Skipped (--skip-inject)')
     }
+
+    // Step 2: Run agent to ingest the urgent email
+    const instantAgent = await runAgent(USER_ID, 'instant')
+
+    // Step 3: Verify the agent produced a high-priority action (score > 79)
+    const highPriority = (instantAgent.actions || []).filter(a => a.priority_score > 79)
+    log('instant', `${highPriority.length}/${(instantAgent.actions || []).length} actions have priority_score > 79`)
+    for (const a of highPriority) {
+      log('instant', `  ⚡ [${a.action_type}] score=${a.priority_score}: ${a.intent_cs || a.rationale}`)
+    }
+
+    const instantChecks: CheckResult[] = []
+
+    if (!flags.has('--skip-inject')) {
+      instantChecks.push({
+        name: 'Instant: Urgent email ingested',
+        pass: instantAgent.emailsIngested > 0,
+        detail: `${instantAgent.emailsIngested} email(s) ingested`,
+      })
+      instantChecks.push({
+        name: 'Instant: Action generated for urgent email',
+        pass: instantAgent.actionsGenerated > 0,
+        detail: `${instantAgent.actionsGenerated} action(s) generated`,
+      })
+      instantChecks.push({
+        name: 'Instant: At least one action scored > 79',
+        pass: highPriority.length > 0,
+        detail: `${highPriority.length} action(s) above threshold`,
+      })
+    }
+
+    // Step 4: Run instant-notify — should pick up the high-priority action
+    const notifyResult = await runInstantNotify()
+
+    instantChecks.push({
+      name: 'Instant: Endpoint returned success',
+      pass: notifyResult.success === true,
+      detail: `success=${notifyResult.success}`,
+    })
+    instantChecks.push({
+      name: 'Instant: No failures',
+      pass: notifyResult.failed === 0,
+      detail: `failed=${notifyResult.failed}`,
+    })
+
+    if (highPriority.length > 0) {
+      instantChecks.push({
+        name: 'Instant: High-priority actions notified',
+        pass: notifyResult.sent > 0,
+        detail: `sent=${notifyResult.sent} (${highPriority.length} actions had score > 79)`,
+      })
+    }
+
+    console.log()
+    printChecks(instantChecks)
+    allChecks.push(...instantChecks)
+
+    // Step 5: Run instant-notify again — should NOT re-send (idempotency)
+    log('instant', 'Running instant-notify again to verify no double-send...')
+    const notifyResult2 = await runInstantNotify()
+    const idempotencyCheck: CheckResult = {
+      name: 'Instant: No double-send on re-poll',
+      pass: notifyResult2.sent === 0,
+      detail: `sent=${notifyResult2.sent} on re-poll (should be 0)`,
+    }
+    console.log()
+    printChecks([idempotencyCheck])
+    allChecks.push(idempotencyCheck)
 
     // ═══════════════════════════════════════════════════════════════════════
     // ROUND 2: Execute REPLY actions (Mila sends emails back to CPs)
