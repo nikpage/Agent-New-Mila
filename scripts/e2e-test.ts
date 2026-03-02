@@ -595,37 +595,91 @@ async function runBrief(userId: string): Promise<void> {
 
 async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise<number> {
   const gmail = await getGmailClient(userId)
-  let deleted = 0
+  const trashedIds = new Set<string>()
 
+  // Phase 1: Trash specific tracked message IDs (fast path for normal flow)
   if (messageIds?.length) {
     for (const id of messageIds) {
       try {
         await gmail.users.messages.trash({ userId: 'me', id })
-        deleted++
+        trashedIds.add(id)
       } catch {
         // Message may already be gone
       }
     }
-  } else {
-    log('cleanup', `Searching for emails with marker "${TEST_MARKER}"...`)
-    const list = await gmail.users.messages.list({
-      userId: 'me',
-      q: `subject:${TEST_MARKER}`,
-      maxResults: 100,
-    })
-
-    for (const msg of list.data.messages || []) {
-      if (!msg.id) continue
-      try {
-        await gmail.users.messages.trash({ userId: 'me', id: msg.id })
-        deleted++
-      } catch {
-        // ignore
-      }
+    if (trashedIds.size > 0) {
+      log('cleanup', `Trashed ${trashedIds.size} tracked test emails`)
     }
   }
 
-  log('cleanup', `Trashed ${deleted} test emails`)
+  // Phase 2: Search-based cleanup catches sent replies, other runs, etc.
+  // Quote the marker to prevent Gmail interpreting the hyphen as negation.
+  log('cleanup', `Searching for remaining emails matching "${TEST_MARKER}"...`)
+  let searchDeleted = 0
+  let pageToken: string | undefined
+  do {
+    const list = await gmail.users.messages.list({
+      userId: 'me',
+      q: `subject:"${TEST_MARKER}"`,
+      includeSpamTrash: true,
+      maxResults: 500,
+      ...(pageToken ? { pageToken } : {}),
+    })
+
+    for (const msg of list.data.messages || []) {
+      if (!msg.id || trashedIds.has(msg.id)) continue
+      try {
+        await gmail.users.messages.trash({ userId: 'me', id: msg.id })
+        trashedIds.add(msg.id)
+        searchDeleted++
+      } catch {
+        // Already trashed or gone
+      }
+    }
+
+    pageToken = list.data.nextPageToken ?? undefined
+  } while (pageToken)
+
+  if (searchDeleted > 0) {
+    log('cleanup', `Trashed ${searchDeleted} additional test emails found by search`)
+  }
+
+  log('cleanup', `Total: ${trashedIds.size} test emails cleaned up`)
+  return trashedIds.size
+}
+
+async function cleanupTestCalendarEvents(userId: string): Promise<number> {
+  const auth = await getAuthenticatedClient(userId)
+  const calendar = google.calendar({ version: 'v3', auth })
+  let deleted = 0
+
+  log('cleanup', `Searching for calendar events matching "${TEST_MARKER}"...`)
+
+  let pageToken: string | undefined
+  do {
+    const list = await calendar.events.list({
+      calendarId: 'primary',
+      q: TEST_MARKER,
+      maxResults: 250,
+      singleEvents: false,
+      ...(pageToken ? { pageToken } : {}),
+    })
+
+    for (const event of list.data.items || []) {
+      if (!event.id) continue
+      try {
+        await calendar.events.delete({ calendarId: 'primary', eventId: event.id })
+        deleted++
+        log('cleanup', `  Deleted event: ${event.summary || event.id}`)
+      } catch {
+        // Event may already be gone
+      }
+    }
+
+    pageToken = list.data.nextPageToken ?? undefined
+  } while (pageToken)
+
+  log('cleanup', `Deleted ${deleted} test calendar events`)
   return deleted
 }
 
@@ -655,6 +709,7 @@ async function main() {
   // Cleanup-only mode
   if (flags.has('--cleanup-only')) {
     await cleanupTestEmails(USER_ID)
+    await cleanupTestCalendarEvents(USER_ID)
     log('done', 'Cleanup complete')
     return
   }
@@ -871,11 +926,10 @@ async function main() {
     // ═══════════════════════════════════════════════════════════════════════
     // Cleanup
     // ═══════════════════════════════════════════════════════════════════════
-    if (allGmailIds.length > 0) {
-      console.log()
-      log('cleanup', `Cleaning up ${allGmailIds.length} injected test emails...`)
-      await cleanupTestEmails(USER_ID, allGmailIds)
-    }
+    console.log()
+    log('cleanup', 'Cleaning up test artifacts...')
+    await cleanupTestEmails(USER_ID, allGmailIds.length > 0 ? allGmailIds : undefined)
+    await cleanupTestCalendarEvents(USER_ID)
 
     // ═══════════════════════════════════════════════════════════════════════
     // Summary
@@ -903,10 +957,9 @@ async function main() {
 
   } catch (error) {
     // Attempt cleanup even on failure
-    if (allGmailIds.length > 0) {
-      log('cleanup', 'Cleaning up after failure...')
-      await cleanupTestEmails(USER_ID, allGmailIds).catch(() => {})
-    }
+    log('cleanup', 'Cleaning up after failure...')
+    await cleanupTestEmails(USER_ID, allGmailIds.length > 0 ? allGmailIds : undefined).catch(() => {})
+    await cleanupTestCalendarEvents(USER_ID).catch(() => {})
     throw error
   }
 }
