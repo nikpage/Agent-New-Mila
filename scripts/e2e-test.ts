@@ -595,25 +595,26 @@ async function runBrief(userId: string): Promise<void> {
 
 async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise<number> {
   const gmail = await getGmailClient(userId)
-  const trashedIds = new Set<string>()
+  const deletedIds = new Set<string>()
 
-  // Phase 1: Trash specific tracked message IDs (fast path for normal flow)
+  // Phase 1: Permanently delete specific tracked message IDs (fast path for normal flow)
   if (messageIds?.length) {
     for (const id of messageIds) {
       try {
-        await gmail.users.messages.trash({ userId: 'me', id })
-        trashedIds.add(id)
+        await gmail.users.messages.delete({ userId: 'me', id })
+        deletedIds.add(id)
       } catch {
         // Message may already be gone
       }
     }
-    if (trashedIds.size > 0) {
-      log('cleanup', `Trashed ${trashedIds.size} tracked test emails`)
+    if (deletedIds.size > 0) {
+      log('cleanup', `Permanently deleted ${deletedIds.size} tracked test emails`)
     }
   }
 
   // Phase 2: Search-based cleanup catches sent replies, other runs, etc.
-  // Search full message (not just subject:) to avoid Gmail hyphen-as-negation issues.
+  // Uses includeSpamTrash to also find messages already in Trash from previous runs.
+  // Permanently deletes (not just trash) so re-running cleanup actually removes them.
   const searchQueries = [
     `${TEST_MARKER}`,                  // Broad: "E2E-TEST" anywhere in message
     `subject:(E2E TEST)`,              // Subject containing both words
@@ -635,12 +636,12 @@ async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise
       log('cleanup', `  Found ${msgs.length} messages in this page`)
 
       for (const msg of msgs) {
-        if (!msg.id || trashedIds.has(msg.id)) continue
+        if (!msg.id || deletedIds.has(msg.id)) continue
         try {
-          await gmail.users.messages.trash({ userId: 'me', id: msg.id })
-          trashedIds.add(msg.id)
+          await gmail.users.messages.delete({ userId: 'me', id: msg.id })
+          deletedIds.add(msg.id)
         } catch {
-          // Already trashed or gone
+          // Already deleted or gone
         }
       }
 
@@ -648,8 +649,8 @@ async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise
     } while (pageToken)
   }
 
-  log('cleanup', `Total: ${trashedIds.size} test emails cleaned up`)
-  return trashedIds.size
+  log('cleanup', `Total: ${deletedIds.size} test emails permanently deleted`)
+  return deletedIds.size
 }
 
 async function cleanupTestCalendarEvents(userId: string): Promise<number> {
