@@ -3,7 +3,7 @@
  * Generates and sends the daily morning brief email
  */
 
-import { getPendingActionsForBrief, markActionsNotified } from '@/lib/db/actions'
+import { getPendingActionsForBrief, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified } from '@/lib/db/actions'
 import { getUserById, getUsersDueBrief } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
@@ -249,4 +249,190 @@ function generateBriefEmailText(greeting: string, headline: string, actions: Bri
     text += `------------------------------------------\n\n`;
   }
   return text;
+}
+
+// ─── Instant High-Priority Notifications ────────────────────────────────────
+
+const INSTANT_NOTIFY_CONCURRENCY = 10
+const DEFAULT_INSTANT_THRESHOLD = 79
+
+/**
+ * Poll for high-priority actions and send instant notification emails.
+ * Sets last_notified_at but keeps queued_for_brief=true so the action
+ * still appears in the next morning/afternoon brief if user hasn't acted.
+ */
+export async function sendInstantNotifications(
+  threshold: number = DEFAULT_INSTANT_THRESHOLD
+): Promise<{ sent: number; failed: number }> {
+  const actions = await getHighPriorityUnnotifiedActions(threshold)
+
+  if (actions.length === 0) {
+    return { sent: 0, failed: 0 }
+  }
+
+  // Group actions by user_id
+  const byUser = new Map<string, typeof actions>()
+  for (const action of actions) {
+    const list = byUser.get(action.user_id) || []
+    list.push(action)
+    byUser.set(action.user_id, list)
+  }
+
+  console.log(`[InstantNotify] ${actions.length} high-priority action(s) for ${byUser.size} user(s)`)
+
+  let sent = 0
+  let failed = 0
+  const userIds = Array.from(byUser.keys())
+
+  for (let i = 0; i < userIds.length; i += INSTANT_NOTIFY_CONCURRENCY) {
+    const batch = userIds.slice(i, i + INSTANT_NOTIFY_CONCURRENCY)
+    const results = await Promise.allSettled(
+      batch.map(userId => sendInstantNotificationForUser(userId, byUser.get(userId)!))
+    )
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) {
+        sent++
+      } else {
+        failed++
+      }
+    }
+  }
+
+  return { sent, failed }
+}
+
+/**
+ * Send an instant notification email for one user with their high-priority actions.
+ */
+async function sendInstantNotificationForUser(
+  userId: string,
+  actions: ActionProposal[]
+): Promise<boolean> {
+  try {
+    const user = await getUserById(userId)
+    if (!user || !user.email_enabled || user.email_unsubscribed) {
+      console.log(`[InstantNotify] User ${userId}: skipped — ${!user ? 'not found' : user.email_unsubscribed ? 'unsubscribed' : 'email disabled'}`)
+      return false
+    }
+
+    const briefActions: BriefAction[] = []
+
+    for (const action of actions) {
+      const [cp, conversation] = await Promise.all([
+        getCPById(action.cp_id),
+        getConversationById(action.conversation_id),
+      ])
+
+      if (!cp || !conversation) {
+        console.warn(`[InstantNotify] Skipping orphaned action ${action.id}`)
+        continue
+      }
+
+      const token = generateActionToken(action.id, userId)
+      const actionUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}`
+      const editUrl = `${APP_BASE_URL}/action/${action.id}/edit?token=${token}`
+      const executeUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute`
+      const todoUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`
+      const blacklistUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`
+
+      briefActions.push({
+        action,
+        cpName: cp.name || cp.primary_identifier,
+        cpRole: cp.role || null,
+        topic: conversation.topic,
+        dealType: conversation.deal_type || null,
+        summary: conversation.summary_json as ConversationSummary | null,
+        actionUrl,
+        editUrl,
+        executeUrl,
+        todoUrl,
+        blacklistUrl,
+      })
+    }
+
+    if (briefActions.length === 0) return false
+
+    const htmlContent = generateInstantNotifyEmailHtml(briefActions)
+    const textContent = generateInstantNotifyEmailText(briefActions)
+    const userEmail = await getUserEmail(userId)
+
+    const count = briefActions.length
+    const subject = count === 1
+      ? `⚡ Mila: urgentní akce`
+      : `⚡ Mila: ${count} urgentní akce`
+
+    await sendEmail(userId, {
+      to: userEmail,
+      subject,
+      body: textContent,
+      htmlBody: htmlContent,
+    })
+
+    // Mark as instant-notified (keeps queued_for_brief = true)
+    await markActionsInstantNotified(briefActions.map(b => b.action.id))
+    console.log(`[InstantNotify] User ${user.email || userId}: sent ${briefActions.length} urgent action(s)`)
+    return true
+  } catch (error) {
+    console.error(`[InstantNotify] User ${userId}: FAILED —`, error instanceof Error ? error.message : error)
+    return false
+  }
+}
+
+/**
+ * HTML email for instant high-priority notifications.
+ * Same action cards as morning brief, with an urgent header.
+ */
+function generateInstantNotifyEmailHtml(actions: BriefAction[]): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+</head>
+<body style="margin: 0; padding: 0; background-color: ${theme.colors.background}; font-family: 'Inter', system-ui, sans-serif; color: ${theme.colors.text};">
+  <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+    <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">⚡ Urgentní akce</h1>
+    <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">Máte ${actions.length === 1 ? 'novou vysoce prioritní akci' : `${actions.length} nové vysoce prioritní akce`} k okamžitému zpracování.</p>
+
+    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl }) => {
+      const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
+      const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
+      const payload = action.payload as Record<string, unknown> | null
+      const hasSlots = !!(payload?.blocked_slots && Array.isArray(payload.blocked_slots) && (payload.blocked_slots as unknown[]).length > 0)
+      const needsInput = hasUnfilled && !hasSlots
+      return getActionCardEmailHtml({
+        cpName,
+        cpRole,
+        topic,
+        actionType: action.action_type,
+        urgency: action.urgency,
+        intent: action.intent_cs || action.rationale_cs || action.rationale,
+        actionUrl,
+        editUrl,
+        executeUrl,
+        todoUrl,
+        blacklistUrl,
+        needsInput,
+      })
+    }).join('')}
+  </div>
+</body>
+</html>`.trim()
+}
+
+/**
+ * Plain text fallback for instant notification email.
+ */
+function generateInstantNotifyEmailText(actions: BriefAction[]): string {
+  let text = `⚡ URGENTNÍ AKCE\n\n`
+  for (const { action, cpName, cpRole, topic, actionUrl } of actions) {
+    const intent = action.intent_cs || action.rationale_cs || action.rationale
+    text += `${cpName}${cpRole ? ` · ${cpRole}` : ''}\n`
+    text += `${topic}\n`
+    text += `Priorita: ${Math.round(action.priority_score)}\n\n`
+    text += `${intent}\n\n`
+    text += `▸ Detaily / Akce: ${actionUrl}\n`
+    text += `------------------------------------------\n\n`
+  }
+  return text
 }

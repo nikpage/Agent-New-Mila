@@ -117,3 +117,37 @@ export async function updateBriefSchedules(
   await deleteBriefSchedules(oldMorningId, oldAfternoonId)
   return createBriefSchedules(userId, morningTime, afternoonTime, timezone)
 }
+
+// ─── Instant Notify Polling ─────────────────────────────────────────────────
+
+/**
+ * Create a global QStash schedule that polls for high-priority actions
+ * every 5 minutes and sends instant notification emails.
+ * This is a single global schedule (not per-user).
+ */
+export async function createInstantNotifySchedule(): Promise<string> {
+  const client = getClient()
+
+  const headers: Record<string, string> = {}
+  if (CRON_SECRET) {
+    headers['Authorization'] = `Bearer ${CRON_SECRET}`
+  }
+
+  const result = await client.schedules.create({
+    destination: `${APP_BASE_URL}/api/cron/instant-notify`,
+    cron: '*/5 * * * *',
+    headers,
+  })
+
+  return result.scheduleId
+}
+
+/**
+ * Delete the instant-notify polling schedule.
+ */
+export async function deleteInstantNotifySchedule(
+  scheduleId: string
+): Promise<void> {
+  const client = getClient()
+  await client.schedules.delete(scheduleId)
+}

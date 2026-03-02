@@ -77,6 +77,8 @@ vi.mock('@/lib/db/actions', () => ({
   calculatePriorityScore: vi.fn().mockReturnValue(0),
   getPendingActionsForBrief: vi.fn().mockResolvedValue([]),
   markActionsNotified: vi.fn().mockResolvedValue(undefined),
+  getHighPriorityUnnotifiedActions: vi.fn().mockResolvedValue([]),
+  markActionsInstantNotified: vi.fn().mockResolvedValue(undefined),
   hasPendingAction: vi.fn().mockResolvedValue(false),
   getActionsForUser: vi.fn().mockResolvedValue([]),
 }))
@@ -120,6 +122,7 @@ vi.mock('@/services/agent', () => ({
 vi.mock('@/services/morning-brief', () => ({
   sendMorningBrief: vi.fn().mockResolvedValue(true),
   sendAllMorningBriefs: vi.fn().mockResolvedValue({ sent: 0, failed: 0 }),
+  sendInstantNotifications: vi.fn().mockResolvedValue({ sent: 0, failed: 0 }),
 }))
 
 vi.mock('@/services/ingestion', () => ({
@@ -331,6 +334,27 @@ describe('Layer 1: Route Protection', () => {
     it('POST /api/cron/morning-brief — same protection as GET', async () => {
       const { POST } = await import('@/app/api/cron/morning-brief/route')
       const req = makeRequest('POST', '/api/cron/morning-brief')
+      const res = await POST(req)
+      expect(res.status).toBe(401)
+    })
+
+    it('GET /api/cron/instant-notify — rejects without token', async () => {
+      const { GET } = await import('@/app/api/cron/instant-notify/route')
+      const req = makeRequest('GET', '/api/cron/instant-notify')
+      const res = await GET(req)
+      expect(res.status).toBe(401)
+    })
+
+    it('GET /api/cron/instant-notify — rejects with bad token', async () => {
+      const { GET } = await import('@/app/api/cron/instant-notify/route')
+      const req = makeRequest('GET', '/api/cron/instant-notify', { authorization: 'Bearer wrong-token' })
+      const res = await GET(req)
+      expect(res.status).toBe(401)
+    })
+
+    it('POST /api/cron/instant-notify — same protection as GET', async () => {
+      const { POST } = await import('@/app/api/cron/instant-notify/route')
+      const req = makeRequest('POST', '/api/cron/instant-notify')
       const res = await POST(req)
       expect(res.status).toBe(401)
     })

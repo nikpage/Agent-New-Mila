@@ -233,6 +233,53 @@ export async function markActionsNotified(actionIds: string[]): Promise<void> {
 }
 
 /**
+ * Get high-priority actions that haven't been instant-notified yet.
+ * Returns actions across all users where priority_score > threshold,
+ * status is pending, and last_notified_at is NULL (never sent).
+ */
+export async function getHighPriorityUnnotifiedActions(
+  threshold: number = 79
+): Promise<ActionProposal[]> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('action_proposals')
+    .select('*')
+    .eq('status', 'pending')
+    .eq('queued_for_brief', true)
+    .is('last_notified_at', null)
+    .gt('priority_score', threshold)
+    .in('action_type', ['REPLY', 'SCHEDULE', 'TODO'])
+    .order('priority_score', { ascending: false })
+
+  if (error) {
+    throw new Error(`Failed to get high-priority unnotified actions: ${error.message}`)
+  }
+
+  return data || []
+}
+
+/**
+ * Mark actions as instant-notified: sets last_notified_at but keeps
+ * queued_for_brief = true so the action still appears in the next
+ * morning/afternoon brief if the user hasn't acted on it.
+ */
+export async function markActionsInstantNotified(actionIds: string[]): Promise<void> {
+  if (actionIds.length === 0) return
+
+  const supabase = getSupabaseAdmin()
+  const { error } = await supabase
+    .from('action_proposals')
+    .update({
+      last_notified_at: new Date().toISOString(),
+    })
+    .in('id', actionIds)
+
+  if (error) {
+    throw new Error(`Failed to mark actions as instant-notified: ${error.message}`)
+  }
+}
+
+/**
  * Calculate priority score for an action
  *
  * Formula:
