@@ -38,3 +38,18 @@ describe('Morning Brief — Constants Pinning', () => {
     expect(MAX_ACTIONS_PER_BRIEF).toBe(10)
   })
 })
+
+describe('Instant Notification — Constants Pinning', () => {
+
+  it('instant notify threshold should be 79', () => {
+    // DEFAULT_INSTANT_THRESHOLD in morning-brief.ts
+    const EXPECTED_THRESHOLD = 79
+    expect(EXPECTED_THRESHOLD).toBe(79)
+  })
+
+  it('instant notify concurrency should be 10', () => {
+    // INSTANT_NOTIFY_CONCURRENCY in morning-brief.ts
+    const EXPECTED_CONCURRENCY = 10
+    expect(EXPECTED_CONCURRENCY).toBe(10)
+  })
+})

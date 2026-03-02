@@ -37,7 +37,7 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (291 tests: 247 unit, 22 integration, 10 smoke, 12 e2e)
+npm test             # Run Vitest test suite (296 tests: 252 unit, 22 integration, 10 smoke, 12 e2e)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -161,7 +161,7 @@ Instead of reading these files, use this index:
 | `counterparties.ts` | `normalizeGmailAddress`, `isSameGmailAddress`, `purgeUserAsCp`, `getCPById`, `getCPByIdentifier`, `getCPsForUser`, `upsertCP`, `findOrCreateCP`, `updateCP`, `blacklistCP`, `getCPState`, `updateCPState` |
 | `conversations.ts` | `getConversationById`, `getConversationsForUser`, `createConversation`, `updateConversation`, `updateConversationSummary`, `incrementMessageCount`, `getMessagesForConversation`, `getRecentMessages`, `addParticipant`, `getParticipants`, `findConversationByExternalThread` |
 | `messages.ts` | `getMessageById`, `getMessageByExternalId`, `messageExists`, `createMessage`, `createMessages`, `updateMessage`, `getMessagesInRange`, `getUnprocessedMessages`, `assignMessageToConversation`, `getLatestMessageFromCP`, `countMessagesInConversation` |
-| `actions.ts` | `getActionById`, `getActionsForUser`, `getPendingActionsForBrief`, `createAction`, `updateAction`, `updateActionStatus`, `approveAction`, `completeAction`, `dismissAction`, `dismissAllPendingActions`, `updateActionDraft`, `markActionsNotified`, `calculatePriorityScore`, `getActionsForConversation`, `hasPendingAction` |
+| `actions.ts` | `getActionById`, `getActionsForUser`, `getPendingActionsForBrief`, `createAction`, `updateAction`, `updateActionStatus`, `approveAction`, `completeAction`, `dismissAction`, `dismissAllPendingActions`, `updateActionDraft`, `markActionsNotified`, `getHighPriorityUnnotifiedActions`, `markActionsInstantNotified`, `calculatePriorityScore`, `getActionsForConversation`, `hasPendingAction` |
 | `todos.ts` | `getTodoById`, `getTodosForUser`, `getPendingTodos`, `createTodo`, `updateTodo`, `completeTodo`, `deleteTodo`, `getTodosForThread`, `getOverdueTodos`, `getTodosDueToday` |
 | `events.ts` | `getEventById`, `getEventsInRange`, `getEventsForToday`, `getUpcomingEvents`, `createEvent`, `updateEvent`, `deleteEvent`, `findConflicts`, `getLastEventLocation`, `getEventsWithCP`, `findAvailableSlots`, `getEventsByBlockGroup`, `cleanupBlockGroup`, `createHoldEvent`, `createTravelBuffer`, `cleanupTravelBuffers`, `getTravelBuffers`, `confirmEvent`, `cancelEventWithCleanup`, `calculateEventScore`, `upsertEventByGoogleId`, `getChildEvents` |
 | `embeddings.ts` | `saveMessageEmbedding`, `saveConversationEmbedding`, `getConversationsWithEmbeddingsByCP` |
@@ -354,7 +354,7 @@ Standalone Baileys daemon (`scripts/whatsapp-daemon.ts`, port 3001) — pure Web
 
 **Framework:** Vitest 4 with `@/*` path aliases. Tests co-located (`foo.ts` → `foo.test.ts`). Mock-Only-AI philosophy: mock AI + Google APIs, everything else (DB, scoring, tokens, cleaning) runs for real.
 
-**291 tests total:** 247 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See `docs/TESTING.md`
+**296 tests total:** 252 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See `docs/TESTING.md`
 
 **Key rules:**
 - Changed a function → update its pinning test
@@ -408,6 +408,17 @@ QSTASH_TOKEN         # Upstash QStash token for brief scheduling + bulk ingest w
 - `sendAllMorningBriefs()` processes users in batches of 10 (`BRIEF_CONCURRENCY`)
 - Uses `Promise.allSettled()` for fault isolation — one user's failure doesn't block others
 - 5-minute function timeout (`maxDuration: 300`) handles ~100 users per invocation
+
+### Instant High-Priority Notifications
+Actions with `priority_score > 79` get an immediate email notification (same action card template as briefs).
+
+- **Polling:** Global QStash schedule (`*/5 * * * *`) hits `/api/cron/instant-notify` every 5 minutes
+- **Query:** `getHighPriorityUnnotifiedActions(threshold)` — finds `priority_score > threshold`, `status = 'pending'`, `last_notified_at IS NULL`, `queued_for_brief = true`
+- **Send:** `sendInstantNotifications()` groups actions by user, sends email with `⚡ Urgentní akce` subject, batches users at concurrency 10
+- **Re-inclusion in brief:** `markActionsInstantNotified()` sets `last_notified_at` but keeps `queued_for_brief = true` — if the user doesn't act, the action still appears in the next morning/afternoon brief
+- **No double-send:** `last_notified_at IS NULL` filter prevents re-sending on subsequent polls
+- **Schedule management:** `createInstantNotifySchedule()` / `deleteInstantNotifySchedule()` in `src/lib/qstash/client.ts`
+- **Threshold:** Default 79, passed as parameter to `sendInstantNotifications()`
 
 
 ## Error Monitoring (Sentry)

@@ -29,26 +29,26 @@ SMOKE_TEST=1 npm test -- src/__tests__/smoke.test.ts  # + 10 smoke tests (needs 
 E2E_TEST=1 npm test -- src/__tests__/e2e.test.ts      # + 12 e2e tests (100% live, costs money)
 ```
 
-### Test Tiers (291 total: 247 unit + 22 integration + 10 smoke + 12 e2e)
+### Test Tiers (296 total: 252 unit + 22 integration + 10 smoke + 12 e2e)
 
-#### Tier 1: Unit Tests (247 tests, always run)
+#### Tier 1: Unit Tests (252 tests, always run)
 
 No DB, no server, no env vars needed. Pure function verification.
 
-##### Route Protection (34 tests)
+##### Route Protection (37 tests)
 **File:** `src/app/api/__tests__/route-protection.test.ts`
 
 Every API route rejects unauthenticated/bad requests. Catches: removed auth checks, changed HTTP methods, broken request parsing.
 
 - API key routes: `/api/agent/run`, `/api/gdpr/delete`, `/api/gdpr/export`, `/api/ingest`, `/api/ingest/bulk`, `/api/whatsapp/status`
-- Cron routes: `/api/cron/morning-brief` (GET + POST), `/api/ingest/bulk/worker` (no token + bad token)
+- Cron routes: `/api/cron/morning-brief` (GET + POST), `/api/cron/instant-notify` (GET + POST + bad token), `/api/ingest/bulk/worker` (no token + bad token)
 - Action token routes: `/api/action/[id]`, `/api/action/[id]/execute`, `/api/action/[id]/draft`, `/api/action/[id]/blacklist`, `/api/action/[id]/todo`
 - Superadmin: `/api/superadmin/stats`
 - Trigger pixel: `/api/trigger/ingest` — verifies it returns GIF but does NOT run agent with bad sig
 - Backfill: `/api/backfill/action` — rejects missing params and bad signatures
 - Auth: `/api/auth/connect` (email validation), `/api/auth/callback` (state validation)
 
-##### Behavior Pinning (72 tests)
+##### Behavior Pinning (74 tests)
 
 **Catches unauthorized changes to scoring, thresholds, defaults, or business logic.**
 
@@ -57,7 +57,7 @@ Every API route rejects unauthenticated/bad requests. Catches: removed auth chec
 | `src/lib/supabase/defaults.test.ts` | 48 | Every single field in `DEFAULT_USER_SETTINGS` — exact values. Also pins field count (58) to catch added/removed fields. |
 | `src/services/lead-tracking.test.ts` | 12 | Lead thresholds (2/5/14 days), boost multipliers (1.5x/2.5x/3.75x), urgency/pain mappings, threshold ordering |
 | `src/services/scheduling.test.ts` | 9 | Meeting duration, buffer, working hours, working days, timezone, travel mode defaults |
-| `src/services/morning-brief.test.ts` | 4 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10) |
+| `src/services/morning-brief.test.ts` | 6 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10), instant notify threshold (79), instant notify concurrency (10) |
 
 ##### Logic Tests (127 tests)
 

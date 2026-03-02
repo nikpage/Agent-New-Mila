@@ -73,6 +73,13 @@ Every morning at 8 AM (configurable), Mila sends an email to the user with:
   - Priority score
   - One-click APPROVE and EDIT buttons (HMAC-signed links)
 
+### Instant High-Priority Notifications
+
+Actions with `priority_score > 79` trigger an immediate email notification — the same action card format as briefs, sent within 5 minutes of action creation. Polled every 5 minutes via QStash (`/api/cron/instant-notify`).
+
+- If the user acts on the instant notification, the action is resolved before the next brief
+- If the user ignores it, the action still appears in the next morning/afternoon brief as a reminder
+
 ## Channels
 
 ### Email (Gmail)
@@ -257,6 +264,7 @@ The planning stage (`proposeAction`) also asks the AI to classify `dealType` (sa
 | `POST /api/action/[id]/todo` | Action Token | Convert to todo |
 | `POST /api/action/[id]/blacklist` | Action Token | Blacklist counterparty |
 | `GET /api/cron/morning-brief` | Cron Secret | Trigger morning briefs |
+| `GET /api/cron/instant-notify` | Cron Secret | Poll for high-priority actions (score >79) and send instant notifications |
 | `GET /api/auth/connect` | None | Start Google OAuth flow |
 | `GET /api/auth/callback` | None | OAuth callback |
 | `GET /api/health` | None | Health check |
