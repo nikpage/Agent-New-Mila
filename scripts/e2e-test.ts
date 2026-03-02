@@ -48,6 +48,18 @@ const CRON_SECRET = process.env.CRON_SECRET || ''
 const TEST_MARKER = 'E2E-TEST'
 const RUN_ID = `${TEST_MARKER}-${Date.now()}`
 
+/** Extract email address from "Name <email>" format */
+function extractEmail(from: string): string {
+  const match = from.match(/<([^>]+)>/)
+  return match ? match[1] : from
+}
+
+/** Extract display name from "Name <email>" format */
+function extractName(from: string): string {
+  const match = from.match(/^([^<]+)\s*</)
+  return match ? match[1].trim() : from
+}
+
 // ─── Test Scenarios ──────────────────────────────────────────────────────────
 // Each simulates a different counterparty emailing the Mila user.
 
@@ -141,6 +153,11 @@ const HIGH_PRIORITY_EMAIL: TestEmail = {
     'Senior Broker, Prague Commercial',
   ].join('\n'),
 }
+
+// All test CP identifiers — used for cleanup to find Mila's sent replies + calendar events
+const ALL_TEST_SENDERS = [...TEST_EMAILS, HIGH_PRIORITY_EMAIL]
+const TEST_CP_EMAILS = ALL_TEST_SENDERS.map(e => extractEmail(e.from))
+const TEST_CP_NAMES = ALL_TEST_SENDERS.map(e => extractName(e.from))
 
 /** CP follow-up responses for Round 3 — keyed by cpKey */
 const CP_RESPONSES: Record<string, string> = {
@@ -615,9 +632,14 @@ async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise
   // Phase 2: Search-based cleanup catches sent replies, other runs, etc.
   // Uses includeSpamTrash to also find messages already in Trash from previous runs.
   // Permanently deletes (not just trash) so re-running cleanup actually removes them.
+  //
+  // Gmail {a b} = OR. We search for:
+  //   1. E2E-TEST marker (injected emails + CP responses)
+  //   2. Emails from/to test CP addresses (Mila's sent replies)
+  const cpFromTo = TEST_CP_EMAILS.map(e => `from:${e} to:${e}`).join(' ')
   const searchQueries = [
     `${TEST_MARKER}`,                  // Broad: "E2E-TEST" anywhere in message
-    `subject:(E2E TEST)`,              // Subject containing both words
+    `{${cpFromTo}}`,                   // Emails from OR to any test CP address
   ]
 
   for (const q of searchQueries) {
@@ -656,40 +678,46 @@ async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise
 async function cleanupTestCalendarEvents(userId: string): Promise<number> {
   const auth = await getAuthenticatedClient(userId)
   const calendar = google.calendar({ version: 'v3', auth })
-  let deleted = 0
+  const deletedIds = new Set<string>()
 
-  // Search for events whose summary contains the test marker
-  log('cleanup', `Searching calendar events matching "${TEST_MARKER}"...`)
+  // Search by test marker + each CP name (events created by scheduling won't have the marker)
+  const calendarQueries = [TEST_MARKER, ...TEST_CP_NAMES]
 
-  let pageToken: string | undefined
-  do {
-    const list = await calendar.events.list({
-      calendarId: 'primary',
-      q: TEST_MARKER,
-      maxResults: 250,
-      singleEvents: false,
-      ...(pageToken ? { pageToken } : {}),
-    })
+  for (const q of calendarQueries) {
+    log('cleanup', `Searching calendar events matching "${q}"...`)
 
-    const items = list.data.items || []
-    log('cleanup', `  Found ${items.length} calendar events in this page`)
+    let pageToken: string | undefined
+    do {
+      const list = await calendar.events.list({
+        calendarId: 'primary',
+        q,
+        maxResults: 250,
+        singleEvents: false,
+        ...(pageToken ? { pageToken } : {}),
+      })
 
-    for (const event of items) {
-      if (!event.id) continue
-      try {
-        await calendar.events.delete({ calendarId: 'primary', eventId: event.id })
-        deleted++
-        log('cleanup', `  Deleted event: ${event.summary || event.id}`)
-      } catch {
-        // Event may already be gone
+      const items = list.data.items || []
+      if (items.length > 0) {
+        log('cleanup', `  Found ${items.length} calendar events`)
       }
-    }
 
-    pageToken = list.data.nextPageToken ?? undefined
-  } while (pageToken)
+      for (const event of items) {
+        if (!event.id || deletedIds.has(event.id)) continue
+        try {
+          await calendar.events.delete({ calendarId: 'primary', eventId: event.id })
+          deletedIds.add(event.id)
+          log('cleanup', `  Deleted event: ${event.summary || event.id}`)
+        } catch {
+          // Event may already be gone
+        }
+      }
 
-  log('cleanup', `Deleted ${deleted} test calendar events`)
-  return deleted
+      pageToken = list.data.nextPageToken ?? undefined
+    } while (pageToken)
+  }
+
+  log('cleanup', `Deleted ${deletedIds.size} test calendar events total`)
+  return deletedIds.size
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────
