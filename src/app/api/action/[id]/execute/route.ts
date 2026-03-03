@@ -105,7 +105,8 @@ export async function POST(
         }
       } else {
         // Validate email address before attempting Gmail send
-        if (!sendTo || !sendTo.includes('@')) {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+        if (!sendTo || !emailRegex.test(sendTo)) {
           return NextResponse.json(
             { error: `Invalid recipient email: "${sendTo}". Check the counterparty's email address.` },
             { status: 400 }
