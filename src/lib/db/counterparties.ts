@@ -2,11 +2,14 @@ import { getSupabaseAdmin } from '../supabase/client'
 import { getUserById } from './users'
 import type { CP, CPInsert, CPState } from '../supabase/types'
 
+/** Domains where dots in the local part are irrelevant. */
+const GMAIL_DOMAINS = new Set(['gmail.com', 'googlemail.com'])
+
 /**
- * Gmail/Google Workspace treats dots in the local part as irrelevant:
- * first.last@pod.one === firstlast@pod.one === f.i.r.s.t.last@pod.one
- * Also: pod.one and podone are the same Google Workspace domain.
- * Strip dots from both parts so every variant matches.
+ * Normalize an email for deduplication.
+ * - Always lowercases and trims.
+ * - For Gmail/Googlemail: strips dots from local part (Gmail ignores them).
+ * - For all other domains: preserves dots in both parts (they are significant).
  *
  * Use this for DB lookups and Set membership. Use `isSameGmailAddress` for
  * two-value comparison.
@@ -14,7 +17,8 @@ import type { CP, CPInsert, CPState } from '../supabase/types'
 export function normalizeGmailAddress(email: string): string {
   const [local, domain] = email.toLowerCase().trim().split('@')
   if (!local || !domain) return email.toLowerCase().trim()
-  return `${local.replace(/\./g, '')}@${domain.replace(/\./g, '')}`
+  const normalizedLocal = GMAIL_DOMAINS.has(domain) ? local.replace(/\./g, '') : local
+  return `${normalizedLocal}@${domain}`
 }
 
 /** True if two emails refer to the same Gmail / Google Workspace mailbox. */
@@ -24,6 +28,7 @@ export function isSameGmailAddress(a: string, b: string): boolean {
 
 /**
  * Delete any CP row where the identifier matches the user's own email.
+ * Also repairs CP emails corrupted by the old normalizer (dot-stripped domains).
  * The user is NOT a counterparty. Full stop.
  * Called at the start of every agent run to clean up bad data.
  */
@@ -33,8 +38,6 @@ export async function purgeUserAsCp(userId: string): Promise<number> {
 
   const supabase = getSupabaseAdmin()
 
-  // Fetch ALL CPs for this user and delete any that match via Gmail normalization.
-  // Cannot use .eq() because pod.one vs podone, dots in local part, etc.
   const { data: allCps, error: fetchError } = await supabase
     .from('cps')
     .select('id, primary_identifier')
@@ -42,6 +45,23 @@ export async function purgeUserAsCp(userId: string): Promise<number> {
 
   if (fetchError || !allCps) return 0
 
+  // Repair corrupted emails: old normalizer stripped dots from domains
+  // e.g. "jan@gmailcom" → "jan@gmail.com"
+  for (const cp of allCps) {
+    const repaired = repairDomainDots(cp.primary_identifier)
+    if (repaired !== cp.primary_identifier) {
+      const { error: repairErr } = await supabase
+        .from('cps')
+        .update({ primary_identifier: repaired })
+        .eq('id', cp.id)
+      if (!repairErr) {
+        console.log(`[purgeUserAsCp] Repaired CP email: ${cp.primary_identifier} → ${repaired}`)
+        cp.primary_identifier = repaired
+      }
+    }
+  }
+
+  // Delete CPs that match the user's own email
   const selfCpIds = allCps
     .filter(cp => isSameGmailAddress(cp.primary_identifier, user.email!))
     .map(cp => cp.id)
@@ -64,6 +84,59 @@ export async function purgeUserAsCp(userId: string): Promise<number> {
   }
 
   return data?.length || 0
+}
+
+/**
+ * Repair email domains corrupted by the old normalizer that stripped dots
+ * from domains (e.g. "gmailcom" → "gmail.com", "yahoocom" → "yahoo.com").
+ * Returns the original email if no repair is needed.
+ */
+function repairDomainDots(email: string): string {
+  const atIdx = email.lastIndexOf('@')
+  if (atIdx < 0) return email
+
+  const local = email.slice(0, atIdx)
+  const domain = email.slice(atIdx + 1)
+
+  // If domain already has a dot, it's fine
+  if (domain.includes('.')) return email
+
+  // Known dot-stripped domains → repaired
+  const KNOWN_REPAIRS: Record<string, string> = {
+    'gmailcom': 'gmail.com',
+    'googlemailcom': 'googlemail.com',
+    'yahoocom': 'yahoo.com',
+    'hotmailcom': 'hotmail.com',
+    'outlookcom': 'outlook.com',
+    'seznamcz': 'seznam.cz',
+    'emailcz': 'email.cz',
+    'centrumc': 'centrum.cz',
+    'iaborecz': 'iabore.cz',
+  }
+
+  const repaired = KNOWN_REPAIRS[domain]
+  if (repaired) return `${local}@${repaired}`
+
+  // Generic heuristic: try inserting a dot before common TLDs
+  const tldPatterns = [
+    { suffix: 'com', tld: '.com' },
+    { suffix: 'cz', tld: '.cz' },
+    { suffix: 'sk', tld: '.sk' },
+    { suffix: 'eu', tld: '.eu' },
+    { suffix: 'net', tld: '.net' },
+    { suffix: 'org', tld: '.org' },
+    { suffix: 'io', tld: '.io' },
+    { suffix: 'de', tld: '.de' },
+    { suffix: 'co', tld: '.co' },
+  ]
+
+  for (const { suffix, tld } of tldPatterns) {
+    if (domain.endsWith(suffix) && domain.length > suffix.length) {
+      return `${local}@${domain.slice(0, -suffix.length)}${tld}`
+    }
+  }
+
+  return email
 }
 
 /**
