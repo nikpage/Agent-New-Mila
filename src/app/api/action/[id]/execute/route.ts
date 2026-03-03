@@ -4,6 +4,7 @@ import { getConversationById } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
 import { validateActionToken } from '@/lib/auth/tokens'
 import { sendEmail } from '@/lib/google/gmail'
+import { sendWhatsAppMessage } from '@/lib/whatsapp/sender'
 import { generateFinalDraft } from '@/lib/ai/gemini'
 import { acceptInvitation, declineInvitation, confirmSlot } from '@/services/scheduling'
 import { createCalendarEvent, confirmCalendarEvent, deleteCalendarEvent } from '@/lib/google/calendar'
@@ -53,6 +54,9 @@ export async function POST(
         return NextResponse.json({ error: 'Counterparty not found' }, { status: 404 })
       }
 
+      const actionPayload = (action.payload as Record<string, unknown>) || {}
+      const channel = (actionPayload.channel as 'email' | 'whatsapp') || 'email'
+
       // Generate draft if it doesn't exist
       let draftSubject = action.draft_subject
       let draftBody = action.draft_body_text
@@ -63,7 +67,7 @@ export async function POST(
           return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
         }
 
-        const userNotes = ((action.payload as Record<string, unknown>)?.userNotes as string) || undefined
+        const userNotes = (actionPayload.userNotes as string) || undefined
         const missingInfo = (action.missing_info as { label: string; placeholder: string; value: string | null }[] | null) || undefined
 
         const draft = await generateFinalDraft(
@@ -72,7 +76,8 @@ export async function POST(
           settings,
           userNotes,
           missingInfo,
-          cp.name || cp.primary_identifier
+          cp.name || cp.primary_identifier,
+          channel
         )
 
         draftSubject = draft.subject
@@ -82,20 +87,43 @@ export async function POST(
         await updateActionDraft(actionId, draftSubject, draftBody)
       }
 
-      // Use edited recipient if saved, otherwise fall back to CP
-      const sendTo = ((action.payload as Record<string, unknown>)?.editedTo as string) || cp.primary_identifier
+      if (!draftBody) {
+        return NextResponse.json({ error: 'Draft body is empty — cannot send' }, { status: 400 })
+      }
 
-      // Send the email
-      await sendEmail(action.user_id, {
-        to: sendTo,
-        subject: draftSubject || 'Re:',
-        body: draftBody,
-      })
+      // Use edited recipient if saved, otherwise fall back to CP
+      const sendTo = (actionPayload.editedTo as string) || cp.primary_identifier
+
+      if (channel === 'whatsapp') {
+        // Send via WhatsApp daemon
+        const waResult = await sendWhatsAppMessage(action.user_id, sendTo, draftBody, settings)
+        if (!waResult.success) {
+          return NextResponse.json(
+            { error: `WhatsApp send failed: ${waResult.error}` },
+            { status: 502 }
+          )
+        }
+      } else {
+        // Validate email address before attempting Gmail send
+        if (!sendTo || !sendTo.includes('@')) {
+          return NextResponse.json(
+            { error: `Invalid recipient email: "${sendTo}". Check the counterparty's email address.` },
+            { status: 400 }
+          )
+        }
+
+        // Send via Gmail
+        await sendEmail(action.user_id, {
+          to: sendTo,
+          subject: draftSubject || 'Re:',
+          body: draftBody,
+        })
+      }
 
       // Mark action as completed
       await completeAction(actionId)
 
-      return NextResponse.json({ success: true, message: 'Email sent' })
+      return NextResponse.json({ success: true, message: channel === 'whatsapp' ? 'WhatsApp message sent' : 'Email sent' })
     }
 
     if (action.action_type === 'SCHEDULE') {
@@ -308,9 +336,10 @@ export async function POST(
     return NextResponse.json({ success: true, message: 'Action completed' })
 
   } catch (error) {
-    console.error('Error executing action:', error)
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    console.error('Error executing action:', message, error)
     return NextResponse.json(
-      { error: 'Failed to execute action' },
+      { error: `Failed to execute action: ${message}` },
       { status: 500 }
     )
   }
