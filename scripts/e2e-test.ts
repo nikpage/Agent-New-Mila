@@ -154,10 +154,9 @@ const HIGH_PRIORITY_EMAIL: TestEmail = {
   ].join('\n'),
 }
 
-// All test CP identifiers — used for cleanup to find Mila's sent replies + calendar events
+// All test CP identifiers — used for cleanup to find Mila's sent replies
 const ALL_TEST_SENDERS = [...TEST_EMAILS, HIGH_PRIORITY_EMAIL]
 const TEST_CP_EMAILS = ALL_TEST_SENDERS.map(e => extractEmail(e.from))
-const TEST_CP_NAMES = ALL_TEST_SENDERS.map(e => extractName(e.from))
 
 /** CP follow-up responses for Round 3 — keyed by cpKey */
 const CP_RESPONSES: Record<string, string> = {
@@ -675,50 +674,6 @@ async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise
   return deletedIds.size
 }
 
-async function cleanupTestCalendarEvents(userId: string): Promise<number> {
-  const auth = await getAuthenticatedClient(userId)
-  const calendar = google.calendar({ version: 'v3', auth })
-  const deletedIds = new Set<string>()
-
-  // Search by test marker + each CP name (events created by scheduling won't have the marker)
-  const calendarQueries = [TEST_MARKER, ...TEST_CP_NAMES]
-
-  for (const q of calendarQueries) {
-    log('cleanup', `Searching calendar events matching "${q}"...`)
-
-    let pageToken: string | undefined
-    do {
-      const list = await calendar.events.list({
-        calendarId: 'primary',
-        q,
-        maxResults: 250,
-        singleEvents: false,
-        ...(pageToken ? { pageToken } : {}),
-      })
-
-      const items = list.data.items || []
-      if (items.length > 0) {
-        log('cleanup', `  Found ${items.length} calendar events`)
-      }
-
-      for (const event of items) {
-        if (!event.id || deletedIds.has(event.id)) continue
-        try {
-          await calendar.events.delete({ calendarId: 'primary', eventId: event.id })
-          deletedIds.add(event.id)
-          log('cleanup', `  Deleted event: ${event.summary || event.id}`)
-        } catch {
-          // Event may already be gone
-        }
-      }
-
-      pageToken = list.data.nextPageToken ?? undefined
-    } while (pageToken)
-  }
-
-  log('cleanup', `Deleted ${deletedIds.size} test calendar events total`)
-  return deletedIds.size
-}
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
@@ -743,11 +698,10 @@ async function main() {
     fail('preflight', 'NEXTAUTH_SECRET not set in .env.local (needed for action tokens)')
   }
 
-  // Cleanup-only mode
+  // Cleanup-only mode (emails only — use scripts/cleanup-test-calendar.ts for calendar)
   if (flags.has('--cleanup-only')) {
     await cleanupTestEmails(USER_ID)
-    await cleanupTestCalendarEvents(USER_ID)
-    log('done', 'Cleanup complete')
+    log('done', 'Cleanup complete (run scripts/cleanup-test-calendar.ts to clean calendar events)')
     return
   }
 
@@ -964,9 +918,8 @@ async function main() {
     // Cleanup
     // ═══════════════════════════════════════════════════════════════════════
     console.log()
-    log('cleanup', 'Cleaning up test artifacts...')
+    log('cleanup', 'Cleaning up test emails (calendar events preserved for inspection)...')
     await cleanupTestEmails(USER_ID, allGmailIds.length > 0 ? allGmailIds : undefined)
-    await cleanupTestCalendarEvents(USER_ID)
 
     // ═══════════════════════════════════════════════════════════════════════
     // Summary
@@ -994,9 +947,8 @@ async function main() {
 
   } catch (error) {
     // Attempt cleanup even on failure
-    log('cleanup', 'Cleaning up after failure...')
+    log('cleanup', 'Cleaning up test emails after failure (calendar events preserved)...')
     await cleanupTestEmails(USER_ID, allGmailIds.length > 0 ? allGmailIds : undefined).catch(() => {})
-    await cleanupTestCalendarEvents(USER_ID).catch(() => {})
     throw error
   }
 }
