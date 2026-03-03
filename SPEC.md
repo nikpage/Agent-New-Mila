@@ -2,9 +2,13 @@
 
 ## What Is Mila
 
-Mila is an AI-powered executive assistant for small business owners and sales professionals. She monitors email and WhatsApp, understands conversations, proposes actions (reply, schedule meetings, follow up, delegate), and executes them on approval.
+Mila is an AI-powered executive assistant for real estate agents in the Czech Republic. She monitors email and WhatsApp, understands conversations, proposes actions (reply, schedule meetings, follow up), and executes them on approval.
 
-The core value proposition: **don't drop leads, don't miss meetings, don't let deals go cold.**
+**Makléři nepřicházejí o obchody proto, že by nedělali svou práci. Přicházejí o ně proto, že nestíhají — nezodpovězený e-mail, zapomenutý follow-up, lead, který vychladl o týden dřív, než si toho někdo všiml. Mila tohle hlídá za vás, nepřetržitě, bez výjimky.**
+
+Jedno uzavřené jednání navíc za rok. To je vše, co Mila potřebuje, aby se zaplatila — a ještě vám zbylo.
+
+Průměrná provize z prodeje nemovitosti: **80 000 Kč**. Roční náklad na Milu: **50 000 Kč**. Čistý zisk z jednoho zachráněného obchodu: **30 000 Kč**.
 
 Mila is not a chatbot. The user never "talks to" Mila. Instead, Mila watches all communication channels, detects what needs attention, prepares specific action proposals, and sends a daily morning brief email with one-click approve/edit buttons.
 
