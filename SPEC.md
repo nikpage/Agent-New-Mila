@@ -170,14 +170,18 @@ Conversation summaries are rebuilt after N new messages. Each summary includes: 
 ### Core Flow — Batch Schedule Optimization
 When the brief is being prepared, Mila pre-optimizes ALL unsent SCHEDULE actions as a batch:
 1. Collects all pending, unsent SCHEDULE actions
-2. Considers existing (confirmed) calendar, travel between locations, stated CP availability
+2. Optimizes slot selection across all new meetings using these criteria (in priority order):
+   - **CP availability** — stated or inferred from conversation
+   - **User availability** — free slots in user's calendar (working hours, no conflicts)
+   - **Travel optimization** — avoid crossing town twice; cluster geographically when possible while respecting criteria above
+   - **Conflict resolution (last resort)** — prefer scheduling without moving existing events. Declining due to conflict is acceptable in most cases. But if new meeting has high priority AND CP can only meet at a specific conflicted time, suggest moving the conflicting event — even if high weight. User always has final call
 3. Picks THE optimal slot for each meeting — one slot per meeting, not multiple options
 4. Creates a tentative hold event for each chosen slot (prevents double-booking while user reviews)
 5. Presents a single batch schedule card in the brief, grouped by day
-6. Each sub-card: suggested time, CP name, location, deal value, reasoning
+6. Each sub-card: suggested time, CP name, location, deal value, reasoning for that slot
 7. CTAs per sub-card (UDĚLAT / UPRAVIT / UDĚLÁM SÁM) plus batch "UDĚLAT VŠE"
 8. Approved → hold becomes confirmed, invite sent to CP. Rejected/edited → hold cleared
-9. Only touches penciled-in (unsent) meetings. Sent invites and confirmed events are fixed walls — never moved
+9. Only touches penciled-in (unsent) meetings. Sent invites and confirmed events are fixed walls — never auto-moved (but Mila may suggest moving them if conflict resolution requires it)
 
 ### Slot Finding
 - `findFreeSlots()` scans working hours for gaps between all calendar events (including holds)

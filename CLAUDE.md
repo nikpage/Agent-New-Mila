@@ -314,7 +314,11 @@ Safe defaults: `urgency`, `sellerMultiplier` fallback to 1 if 0/null (prevents s
 ### Core Flow — Batch Schedule Optimization
 When the brief is being prepared, Mila pre-optimizes ALL unsent SCHEDULE actions as a batch:
 1. Collects all pending, unsent SCHEDULE actions
-2. Considers the user's existing (confirmed) calendar, travel time between locations, and any stated CP availability
+2. Optimizes slot selection across all new meetings using these criteria (in priority order):
+   - **CP availability** — stated or inferred from conversation (e.g. "I can only do Tuesday afternoon")
+   - **User availability** — free slots in the user's calendar (working hours, no conflicts)
+   - **Travel optimization** — avoid crossing town twice; cluster meetings geographically when possible while respecting criteria above
+   - **Conflict resolution (last resort)** — Mila first tries to schedule without moving existing events. Not accepting a meeting due to time conflict is acceptable in most cases. However, if a new meeting has high priority AND the conversation indicates the CP can only meet at a specific conflicted time, Mila suggests moving the conflicting event — even if it has high weight. The user always has the final call; Mila only suggests, never auto-moves
 3. Picks THE optimal slot for each meeting — one slot per meeting, not multiple options
 4. Creates a tentative **hold event** for each chosen slot (prevents double-booking while user reviews)
 5. Presents a single **batch schedule card** in the brief, grouped by day
@@ -325,7 +329,7 @@ When the brief is being prepared, Mila pre-optimizes ALL unsent SCHEDULE actions
 
 **Scope rules:**
 - **Only touches penciled-in (unsent) meetings.** Once an invite is sent to CP, that slot is locked — treated as a confirmed event
-- Sent invites and confirmed events are fixed walls the optimizer plans around — never moved
+- Sent invites and confirmed events are fixed walls the optimizer plans around — never auto-moved (but Mila may suggest moving them if conflict resolution requires it)
 - For a single SCHEDULE action, the same flow applies — Mila picks the optimal slot and presents it
 
 ### Slot Finding
