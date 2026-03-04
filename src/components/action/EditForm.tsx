@@ -19,10 +19,11 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
 
   const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
 
-  // Detect SCHEDULE action with pre-blocked slots
+  // Detect SCHEDULE action with a hold event
   const payload = action.payload as Record<string, unknown> | null
-  const blockedSlots = payload?.blocked_slots as { id: string; start: string; end: string; location?: string }[] | undefined
-  const isScheduleWithSlots = action.action_type === 'SCHEDULE' && blockedSlots && blockedSlots.length > 0
+  const holdStart = payload?.start as string | undefined
+  const holdEnd = payload?.end as string | undefined
+  const isScheduleWithHold = action.action_type === 'SCHEDULE' && holdStart && holdEnd
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -34,21 +35,22 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
     }
   }
 
-  // Format slot for display
-  const formatSlot = (slot: { start: string; end: string; location?: string }, index: number) => {
-    const start = new Date(slot.start)
-    const end = new Date(slot.end)
+  // Format the single hold slot for display
+  const formatHoldSlot = () => {
+    if (!holdStart || !holdEnd) return ''
+    const start = new Date(holdStart)
+    const end = new Date(holdEnd)
     const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
     const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
     const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
-    return `${index + 1}. ${dateStr}, ${startStr} - ${endStr}`
+    return `${dateStr}, ${startStr} - ${endStr}`
   }
 
   return (
     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
 
-      {/* Slot selection for SCHEDULE actions with pre-blocked slots */}
-      {isScheduleWithSlots && (
+      {/* Single hold slot display for SCHEDULE actions */}
+      {isScheduleWithHold && (
         <div>
           <p style={{
             fontSize: theme.typography.sizes.xs,
@@ -58,7 +60,7 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
             letterSpacing: '0.05em',
             marginBottom: theme.spacing.sm,
           }}>
-            Nabízené termíny
+            Navržený termín
           </p>
           <div style={{
             backgroundColor: theme.colors.secondary,
@@ -66,16 +68,14 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
             padding: theme.spacing.md,
             marginBottom: theme.spacing.sm,
           }}>
-            {blockedSlots!.map((slot, i) => (
-              <p key={i} style={{
-                fontSize: theme.typography.sizes.sm,
-                color: theme.colors.text,
-                margin: i === 0 ? 0 : `${theme.spacing.xs} 0 0 0`,
-                lineHeight: 1.6,
-              }}>
-                {formatSlot(slot, i)}
-              </p>
-            ))}
+            <p style={{
+              fontSize: theme.typography.sizes.sm,
+              color: theme.colors.text,
+              margin: 0,
+              lineHeight: 1.6,
+            }}>
+              {formatHoldSlot()}
+            </p>
             {typeof payload?.location === 'string' && payload.location && (
               <p style={{
                 fontSize: theme.typography.sizes.sm,
@@ -86,19 +86,6 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
               </p>
             )}
           </div>
-          <Input
-            label="Vyberte termín(y)"
-            value={dynamicFields['slotSelection'] || ''}
-            onChange={e => setDynamicFields({ ...dynamicFields, slotSelection: e.target.value })}
-            placeholder="Číslo (1, 2, 3), 'vše', nebo vlastní čas (např. 'přeplánuj na středu v 16')"
-          />
-          <p style={{
-            fontSize: theme.typography.sizes.xs,
-            color: theme.colors.textMuted,
-            marginTop: theme.spacing.xs,
-          }}>
-            Napište čísla termínů k odeslání, &quot;vše&quot; pro všechny, nebo vlastní pokyn k přeplánování.
-          </p>
         </div>
       )}
 

@@ -320,7 +320,7 @@ export async function createHoldEvent(params: {
   cpName: string
   startTime: Date
   endTime: Date
-  preBlockGroupId: string
+  preBlockGroupId?: string
   location?: string
   googleEventId?: string
   weight?: number
@@ -335,7 +335,7 @@ export async function createHoldEvent(params: {
     status: 'tentative',
     start_time: params.startTime.toISOString(),
     end_time: params.endTime.toISOString(),
-    pre_block_group_id: params.preBlockGroupId,
+    pre_block_group_id: params.preBlockGroupId || null,
     google_event_id: params.googleEventId || null,
     weight: params.weight ?? null,
   })

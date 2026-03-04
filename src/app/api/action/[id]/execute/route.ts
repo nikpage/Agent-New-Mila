@@ -7,7 +7,7 @@ import { sendEmail } from '@/lib/google/gmail'
 import { sendWhatsAppMessage } from '@/lib/whatsapp/sender'
 import { generateFinalDraft } from '@/lib/ai/gemini'
 import { acceptInvitation, declineInvitation, confirmSlot } from '@/services/scheduling'
-import { createCalendarEvent, confirmCalendarEvent, deleteCalendarEvent } from '@/lib/google/calendar'
+import { createCalendarEvent, confirmCalendarEvent } from '@/lib/google/calendar'
 import { getUserSettings } from '@/lib/db/users'
 
 export async function POST(
@@ -157,136 +157,72 @@ export async function POST(
         return NextResponse.json({ success: true, message: 'Invitation response sent' })
       }
 
-      // Case 2: Pre-blocked slots - user approved
-      const preBlockGroupId = payload?.pre_block_group_id as string | undefined
-      const blockedSlots = payload?.blocked_slots as { id: string; gcal_event_id?: string; start: string; end: string; location?: string }[] | undefined
+      // Case 2: Single hold event — user approved the optimal slot
+      const holdEventId = payload?.hold_event_id as string | undefined
+      const gcalEventId = payload?.gcal_event_id as string | undefined
 
-      if (preBlockGroupId && blockedSlots && blockedSlots.length > 0) {
+      if (holdEventId) {
+        const holdStart = payload?.start as string | undefined
+        const holdEnd = payload?.end as string | undefined
+        const loc = payload?.location as string | undefined
+        const userNotes = (payload?.userNotes as string) || ''
+
         const formatTime = (date: Date) => date.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
         const formatDate = (date: Date) => date.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
 
-        // Filter slots based on user's slot selection (from UPRAVIT page)
-        const slotSelection = (payload?.slotSelection as string) || ''
-        let slotsToSend = blockedSlots
-        let selectedNumbers: number[] = []
-
-        if (slotSelection && slotSelection.toLowerCase() !== 'vše' && slotSelection.toLowerCase() !== 'all') {
-          // Parse selected slot numbers (e.g., "1", "1,3", "2")
-          selectedNumbers = slotSelection
-            .split(/[,\s]+/)
-            .map(s => parseInt(s.trim(), 10))
-            .filter(n => !isNaN(n) && n >= 1 && n <= blockedSlots.length)
-
-          if (selectedNumbers.length > 0) {
-            slotsToSend = selectedNumbers.map(n => blockedSlots[n - 1])
-          }
+        // Determine Title: Location OR "HOVOR - CP Name"
+        let finalTitle = `HOVOR - ${cp.name || cp.primary_identifier}`
+        if (loc && loc.trim().length > 0) {
+          finalTitle = loc
         }
 
-        const userNotes = (payload?.userNotes as string) || ''
-
-        // NEW LOGIC: Single slot selected -> Confirm & Invite
-        if (selectedNumbers.length === 1) {
-          const index = selectedNumbers[0] - 1
-          const selectedSlot = blockedSlots[index]
-          const unselectedSlots = blockedSlots.filter((_, i) => i !== index)
-          const loc = payload?.location as string | undefined
-
-          // Determine Title: Location OR "HOVOR - CP Name"
-          let finalTitle = `HOVOR - ${cp.name || cp.primary_identifier}`
-          if (loc && loc.trim().length > 0) {
-             finalTitle = loc
-          }
-
-          // 1. Confirm GCal Event (sends invite)
-          if (selectedSlot.gcal_event_id) {
-            await confirmCalendarEvent(
-              action.user_id,
-              selectedSlot.gcal_event_id,
-              [cp.primary_identifier],
-              {
-                summary: finalTitle,
-                location: loc,
-                description: `Schůzka s ${cp.name || cp.primary_identifier}`
-              }
-            )
-          }
-
-          // 2. Delete Unselected GCal Events
-          for (const slot of unselectedSlots) {
-            if (slot.gcal_event_id) {
-              await deleteCalendarEvent(action.user_id, slot.gcal_event_id)
-            }
-          }
-
-          // 3. Confirm Local Event (updates DB, cleans up local siblings)
-          // Pass undefined for cpEmail to prevent confirmSlot from creating a DUPLICATE GCal event
-          await confirmSlot(
+        // 1. Confirm GCal Event (sends invite to CP)
+        if (gcalEventId) {
+          await confirmCalendarEvent(
             action.user_id,
-            selectedSlot.id,
-            preBlockGroupId,
-            undefined, // cpEmail
-            loc,
-            finalTitle // New title for local DB
+            gcalEventId,
+            [cp.primary_identifier],
+            {
+              summary: finalTitle,
+              location: loc,
+              description: `Schůzka s ${cp.name || cp.primary_identifier}`
+            }
           )
-
-          // 4. Send the drafted email (Context/Cover letter)
-          // We still send this because the draft might contain specific answers or context
-          const conversation = await getConversationById(action.conversation_id)
-          const draft = await generateFinalDraft(
-            conversation?.summary_json,
-            `Potvrzuji termín schůzky: ${formatDate(new Date(selectedSlot.start))}, ${formatTime(new Date(selectedSlot.start))} - ${formatTime(new Date(selectedSlot.end))}. Pozvánka v kalendáři byla odeslána.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
-            settings,
-            userNotes || undefined,
-            undefined,
-            cp.name || cp.primary_identifier
-          )
-
-          await sendEmail(action.user_id, {
-            to: cp.primary_identifier,
-            subject: draft.subject || `Potvrzení schůzky`,
-            body: draft.body,
-          })
-
-          await completeAction(actionId)
-          return NextResponse.json({
-            success: true,
-            message: 'Meeting confirmed and invitation sent',
-          })
         }
 
-        // Default Logic: Multiple slots or "all" -> Send Options via Email
-        const formattedSlots = slotsToSend.map((s, i) => {
-          const start = new Date(s.start)
-          const end = new Date(s.end)
-          return `${i + 1}. ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}`
-        })
+        // 2. Confirm local hold event in DB
+        await confirmSlot(
+          action.user_id,
+          holdEventId,
+          undefined, // cpEmail — already sent invite via GCal
+          loc,
+          finalTitle
+        )
 
-        const locationStr = (payload?.location as string) || ''
-        const slotsText = formattedSlots.join('\n')
-
-        // Generate email to CP with selected time options - CP picks one
+        // 3. Generate and send confirmation email
         const conversation = await getConversationById(action.conversation_id)
+        const startDate = holdStart ? new Date(holdStart) : new Date()
+        const endDate = holdEnd ? new Date(holdEnd) : new Date()
+
         const draft = await generateFinalDraft(
           conversation?.summary_json,
-          `Navrhuji schůzku. Nabízím tyto termíny:\n${slotsText}${locationStr ? `\nMísto: ${locationStr}` : ''}\nProsím dejte vědět, který termín vám vyhovuje.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
+          `Potvrzuji termín schůzky: ${formatDate(startDate)}, ${formatTime(startDate)} - ${formatTime(endDate)}. Pozvánka v kalendáři byla odeslána.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
           settings,
           userNotes || undefined,
           undefined,
           cp.name || cp.primary_identifier
         )
 
-        // Send email to CP with options - NO calendar invite to CP, NO slot confirmation yet
         await sendEmail(action.user_id, {
           to: cp.primary_identifier,
-          subject: draft.subject || `Návrh schůzky`,
+          subject: draft.subject || `Potvrzení schůzky`,
           body: draft.body,
         })
 
         await completeAction(actionId)
         return NextResponse.json({
           success: true,
-          message: 'Meeting options sent to CP via email',
-          slots: formattedSlots,
+          message: 'Meeting confirmed and invitation sent',
         })
       }
 

@@ -144,25 +144,21 @@ export async function generateActionProposal(
           preferredDate
         )
 
-        if (schedulingResult.success && schedulingResult.blockedSlots && schedulingResult.blockedSlots.length > 0) {
-          // Format blocked slots for proactive display to USER
-          const formattedSlots = schedulingResult.blockedSlots.map((s, i) => {
-            const start = new Date(s.start_time)
-            const end = new Date(s.end_time)
-            const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
-            const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
-            const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
-            return `${i + 1}. ${dateStr}, ${startStr} - ${endStr}`
-          })
+        if (schedulingResult.success && schedulingResult.holdEvent) {
+          // Format the single optimal slot for display to USER
+          const hold = schedulingResult.holdEvent
+          const start = new Date(hold.start_time)
+          const end = new Date(hold.end_time)
+          const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
+          const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+          const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+          const slotText = `${dateStr}, ${startStr} - ${endStr}`
 
-          // Proactive intent: tell user what Mila DID (blocked slots) and what she WILL DO (send email)
-          proposal.intent_cs = `Připravila jsem ${formattedSlots.length} termíny pro schůzku s ${cpName} a zablokovala je ve vašem kalendáři:\n${formattedSlots.join('\n')}${meetingLocation ? `\nMísto: ${meetingLocation}` : ''}\n\nKlikněte na UDĚLAT a já odešlu ${cpName} email s nabídkou těchto termínů.`
+          // Proactive intent: tell user what Mila DID (blocked one optimal slot)
+          proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${meetingLocation ? `\nMísto: ${meetingLocation}` : ''}\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
 
-          // No missingInfo needed for approval - UDĚLAT button IS the approval
-          // User can add notes via UPRAVIT if needed
           proposal.missingInfo = []
 
-          // Conflict info for user (if any)
           if (schedulingResult.conflicts && schedulingResult.conflicts.length > 0) {
             const conflictNote = schedulingResult.conflicts.map(c =>
               `${c.existingEvent.title}: ${c.recommendation === 'move_existing' ? 'navrhuji přesunout' : 'navrhuji alternativní čas'}`
@@ -171,14 +167,10 @@ export async function generateActionProposal(
           }
 
           schedulingPayload = {
-            pre_block_group_id: schedulingResult.preBlockGroupId,
-            blocked_slots: schedulingResult.blockedSlots.map((s, i) => ({
-              id: s.id,
-              gcal_event_id: schedulingResult.gcalEventIds?.[i],
-              start: s.start_time,
-              end: s.end_time,
-              location: s.location,
-            })),
+            hold_event_id: schedulingResult.holdEvent.id,
+            gcal_event_id: schedulingResult.gcalEventId,
+            start: schedulingResult.holdEvent.start_time,
+            end: schedulingResult.holdEvent.end_time,
             location: meetingLocation || null,
             conflicts: schedulingResult.conflicts?.map(c => ({
               event_title: c.existingEvent.title,

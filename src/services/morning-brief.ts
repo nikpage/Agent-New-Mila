@@ -212,8 +212,8 @@ function generateBriefEmailHtml(
       const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
       const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
       const payload = action.payload as Record<string, unknown> | null
-      const hasSlots = !!(payload?.blocked_slots && Array.isArray(payload.blocked_slots) && (payload.blocked_slots as unknown[]).length > 0)
-      const needsInput = hasUnfilled && !hasSlots
+      const hasHold = !!payload?.hold_event_id
+      const needsInput = hasUnfilled && !hasHold
       return getActionCardEmailHtml({
         cpName,
         cpRole,
@@ -398,8 +398,8 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[]): string {
       const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
       const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
       const payload = action.payload as Record<string, unknown> | null
-      const hasSlots = !!(payload?.blocked_slots && Array.isArray(payload.blocked_slots) && (payload.blocked_slots as unknown[]).length > 0)
-      const needsInput = hasUnfilled && !hasSlots
+      const hasHold = !!payload?.hold_event_id
+      const needsInput = hasUnfilled && !hasHold
       return getActionCardEmailHtml({
         cpName,
         cpRole,

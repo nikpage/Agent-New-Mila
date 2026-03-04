@@ -57,36 +57,18 @@ export async function POST(
 
     let draftIntent = action.intent_cs || action.rationale_cs || action.rationale
 
-    // For SCHEDULE actions with selected slots, build slot-specific intent
+    // For SCHEDULE actions with a hold event, build slot-specific intent
     if (action.action_type === 'SCHEDULE' && payload) {
-      const blockedSlots = payload.blocked_slots as { id: string; start: string; end: string; location?: string }[] | undefined
-      const slotSelection = (payload.slotSelection as string) || ''
+      const holdStart = payload.start as string | undefined
+      const holdEnd = payload.end as string | undefined
 
-      if (blockedSlots && blockedSlots.length > 0 && slotSelection) {
+      if (holdStart && holdEnd) {
         const formatTime = (d: Date) => d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
         const formatDate = (d: Date) => d.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
 
-        let slotsToSend = blockedSlots
-        const selectedNumbers = slotSelection.split(/[,\s]+/).map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n >= 1 && n <= blockedSlots.length)
-
-        if (selectedNumbers.length > 0) {
-          slotsToSend = selectedNumbers.map(n => blockedSlots[n - 1])
-        }
-
-        if (selectedNumbers.length === 1) {
-          const slot = slotsToSend[0]
-          const start = new Date(slot.start)
-          const end = new Date(slot.end)
-          draftIntent = `Potvrzuji termín schůzky: ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}. Pozvánka v kalendáři byla odeslána.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`
-        } else {
-          const formattedSlots = slotsToSend.map((s, i) => {
-            const start = new Date(s.start)
-            const end = new Date(s.end)
-            return `${i + 1}. ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}`
-          })
-          const locationStr = (payload.location as string) || ''
-          draftIntent = `Navrhuji schůzku. Nabízím tyto termíny:\n${formattedSlots.join('\n')}${locationStr ? `\nMísto: ${locationStr}` : ''}\nProsím dejte vědět, který termín vám vyhovuje.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`
-        }
+        const start = new Date(holdStart)
+        const end = new Date(holdEnd)
+        draftIntent = `Potvrzuji termín schůzky: ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}. Pozvánka v kalendáři byla odeslána.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`
       }
     }
 
@@ -191,41 +173,23 @@ export async function PUT(
       })
     }
 
-    // Handle slot selection for SCHEDULE actions — update intent_cs to reflect selection
+    // Handle user edits for SCHEDULE actions — update intent_cs with hold info
     if (dynamicFields?.slotSelection) {
       const currentPayload = (action.payload as Record<string, unknown>) || {}
-      const blockedSlots = currentPayload?.blocked_slots as { id: string; start: string; end: string; location?: string }[] | undefined
+      const holdStart = currentPayload?.start as string | undefined
+      const holdEnd = currentPayload?.end as string | undefined
 
       let updatedIntentCs = action.intent_cs
-      if (blockedSlots && blockedSlots.length > 0) {
+      if (holdStart && holdEnd) {
         const selection = dynamicFields.slotSelection
         const formatTime = (d: Date) => d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
         const formatDate = (d: Date) => d.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
 
-        if (selection.toLowerCase() === 'vše' || selection.toLowerCase() === 'all') {
-          // All slots selected
-          const formatted = blockedSlots.map((s, i) => {
-            const start = new Date(s.start)
-            const end = new Date(s.end)
-            return `${i + 1}. ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}`
-          })
-          updatedIntentCs = `Vybrány všechny termíny k odeslání:\n${formatted.join('\n')}${currentPayload?.location ? `\nMísto: ${currentPayload.location}` : ''}`
-        } else {
-          // Parse selected numbers
-          const selectedNumbers = selection.split(/[,\s]+/).map((s: string) => parseInt(s.trim(), 10)).filter((n: number) => !isNaN(n) && n >= 1 && n <= blockedSlots.length)
-          if (selectedNumbers.length > 0) {
-            const formatted = selectedNumbers.map((n: number) => {
-              const s = blockedSlots[n - 1]
-              const start = new Date(s.start)
-              const end = new Date(s.end)
-              return `${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}`
-            })
-            updatedIntentCs = `Vybrané termíny k odeslání:\n${formatted.map((f: string, i: number) => `${i + 1}. ${f}`).join('\n')}${currentPayload?.location ? `\nMísto: ${currentPayload.location}` : ''}`
-          } else {
-            // Custom instruction (e.g. "přeplánuj na středu v 16")
-            updatedIntentCs = `Vlastní pokyn: ${selection}${currentPayload?.location ? `\nMísto: ${currentPayload.location}` : ''}`
-          }
-        }
+        const start = new Date(holdStart)
+        const end = new Date(holdEnd)
+
+        // Custom instruction from user (e.g. "přeplánuj na středu v 16")
+        updatedIntentCs = `Vlastní pokyn: ${selection}\nPůvodní termín: ${formatDate(start)}, ${formatTime(start)} - ${formatTime(end)}${currentPayload?.location ? `\nMísto: ${currentPayload.location}` : ''}`
       }
 
       await updateAction(actionId, {

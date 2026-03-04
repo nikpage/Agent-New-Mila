@@ -4,10 +4,12 @@
  *
  * Key responsibilities:
  * - Find best available slots considering working hours, holidays, travel
- * - Block multiple slots for proposals (pre-block groups)
+ * - Block ONE optimal slot per meeting (single hold, not multiple options)
+ * - Batch optimize ALL pending SCHEDULE actions before brief
+ * - Optimization priority: CP availability > user availability > travel > conflict resolution
  * - Handle conflicts using priority scoring
  * - Calculate and book travel buffers
- * - Clean up unused holds after confirmation
+ * - Confirm/reject holds
  * - Coordinate multi-CP scheduling
  */
 
@@ -32,19 +34,17 @@ import {
   deleteEvent,
   confirmEvent,
   cancelEventWithCleanup,
-  cleanupBlockGroup,
   cleanupTravelBuffers,
-  getEventsByBlockGroup,
   calculateEventScore,
   getLastEventLocation,
 } from '@/lib/db/events'
 import { getUserSettings } from '@/lib/db/users'
 import { getUserById } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
-import { calculatePriorityScore } from '@/lib/db/actions'
+import { calculatePriorityScore, getPendingScheduleActions } from '@/lib/db/actions'
 import { getTravelTime, calculateDepartureTime } from '@/lib/google/maps'
 import { isWorkingDay, getNextWorkingDay } from '@/lib/holidays'
-import type { UserSettings, Event } from '@/lib/supabase/types'
+import type { UserSettings, Event, ActionProposal } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
 const MIN_TRAVEL_BUFFER_MINUTES = 15
@@ -58,11 +58,23 @@ export interface SlotProposal {
 
 export interface SchedulingResult {
   success: boolean
-  preBlockGroupId?: string
-  blockedSlots?: Event[]
-  gcalEventIds?: string[]
+  holdEvent?: Event
+  gcalEventId?: string
   conflicts?: ConflictInfo[]
   error?: string
+}
+
+export interface MoveSuggestion {
+  existingEventId: string
+  existingWeight: number | null
+  reason: string
+}
+
+export interface OptimizeResult {
+  optimized: number
+  unscheduled: number
+  moveSuggestions: MoveSuggestion[]
+  holds: Event[]
 }
 
 export interface ConflictInfo {
@@ -189,18 +201,13 @@ async function calculateTravelForSlot(
 }
 
 /**
- * Block multiple time slots in user's calendar for a meeting proposal
- * Creates tentative HOLD events and returns the pre_block_group_id
- *
- * Flow:
- * 1. Block 3 slots in user calendar (titled "HOLD: Meeting with [CP]", status: tentative)
- * 2. Return the pre_block_group_id so we can send options to CP
- * 3. After CP confirms, call confirmSlot() to clean up unused holds
+ * Block ONE optimal slot in user's calendar for a meeting proposal
+ * Creates a single tentative HOLD event (spec: one hold per meeting)
  */
-export async function blockSlotsForProposal(
+export async function blockSlotForProposal(
   userId: string,
   cpId: string,
-  slots: SlotProposal[],
+  slot: SlotProposal,
   durationMinutes: number,
   location?: string,
   weight?: number
@@ -211,96 +218,58 @@ export async function blockSlotsForProposal(
   }
 
   const cpName = cp.name || cp.primary_identifier
-  const preBlockGroupId = uuidv4()
-  const blockedSlots: Event[] = []
-  const gcalEventIds: string[] = []
-
-  // Localized title: "CP Name - REZERVACE"
   const holdTitle = `${cpName} - REZERVACE`
 
-  for (const slot of slots) {
-    try {
-      // Create tentative event in Google Calendar (no notifications)
-      // Tag with extendedProperties so Mila can recognize its own events
-      // even after a DB wipe — prevents duplicate blocker events.
-      const gcalEvent = await createTentativeCalendarEvent(userId, {
-        summary: holdTitle,
-        description: `Tentative hold - awaiting confirmation from ${cpName}. Managed by Mila.`,
-        location: location,
-        startTime: slot.start,
-        endTime: slot.end,
-        status: 'tentative',
-        privateExtendedProperties: {
-          [MILA_BLOCK_GROUP_KEY]: preBlockGroupId,
-        },
-      })
+  try {
+    const gcalEvent = await createTentativeCalendarEvent(userId, {
+      summary: holdTitle,
+      description: `Tentative hold - awaiting confirmation from ${cpName}. Managed by Mila.`,
+      location: location,
+      startTime: slot.start,
+      endTime: slot.end,
+      status: 'tentative',
+    })
 
-      gcalEventIds.push(gcalEvent.id)
+    const localEvent = await createHoldEvent({
+      userId,
+      cpId,
+      cpName,
+      startTime: slot.start,
+      endTime: slot.end,
+      location: location,
+      googleEventId: gcalEvent.id,
+      weight: weight ?? undefined,
+    })
 
-      // Create local event record with block group — link to GCal event
-      const localEvent = await createHoldEvent({
-        userId,
-        cpId,
-        cpName,
-        startTime: slot.start,
-        endTime: slot.end,
-        preBlockGroupId,
-        location: location,
-        googleEventId: gcalEvent.id,
-        weight: weight ?? undefined,
-      })
-
-      blockedSlots.push(localEvent)
-    } catch (error) {
-      console.error(`Failed to block slot:`, error)
+    return {
+      success: true,
+      holdEvent: localEvent,
+      gcalEventId: gcalEvent.id,
     }
-  }
-
-  if (blockedSlots.length === 0) {
-    return { success: false, error: 'Failed to block any slots' }
-  }
-
-  return {
-    success: true,
-    preBlockGroupId,
-    blockedSlots,
-    gcalEventIds,
+  } catch (error) {
+    console.error(`Failed to block slot:`, error)
+    return { success: false, error: 'Failed to block slot' }
   }
 }
 
 /**
- * Confirm a specific slot from a pre-block group
- * Cleans up other tentative holds and books travel buffer
+ * Confirm a hold event — becomes confirmed, invite sent to CP (spec step 8)
+ * No block group cleanup needed — one hold per meeting
  */
 export async function confirmSlot(
   userId: string,
   confirmedEventId: string,
-  preBlockGroupId: string,
   cpEmail?: string,
   location?: string,
   newTitle?: string
 ): Promise<{ event: Event; travelBuffer?: Event }> {
-  // Confirm the selected event in local DB
   let confirmedEvent = await confirmEvent(confirmedEventId)
 
-  // Update title if provided
   if (newTitle) {
     confirmedEvent = await updateEvent(confirmedEventId, { title: newTitle })
   }
 
-  // Clean up other tentative holds in the same group (local DB + collect GCal IDs)
-  const { deletedGoogleEventIds } = await cleanupBlockGroup(preBlockGroupId, confirmedEventId)
-
-  // Delete the orphaned Google Calendar holds
-  for (const gcalId of deletedGoogleEventIds) {
-    try {
-      await deleteCalendarEvent(userId, gcalId, 'none')
-    } catch (error) {
-      console.error(`Failed to delete gcal hold ${gcalId}:`, error)
-    }
-  }
-
-  // Confirm the chosen hold on Google Calendar (patch existing, don't create duplicate)
+  // Confirm on Google Calendar + send invite to CP
   if (confirmedEvent.google_event_id) {
     try {
       await confirmCalendarEvent(
@@ -316,7 +285,6 @@ export async function confirmSlot(
       console.error('Failed to confirm gcal event:', error)
     }
   } else if (cpEmail) {
-    // Fallback: no stored GCal ID — create a new confirmed event
     try {
       const gcalEvent = await createCalendarEvent(userId, {
         summary: confirmedEvent.title || 'Meeting',
@@ -327,7 +295,6 @@ export async function confirmSlot(
         attendees: [cpEmail],
         sendUpdates: 'all',
       })
-      // Store the GCal ID for future reference
       confirmedEvent = await updateEvent(confirmedEventId, { google_event_id: gcalEvent.id })
     } catch (error) {
       console.error('Failed to create confirmed gcal event with attendee:', error)
@@ -350,6 +317,29 @@ export async function confirmSlot(
   }
 
   return { event: confirmedEvent, travelBuffer }
+}
+
+/**
+ * Reject a hold event — cleared from DB and Google Calendar (spec step 9)
+ */
+export async function rejectSlot(
+  userId: string,
+  eventId: string
+): Promise<void> {
+  const event = await getEventById(eventId)
+  if (!event) return
+
+  // Delete from local DB
+  await deleteEvent(eventId)
+
+  // Delete from Google Calendar
+  if (event.google_event_id) {
+    try {
+      await deleteCalendarEvent(userId, event.google_event_id, 'none')
+    } catch (error) {
+      console.error('Failed to delete gcal hold:', error)
+    }
+  }
 }
 
 /**
@@ -514,7 +504,7 @@ export async function handleEventMoved(
 
 /**
  * Schedule a meeting for a single CP
- * Full flow: find slots → block → create action for user approval
+ * Picks ONE optimal slot and creates ONE hold (spec: one slot per meeting)
  */
 export async function proposeMeeting(
   userId: string,
@@ -526,8 +516,8 @@ export async function proposeMeeting(
   const settings = await getUserSettings(userId)
   const duration = durationMinutes || settings.default_meeting_duration
 
-  // Step 1: Find best available slots
-  const slots = await findBestSlots(userId, duration, 3, preferredDate, location)
+  // Find candidate slots (more than needed so we can pick the best conflict-free one)
+  const slots = await findBestSlots(userId, duration, 10, preferredDate, location)
 
   if (slots.length === 0) {
     return {
@@ -536,71 +526,25 @@ export async function proposeMeeting(
     }
   }
 
-  // Step 2: Check for conflicts with each proposed slot
-  const validSlots: SlotProposal[] = []
-  const conflicts: ConflictInfo[] = []
-
+  // Pick the first conflict-free slot (they're already sorted by quality)
   for (const slot of slots) {
-    const slotConflicts = await findConflicts(
-      userId,
-      slot.start,
-      slot.end
-    )
+    const slotConflicts = await findConflicts(userId, slot.start, slot.end)
 
     if (slotConflicts.length === 0) {
-      validSlots.push(slot)
-    } else {
-      // Check if we should propose moving the conflicting event
-      const cp = await getCPById(cpId)
-      const newScore = calculateEventScore({
-        weight: 50,
-        sellerMultiplier: cp?.role === 'seller' ? settings.offer_multiplier_seller : settings.offer_multiplier_buyer,
-      })
-
-      const slotConflictInfos = await handleConflict(
-        userId,
-        slot.start,
-        slot.end,
-        newScore,
-        cpId
-      )
-
-      // If all conflicts recommend moving existing, we can still use this slot
-      const allCanMove = slotConflictInfos.every(c => c.recommendation === 'move_existing')
-      if (allCanMove) {
-        validSlots.push(slot)
-        conflicts.push(...slotConflictInfos)
-      }
+      // No conflicts — block this one slot
+      return blockSlotForProposal(userId, cpId, slot, duration, location)
     }
   }
 
-  if (validSlots.length === 0) {
-    return {
-      success: false,
-      conflicts,
-      error: 'All proposed slots have conflicts with higher-priority events',
-    }
+  // All slots have conflicts
+  return {
+    success: false,
+    error: 'All proposed slots have conflicts with higher-priority events',
   }
-
-  // Step 3: Block the valid slots
-  const result = await blockSlotsForProposal(
-    userId,
-    cpId,
-    validSlots.slice(0, 3), // Maximum 3 options
-    duration,
-    location
-  )
-
-  if (conflicts.length > 0) {
-    result.conflicts = conflicts
-  }
-
-  return result
 }
 
 /**
- * For multiple CPs: send only 1 confirmed slot (not multiple options)
- * to avoid coordination hell
+ * For multiple CPs: ONE optimal slot, ONE hold (same as single-CP)
  */
 export async function proposeMeetingMultipleCPs(
   userId: string,
@@ -612,69 +556,269 @@ export async function proposeMeetingMultipleCPs(
   const settings = await getUserSettings(userId)
   const duration = durationMinutes || settings.default_meeting_duration
 
-  // Find the single best slot that works
-  const slots = await findBestSlots(userId, duration, 1, preferredDate, location)
+  const slots = await findBestSlots(userId, duration, 10, preferredDate, location)
 
   if (slots.length === 0) {
-    return {
-      success: false,
-      error: 'No available slots found',
+    return { success: false, error: 'No available slots found' }
+  }
+
+  // Pick first conflict-free slot
+  for (const slot of slots) {
+    const slotConflicts = await findConflicts(userId, slot.start, slot.end)
+    if (slotConflicts.length > 0) continue
+
+    // Build title from all CP names
+    const cpNames: string[] = []
+    for (const cpId of cpIds) {
+      const cp = await getCPById(cpId)
+      if (cp) cpNames.push(cp.name || cp.primary_identifier)
+    }
+    const holdTitle = `${cpNames.join(', ')} - REZERVACE`
+
+    try {
+      const gcalEvent = await createTentativeCalendarEvent(userId, {
+        summary: holdTitle,
+        description: `Tentative hold - awaiting confirmation. Managed by Mila.`,
+        location: location,
+        startTime: slot.start,
+        endTime: slot.end,
+        status: 'tentative',
+      })
+
+      const localEvent = await createHoldEvent({
+        userId,
+        cpId: cpIds[0],
+        cpName: cpNames[0] || cpIds[0],
+        startTime: slot.start,
+        endTime: slot.end,
+        location: location,
+        googleEventId: gcalEvent.id,
+      })
+
+      return { success: true, holdEvent: localEvent, gcalEventId: gcalEvent.id }
+    } catch (error) {
+      console.error('Failed to block slot for multi-CP meeting:', error)
+      return { success: false, error: 'Failed to block slot' }
     }
   }
 
-  const slot = slots[0]
-  const preBlockGroupId = uuidv4()
-  const blockedSlots: Event[] = []
+  return { success: false, error: 'All slots have conflicts' }
+}
 
-  // Create a single hold event
-  const cpNames = []
-  for (const cpId of cpIds) {
-    const cp = await getCPById(cpId)
-    if (cp) {
-      cpNames.push(cp.name || cp.primary_identifier)
+/**
+ * Batch optimize ALL pending unsent SCHEDULE actions
+ * Called before brief generation. Picks ONE optimal slot per meeting.
+ *
+ * Optimization priority (spec step 2):
+ * 1. CP availability — stated or inferred from conversation
+ * 2. User availability — free slots in calendar
+ * 3. Travel optimization — cluster nearby meetings, avoid crossing town twice
+ * 4. Conflict resolution (last resort) — only suggest moving existing events
+ *    when CP is time-constrained AND priority is high. Prefer declining otherwise.
+ */
+export async function optimizeScheduleActions(
+  userId: string
+): Promise<OptimizeResult> {
+  const actions = await getPendingScheduleActions(userId)
+  const settings = await getUserSettings(userId)
+
+  const result: OptimizeResult = {
+    optimized: 0,
+    unscheduled: 0,
+    moveSuggestions: [],
+    holds: [],
+  }
+
+  if (actions.length === 0) return result
+
+  // Get all free slots for the next 14 days (enough to schedule all meetings)
+  const allSlots = await findBestSlots(userId, settings.default_meeting_duration, 50)
+
+  // Track which slots we've consumed (each hold blocks a slot)
+  const usedSlotTimes = new Set<string>()
+
+  // Sort actions by priority so highest-priority meetings get first pick
+  const sortedActions = [...actions].sort(
+    (a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0)
+  )
+
+  for (const action of sortedActions) {
+    const payload = action.payload as Record<string, unknown> | null
+    const cpAvailability = (payload?.cp_availability as string) || null
+    const meetingLocation = (payload?.location as string) || null
+
+    // Filter available slots (not yet consumed by earlier meetings in this batch)
+    const availableSlots = allSlots.filter(
+      s => !usedSlotTimes.has(s.start.toISOString())
+    )
+
+    if (availableSlots.length === 0) {
+      result.unscheduled++
+      continue
+    }
+
+    // Priority 1: Filter by CP availability if stated
+    let candidateSlots = availableSlots
+    if (cpAvailability) {
+      const cpFiltered = filterSlotsByCpAvailability(availableSlots, cpAvailability)
+      if (cpFiltered.length > 0) {
+        candidateSlots = cpFiltered
+      }
+      // If no CP-matching slots, fall through to all available (best effort)
+    }
+
+    // Priority 2: User availability — already handled by findBestSlots (only returns free slots)
+
+    // Priority 3: Travel optimization — pick slot closest to other meetings' locations
+    if (meetingLocation && candidateSlots.length > 1) {
+      candidateSlots = await rankSlotsByTravel(
+        userId, candidateSlots, meetingLocation, usedSlotTimes, settings
+      )
+    }
+
+    // Try to find a conflict-free slot
+    let scheduled = false
+    for (const slot of candidateSlots) {
+      const conflicts = await findConflicts(userId, slot.start, slot.end)
+
+      if (conflicts.length === 0) {
+        // No conflict — block this slot
+        const holdResult = await blockSlotForProposal(
+          userId,
+          action.cp_id,
+          slot,
+          settings.default_meeting_duration,
+          meetingLocation || undefined
+        )
+        if (holdResult.success && holdResult.holdEvent) {
+          result.optimized++
+          result.holds.push(holdResult.holdEvent)
+          usedSlotTimes.add(slot.start.toISOString())
+          scheduled = true
+          break
+        }
+      }
+    }
+
+    if (scheduled) continue
+
+    // Priority 4: Conflict resolution (last resort)
+    // Only suggest moving if CP is time-constrained
+    if (cpAvailability) {
+      // CP has a constraint — try to schedule at their required time
+      // and suggest moving the conflicting event
+      for (const slot of candidateSlots) {
+        const conflicts = await findConflicts(userId, slot.start, slot.end)
+        if (conflicts.length > 0) {
+          // Schedule here and suggest moving the conflict
+          const holdResult = await blockSlotForProposal(
+            userId,
+            action.cp_id,
+            slot,
+            settings.default_meeting_duration,
+            meetingLocation || undefined
+          )
+          if (holdResult.success && holdResult.holdEvent) {
+            result.optimized++
+            result.holds.push(holdResult.holdEvent)
+            usedSlotTimes.add(slot.start.toISOString())
+            for (const conflict of conflicts) {
+              result.moveSuggestions.push({
+                existingEventId: conflict.id,
+                existingWeight: conflict.weight,
+                reason: `CP can only meet at this time: ${cpAvailability}`,
+              })
+            }
+            scheduled = true
+            break
+          }
+        }
+      }
+    }
+
+    if (!scheduled) {
+      result.unscheduled++
     }
   }
 
-  // Localized title: "CP1, CP2 - REZERVACE"
-  const holdTitle = `${cpNames.join(', ')} - REZERVACE`
+  return result
+}
 
-  try {
-    await createTentativeCalendarEvent(userId, {
-      summary: holdTitle,
-      description: `Tentative hold - awaiting confirmation. Managed by Mila.`,
-      location: location,
-      startTime: slot.start,
-      endTime: slot.end,
-      status: 'tentative',
-      privateExtendedProperties: {
-        [MILA_BLOCK_GROUP_KEY]: preBlockGroupId,
-      },
-    })
+/**
+ * Filter slots that match CP's stated availability (simple keyword matching)
+ * E.g. "Tuesday afternoon" → filter to Tuesday PM slots
+ */
+function filterSlotsByCpAvailability(
+  slots: SlotProposal[],
+  cpAvailability: string
+): SlotProposal[] {
+  const lower = cpAvailability.toLowerCase()
+  const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+  const czDayNames = ['neděle', 'pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota']
 
-    const localEvent = await createEvent({
-      user_id: userId,
-      cp_id: cpIds[0], // Primary CP
-      title: holdTitle,
-      description: `Meeting with: ${cpNames.join(', ')}`,
-      location: location || null,
-      event_type: 'meeting',
-      status: 'tentative',
-      start_time: slot.start.toISOString(),
-      end_time: slot.end.toISOString(),
-      pre_block_group_id: preBlockGroupId,
-    })
+  return slots.filter(slot => {
+    const dayOfWeek = slot.start.getDay()
+    const hour = slot.start.getHours()
+    const dayName = dayNames[dayOfWeek]
+    const czDayName = czDayNames[dayOfWeek]
 
-    blockedSlots.push(localEvent)
-  } catch (error) {
-    console.error('Failed to block slot for multi-CP meeting:', error)
-    return { success: false, error: 'Failed to block slot' }
+    // Check day match
+    const dayMatch = lower.includes(dayName) || lower.includes(czDayName)
+    if (!dayMatch && (dayNames.some(d => lower.includes(d)) || czDayNames.some(d => lower.includes(d)))) {
+      return false // CP specified a day and this isn't it
+    }
+
+    // Check time-of-day match
+    const isAfternoon = hour >= 12
+    const isMorning = hour < 12
+    if (lower.includes('afternoon') || lower.includes('odpoledne')) {
+      if (!isAfternoon) return false
+    }
+    if (lower.includes('morning') || lower.includes('ráno') || lower.includes('dopoledne')) {
+      if (!isMorning) return false
+    }
+
+    // Check specific time match (e.g. "at 10:00" or "v 10:00")
+    const timeMatch = lower.match(/(?:at|v)\s+(\d{1,2}):?(\d{2})?/)
+    if (timeMatch) {
+      const targetHour = parseInt(timeMatch[1])
+      if (hour !== targetHour) return false
+    }
+
+    return true
+  })
+}
+
+/**
+ * Rank slots by travel efficiency — prefer slots near existing meetings
+ * to minimize total travel time (avoid crossing town twice)
+ */
+async function rankSlotsByTravel(
+  userId: string,
+  slots: SlotProposal[],
+  meetingLocation: string,
+  usedSlotTimes: Set<string>,
+  settings: UserSettings
+): Promise<SlotProposal[]> {
+  // Score each slot by travel time from the previous event
+  const scored: { slot: SlotProposal; travelSeconds: number }[] = []
+
+  for (const slot of slots) {
+    const previousLocation = await getLastEventLocation(userId, slot.start)
+    const origin = previousLocation || settings.office_location || settings.home_location
+
+    if (!origin) {
+      scored.push({ slot, travelSeconds: 0 })
+      continue
+    }
+
+    const travelTime = await getTravelTime(origin, meetingLocation, 'driving')
+    scored.push({ slot, travelSeconds: travelTime?.durationSeconds ?? Infinity })
   }
 
-  return {
-    success: true,
-    preBlockGroupId,
-    blockedSlots,
-  }
+  // Sort by travel time (shortest first)
+  scored.sort((a, b) => a.travelSeconds - b.travelSeconds)
+  return scored.map(s => s.slot)
 }
 
 /**

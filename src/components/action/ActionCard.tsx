@@ -107,8 +107,8 @@ export function ActionCard({
   const missingInfoFields = (action.missing_info as { label: string; value: string | null }[] | null) || []
   const hasUnfilledFields = missingInfoFields.length > 0 && missingInfoFields.some(f => f.value === null || f.value === '')
   const actionPayload = action.payload as Record<string, unknown> | null
-  const hasBlockedSlots = !!(actionPayload?.blocked_slots && Array.isArray(actionPayload.blocked_slots) && (actionPayload.blocked_slots as unknown[]).length > 0)
-  const doItDisabled = hasUnfilledFields && !hasBlockedSlots
+  const hasHold = !!actionPayload?.hold_event_id
+  const doItDisabled = hasUnfilledFields && !hasHold
 
   const getUrgencyLabel = (urgency: number): string => {
     if (urgency >= 8) return 'TEĎ'
@@ -175,7 +175,7 @@ export function ActionCard({
       </div>
 
       {/* ─── EDIT PANEL ────────────────────────────────────────────── */}
-      {editOpen && hasBlockedSlots ? (
+      {editOpen && hasHold ? (
         /* Full EditForm for SCHEDULE actions with slot selection */
         <div style={{
           margin: `0 ${theme.spacing.lg} ${theme.spacing.sm}`,

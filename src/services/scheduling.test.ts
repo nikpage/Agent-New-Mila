@@ -739,7 +739,7 @@ describe('Scheduling — Optimization Priority Order', () => {
     expect(result.optimized).toBe(1)
     // Should pick Tuesday PM (CP availability) over Monday AM (travel-optimal)
     expect(mockCreateTentativeCalendarEvent).toHaveBeenCalledWith('user-1', expect.objectContaining({
-      start: expect.objectContaining({ dateTime: expect.stringContaining('2026-03-10T14:00') }),
+      startTime: new Date('2026-03-10T14:00:00'),
     }))
   })
 
@@ -800,9 +800,9 @@ describe('Scheduling — Optimization Priority Order', () => {
     // Both meetings should be clustered in consecutive slots (9:00 + 10:00)
     // rather than spread apart (9:00 + 15:00)
     const holdCalls = mockCreateTentativeCalendarEvent.mock.calls
-    const times = holdCalls.map((c: unknown[]) => (c[1] as { start: { dateTime: string } }).start.dateTime)
+    const times = holdCalls.map((c: unknown[]) => (c[1] as { startTime: Date }).startTime)
     // Both should be in the morning block, not one morning + one afternoon
-    const hours = times.map((t: string) => new Date(t).getHours())
+    const hours = times.map((t: Date) => t.getHours())
     expect(Math.max(...hours) - Math.min(...hours)).toBeLessThanOrEqual(2)
   })
 

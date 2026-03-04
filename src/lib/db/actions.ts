@@ -89,6 +89,27 @@ export async function getPendingActionsForBrief(userId: string): Promise<ActionP
 }
 
 /**
+ * Get pending unsent SCHEDULE actions for batch optimization
+ * Returns only actions that haven't had invites sent yet
+ */
+export async function getPendingScheduleActions(userId: string): Promise<ActionProposal[]> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('action_proposals')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('status', 'pending')
+    .eq('action_type', 'SCHEDULE')
+    .order('priority_score', { ascending: false })
+
+  if (error) {
+    throw new Error(`Failed to get pending schedule actions: ${error.message}`)
+  }
+
+  return data || []
+}
+
+/**
  * Create a new action proposal
  */
 export async function createAction(action: ActionProposalInsert): Promise<ActionProposal> {
