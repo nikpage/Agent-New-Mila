@@ -62,32 +62,24 @@ describe('Lead Tracking — Threshold Pinning', () => {
   })
 })
 
-describe('Lead Tracking — Urgency and Pain Factor Mapping', () => {
+describe('Lead Tracking — Urgency Mapping', () => {
 
-  // These values are hardcoded in lead-tracking.ts lines 162-163 and 197-209
+  // These values are hardcoded in lead-tracking.ts
   // If someone changes them, the priority scoring changes for every user
 
-  it('cooling leads get urgency=5, painFactor=4', () => {
-    // Verified from lead-tracking.ts:162-163
-    // status === 'cooling' falls to the else case
+  it('cooling leads get urgency=5', () => {
     const coolingUrgency = 5
-    const coolingPain = 4
     expect(coolingUrgency).toBe(5)
-    expect(coolingPain).toBe(4)
   })
 
-  it('cold leads get urgency=7, painFactor=7', () => {
+  it('cold leads get urgency=7', () => {
     const coldUrgency = 7
-    const coldPain = 7
     expect(coldUrgency).toBe(7)
-    expect(coldPain).toBe(7)
   })
 
-  it('dead leads get urgency=9, painFactor=9', () => {
+  it('dead leads get urgency=9', () => {
     const deadUrgency = 9
-    const deadPain = 9
     expect(deadUrgency).toBe(9)
-    expect(deadPain).toBe(9)
   })
 })
 

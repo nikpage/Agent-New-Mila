@@ -283,59 +283,60 @@ export async function markActionsInstantNotified(actionIds: string[]): Promise<v
  * Calculate priority score for an action
  *
  * Formula:
- * 1. effectiveValue = dollarValue × offerMultiplier  (seller deals worth more)
- * 2. normalizedValue = log-scale compress into ~1-34 range (low anchor→2, high anchor→13)
- * 3. Total = (normalizedValue × urgency) + (painFactor × (daysIgnored + 1)²) + weight
+ * 1. normalizedValue = log-scale compress dollarValue into ~1-34 range (low anchor→2, high anchor→13)
+ * 2. normVal = normalizedValue × sellerMultiplier  (applied AFTER log so it's a real multiplier)
+ * 3. Total = normVal + urgency + daysIgnored² + weight
  *
- * The log normalization keeps financial values comparable to urgency/pain (1-10 scale)
- * instead of letting raw CZK values dominate all other factors.
+ * Four independent terms:
+ * - normVal: deal size on log scale, amplified by seller/buyer role
+ * - urgency: AI-assessed starting pressure (1-10), also serves as baseline for non-deal tasks
+ * - daysIgnored²: escalating time pressure — bigger deals don't age faster, all items age equally
+ * - weight: immovability (1-10 or 100), flat, never changes
  *
- * Zero handling: Any multiplier = 0 → replace with 1 to prevent score nullification
+ * The log normalization ensures different users (2M-5M agent vs 10M-100M agent)
+ * produce scores in the same range despite different deal sizes.
+ * Fibonacci-like tiers but smooth (no jumps).
+ *
+ * Zero handling: sellerMultiplier = 0 → replace with 1 to prevent score nullification
  */
 export function calculatePriorityScore(params: {
   dollarValue: number
   urgency: number
-  painFactor: number
   daysIgnored: number
   weight?: number
-  offerMultiplier?: number
+  sellerMultiplier?: number
   kcLowValue?: number
   kcHighValue?: number
 }): number {
   const {
     dollarValue,
     urgency,
-    painFactor,
     daysIgnored,
     weight = 0,
-    offerMultiplier = 1,
+    sellerMultiplier = 1,
     kcLowValue = 500_000,
     kcHighValue = 5_000_000,
   } = params
 
-  const safeOfferMultiplier = offerMultiplier || 1
+  const safeSellerMultiplier = sellerMultiplier || 1
   const safeUrgency = urgency || 1
-  const safePainFactor = painFactor || 1
   const safeWeight = weight || 0
   const safeLow = kcLowValue > 0 ? kcLowValue : 500_000
   const safeHigh = kcHighValue > safeLow ? kcHighValue : safeLow * 10
 
-  // Apply offerMultiplier BEFORE log normalization
-  const effectiveValue = dollarValue * safeOfferMultiplier
-
   // Log-scale normalization: lowValue→2, highValue→13, no clamping
   let normalizedValue = 0
-  if (effectiveValue > 0) {
+  if (dollarValue > 0) {
     const logLow = Math.log(safeLow)
     const logHigh = Math.log(safeHigh)
-    const logVal = Math.log(effectiveValue)
+    const logVal = Math.log(dollarValue)
     normalizedValue = 2 + ((logVal - logLow) / (logHigh - logLow)) * 11
   }
 
-  const valueComponent = normalizedValue * safeUrgency
-  const painComponent = safePainFactor * Math.pow(daysIgnored + 1, 2)
+  // Apply sellerMultiplier AFTER log so it's a real percentage boost
+  const normVal = normalizedValue * safeSellerMultiplier
 
-  return Math.round(valueComponent + painComponent + safeWeight)
+  return Math.round(normVal + safeUrgency + Math.pow(daysIgnored, 2) + safeWeight)
 }
 
 /**

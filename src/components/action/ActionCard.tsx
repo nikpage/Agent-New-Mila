@@ -385,10 +385,6 @@ export function ActionCard({
                 <p style={{ color: theme.colors.text, fontWeight: theme.typography.weights.medium }}>{action.urgency}/10</p>
               </div>
               <div>
-                <p style={{ color: theme.colors.textMuted }}>Bolest</p>
-                <p style={{ color: theme.colors.text, fontWeight: theme.typography.weights.medium }}>{action.pain_factor}/10</p>
-              </div>
-              <div>
                 <p style={{ color: theme.colors.textMuted }}>Dní ignorováno</p>
                 <p style={{ color: theme.colors.text, fontWeight: theme.typography.weights.medium }}>{days}</p>
               </div>

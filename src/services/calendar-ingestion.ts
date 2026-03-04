@@ -294,7 +294,6 @@ async function processInvitation(
   const priorityScore = calculatePriorityScore({
     dollarValue: 0,
     urgency: 5,
-    painFactor: 3,
     daysIgnored: 0,
     weight: 50,
   })
@@ -335,7 +334,6 @@ async function processInvitation(
     priority_score: priorityScore,
     dollar_value: 0,
     urgency: 5,
-    pain_factor: 3,
     payload: {
       intent_cs: `Pozvánka na schůzku od ${cp.name || invitation.organizer.email}`,
       execution_plan: `Přijmout/odmítnout pozvánku na ${invitation.summary}`,
@@ -348,7 +346,6 @@ async function processInvitation(
         action_type: 'SCHEDULE',
         urgency: 5,
         dollar_value: 0,
-        pain_factor: 3,
       },
     },
     queued_for_brief: true,

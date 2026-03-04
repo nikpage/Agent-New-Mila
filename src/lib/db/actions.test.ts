@@ -3,66 +3,56 @@ import { calculatePriorityScore } from './actions'
 
 /**
  * Log-scale normalization helper (mirrors the implementation)
- * effectiveValue = dollarValue * offerMultiplier → log compress, no clamping
+ * dollarValue → log compress, no clamping
  * lowValue → 2, highValue → 13
+ * sellerMultiplier applied AFTER log
  */
-function expectedLogNorm(effectiveValue: number, low = 500_000, high = 5_000_000): number {
-  if (effectiveValue <= 0) return 0
+function expectedLogNorm(dollarValue: number, low = 500_000, high = 5_000_000): number {
+  if (dollarValue <= 0) return 0
   const logLow = Math.log(low)
   const logHigh = Math.log(high)
-  const logVal = Math.log(effectiveValue)
+  const logVal = Math.log(dollarValue)
   return 2 + ((logVal - logLow) / (logHigh - logLow)) * 11
 }
 
 describe('calculatePriorityScore', () => {
   it('calculates basic score with all inputs (log-scale)', () => {
-    // dollarValue=1_000_000, urgency=5, painFactor=3, daysIgnored=2
-    // effectiveValue = 1_000_000 * 1 (default offerMultiplier)
-    // logNorm ≈ 2 + (log(1M) - log(500K)) / (log(5M) - log(500K)) * 11 ≈ 5.31
-    // valueComponent = 5.31 * 5 = 26.55
-    // painComponent = 3 * (2+1)^2 = 27
-    // total = round(26.55 + 27 + 0) = 54
+    // dollarValue=1_000_000, urgency=5, daysIgnored=2
+    // normVal = log_compress(1M) * 1 (default sellerMultiplier) ≈ 5.31
+    // score = 5.31 + 5 + 2² + 0 = 5.31 + 5 + 4 = 14.31 → 14
     const norm = expectedLogNorm(1_000_000)
-    const expected = Math.round(norm * 5 + 3 * Math.pow(3, 2) + 0)
+    const expected = Math.round(norm + 5 + Math.pow(2, 2) + 0)
     const score = calculatePriorityScore({
       dollarValue: 1_000_000,
       urgency: 5,
-      painFactor: 3,
       daysIgnored: 2,
     })
     expect(score).toBe(expected)
   })
 
-  it('applies offerMultiplier BEFORE log normalization', () => {
-    // 3M × 1.5 = 4.5M effective → should score near a raw 4.5M deal
+  it('applies sellerMultiplier AFTER log normalization', () => {
+    // 3M with 1.5x multiplier: normVal = log_compress(3M) * 1.5
+    // This should NOT equal a raw 4.5M deal (that was the old pre-log behavior)
     const withMultiplier = calculatePriorityScore({
       dollarValue: 3_000_000,
       urgency: 5,
-      painFactor: 1,
       daysIgnored: 0,
-      offerMultiplier: 1.5,
+      sellerMultiplier: 1.5,
     })
-    // Compare: 4.5M raw deal, no multiplier
-    const rawEquivalent = calculatePriorityScore({
-      dollarValue: 4_500_000,
-      urgency: 5,
-      painFactor: 1,
-      daysIgnored: 0,
-      offerMultiplier: 1.0,
-    })
-    expect(withMultiplier).toBe(rawEquivalent)
+    // log_compress(3M) ≈ 10.56, × 1.5 = 15.84
+    // score = 15.84 + 5 + 0 + 0 ≈ 21
+    const normVal = expectedLogNorm(3_000_000) * 1.5
+    expect(withMultiplier).toBe(Math.round(normVal + 5))
   })
 
   it('includes weight in final score', () => {
     const score = calculatePriorityScore({
       dollarValue: 0,
       urgency: 1,
-      painFactor: 1,
       daysIgnored: 0,
       weight: 100,
     })
-    // dollarValue=0 → normalizedValue=0, valueComponent=0
-    // painComponent = 1 * 1 = 1, weight = 100
+    // normVal=0, U→1, days²=0, W=100 → 0 + 1 + 0 + 100 = 101
     expect(score).toBe(101)
   })
 
@@ -70,53 +60,40 @@ describe('calculatePriorityScore', () => {
     const score = calculatePriorityScore({
       dollarValue: 1_000_000,
       urgency: 0,
-      painFactor: 1,
       daysIgnored: 0,
     })
-    // urgency 0 → 1: norm * 1 + 1 * 1 + 0
+    // urgency 0 → 1: norm + 1 + 0 + 0
     const norm = expectedLogNorm(1_000_000)
-    expect(score).toBe(Math.round(norm * 1 + 1 + 0))
+    expect(score).toBe(Math.round(norm + 1))
   })
 
-  it('replaces zero painFactor with 1', () => {
-    const score = calculatePriorityScore({
-      dollarValue: 0,
-      urgency: 1,
-      painFactor: 0,
-      daysIgnored: 3,
-    })
-    // painFactor 0 → 1: 0 + 1 * (3+1)^2 + 0 = 16
-    expect(score).toBe(16)
-  })
-
-  it('replaces zero offerMultiplier with 1', () => {
+  it('replaces zero sellerMultiplier with 1', () => {
     const withZero = calculatePriorityScore({
       dollarValue: 1_000_000,
       urgency: 2,
-      painFactor: 1,
       daysIgnored: 0,
-      offerMultiplier: 0,
+      sellerMultiplier: 0,
     })
     const withDefault = calculatePriorityScore({
       dollarValue: 1_000_000,
       urgency: 2,
-      painFactor: 1,
       daysIgnored: 0,
-      offerMultiplier: 1,
+      sellerMultiplier: 1,
     })
     // Zero → falls back to 1
     expect(withZero).toBe(withDefault)
   })
 
   it('daysIgnored growth is quadratic', () => {
-    const score0 = calculatePriorityScore({ dollarValue: 0, urgency: 1, painFactor: 5, daysIgnored: 0 })
-    const score5 = calculatePriorityScore({ dollarValue: 0, urgency: 1, painFactor: 5, daysIgnored: 5 })
-    const score10 = calculatePriorityScore({ dollarValue: 0, urgency: 1, painFactor: 5, daysIgnored: 10 })
+    const score0 = calculatePriorityScore({ dollarValue: 0, urgency: 1, daysIgnored: 0 })
+    const score5 = calculatePriorityScore({ dollarValue: 0, urgency: 1, daysIgnored: 5 })
+    const score10 = calculatePriorityScore({ dollarValue: 0, urgency: 1, daysIgnored: 10 })
 
-    // 5 * 1^2 = 5,  5 * 6^2 = 180,  5 * 11^2 = 605
-    expect(score0).toBe(5)
-    expect(score5).toBe(180)
-    expect(score10).toBe(605)
+    // normVal=0, U=1: score = 0 + 1 + days² + 0
+    // day 0: 1, day 5: 1+25=26, day 10: 1+100=101
+    expect(score0).toBe(1)
+    expect(score5).toBe(26)
+    expect(score10).toBe(101)
     // Quadratic: growth from 0→5 < growth from 5→10
     expect(score10 - score5).toBeGreaterThan(score5 - score0)
   })
@@ -125,9 +102,8 @@ describe('calculatePriorityScore', () => {
     const score = calculatePriorityScore({
       dollarValue: 1_500_000,
       urgency: 3,
-      painFactor: 7,
       daysIgnored: 1,
-      offerMultiplier: 1.5,
+      sellerMultiplier: 1.5,
     })
     expect(Number.isInteger(score)).toBe(true)
   })
@@ -136,10 +112,9 @@ describe('calculatePriorityScore', () => {
     const score = calculatePriorityScore({
       dollarValue: 0,
       urgency: 0,
-      painFactor: 0,
       daysIgnored: 0,
     })
-    // All zeros → safe defaults: normalizedValue=0, painFactor→1: 0 + 1*1 + 0 = 1
+    // All zeros → safe defaults: normVal=0, urgency→1: 0 + 1 + 0 + 0 = 1
     expect(score).toBe(1)
     expect(Number.isFinite(score)).toBe(true)
   })
@@ -150,35 +125,31 @@ describe('calculatePriorityScore', () => {
     const score = calculatePriorityScore({
       dollarValue: 500_000,  // = kcLowValue default
       urgency: 1,
-      painFactor: 0,
       daysIgnored: 0,
     })
-    // normalizedValue ≈ 2, painFactor→1: 2*1 + 1*1 + 0 = 3
-    expect(score).toBe(Math.round(2 * 1 + 1))
+    // normVal ≈ 2, score = 2 + 1 + 0 + 0 = 3
+    expect(score).toBe(Math.round(2 + 1))
   })
 
   it('high anchor value maps to normalized ~13', () => {
     const score = calculatePriorityScore({
       dollarValue: 5_000_000,  // = kcHighValue default
       urgency: 1,
-      painFactor: 0,
       daysIgnored: 0,
     })
-    // normalizedValue = 13, painFactor→1: 13*1 + 1*1 + 0 = 14
-    expect(score).toBe(Math.round(13 * 1 + 1))
+    // normVal = 13, score = 13 + 1 + 0 + 0 = 14
+    expect(score).toBe(Math.round(13 + 1))
   })
 
   it('values above high anchor extend beyond 13 with no cap', () => {
     const bigDeal = calculatePriorityScore({
       dollarValue: 50_000_000,
       urgency: 1,
-      painFactor: 0,
       daysIgnored: 0,
     })
     const hugeDeal = calculatePriorityScore({
       dollarValue: 500_000_000_000, // absurdly large
       urgency: 1,
-      painFactor: 0,
       daysIgnored: 0,
     })
     // Big deal scores > 13 (the high anchor)
@@ -195,7 +166,6 @@ describe('calculatePriorityScore', () => {
     const tinyDeal = calculatePriorityScore({
       dollarValue: 10_000,
       urgency: 1,
-      painFactor: 0,
       daysIgnored: 0,
     })
     const normTiny = expectedLogNorm(10_000)
@@ -208,13 +178,11 @@ describe('calculatePriorityScore', () => {
     const score = calculatePriorityScore({
       dollarValue: 0,
       urgency: 10,
-      painFactor: 5,
       daysIgnored: 3,
       weight: 8,
     })
-    // normalizedValue = 0 (no financial component)
-    // 0*10 + 5*(3+1)^2 + 8 = 0 + 80 + 8 = 88
-    expect(score).toBe(88)
+    // normVal = 0, score = 0 + 10 + 9 + 8 = 27
+    expect(score).toBe(27)
   })
 
   it('custom kcLowValue/kcHighValue shift the normalization anchors', () => {
@@ -223,7 +191,6 @@ describe('calculatePriorityScore', () => {
     const customAnchors = calculatePriorityScore({
       dollarValue: 500_000,
       urgency: 1,
-      painFactor: 0,
       daysIgnored: 0,
       kcLowValue: 100_000,
       kcHighValue: 1_000_000,
@@ -232,7 +199,6 @@ describe('calculatePriorityScore', () => {
     const defaultAnchors = calculatePriorityScore({
       dollarValue: 500_000,
       urgency: 1,
-      painFactor: 0,
       daysIgnored: 0,
     })
     // With tighter anchors, 500K scores much higher
@@ -243,7 +209,6 @@ describe('calculatePriorityScore', () => {
     const score = calculatePriorityScore({
       dollarValue: 1_000_000,
       urgency: 1,
-      painFactor: 1,
       daysIgnored: 0,
       kcLowValue: 0,
     })
@@ -255,7 +220,6 @@ describe('calculatePriorityScore', () => {
     const score = calculatePriorityScore({
       dollarValue: 1_000_000,
       urgency: 1,
-      painFactor: 1,
       daysIgnored: 0,
       kcLowValue: 500_000,
       kcHighValue: 500_000, // same as low — would cause log(1) = 0 division
@@ -270,14 +234,12 @@ describe('calculatePriorityScore', () => {
     const smallUrgent = calculatePriorityScore({
       dollarValue: 500_000,
       urgency: 9,
-      painFactor: 8,
       daysIgnored: 3,
       weight: 8,
     })
     const bigRoutine = calculatePriorityScore({
       dollarValue: 5_000_000,
       urgency: 2,
-      painFactor: 1,
       daysIgnored: 0,
       weight: 2,
     })

@@ -542,7 +542,7 @@ export async function proposeMeeting(
       const cp = await getCPById(cpId)
       const newScore = calculateEventScore({
         weight: 50,
-        offerMultiplier: cp?.role === 'seller' ? settings.offer_multiplier_seller : settings.offer_multiplier_buyer,
+        sellerMultiplier: cp?.role === 'seller' ? settings.offer_multiplier_seller : settings.offer_multiplier_buyer,
       })
 
       const slotConflictInfos = await handleConflict(

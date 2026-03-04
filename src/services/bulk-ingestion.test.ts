@@ -46,7 +46,7 @@ vi.mock('@/lib/ai/gemini', () => ({
   shouldJoinConversation: vi.fn().mockResolvedValue(false),
   proposeAction: vi.fn().mockResolvedValue({
     actionType: 'WAIT', rationale_cs: 'Test', intent_cs: null,
-    missingInfo: [], dollarValue: 0, urgency: 1, painFactor: 1,
+    missingInfo: [], dollarValue: 0, urgency: 1,
     weight: 1, dealType: null,
   }),
   generateFinalDraft: vi.fn().mockResolvedValue({ subject: 'Test', body: 'Test' }),

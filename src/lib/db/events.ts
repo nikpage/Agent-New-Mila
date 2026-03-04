@@ -426,10 +426,9 @@ export async function cancelEventWithCleanup(eventId: string): Promise<void> {
 export function calculateEventScore(params: {
   dollarValue?: number
   urgency?: number
-  painFactor?: number
   daysIgnored?: number
   weight?: number
-  offerMultiplier?: number
+  sellerMultiplier?: number
   isUserCreated?: boolean
 }): number {
   const weight = params.weight ?? (params.isUserCreated ? 100 : 0)
@@ -437,10 +436,9 @@ export function calculateEventScore(params: {
   return calculatePriorityScore({
     dollarValue: params.dollarValue || 0,
     urgency: params.urgency || 1,
-    painFactor: params.painFactor || 1,
     daysIgnored: params.daysIgnored || 0,
     weight,
-    offerMultiplier: params.offerMultiplier || 1,
+    sellerMultiplier: params.sellerMultiplier || 1,
   })
 }
 

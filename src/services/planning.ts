@@ -224,9 +224,8 @@ export async function generateActionProposal(
     const priorityScore = calculatePriorityScore({
       dollarValue: proposal.dollarValue,
       urgency: proposal.urgency,
-      painFactor: proposal.painFactor,
       daysIgnored,
-      offerMultiplier,
+      sellerMultiplier: offerMultiplier,
       kcLowValue: settings.kc_low_value,
       kcHighValue: settings.kc_high_value,
       weight,
@@ -251,7 +250,6 @@ export async function generateActionProposal(
       dollar_value: proposal.dollarValue,
       offer_multiplier: offerMultiplier,
       urgency: proposal.urgency,
-      pain_factor: proposal.painFactor,
       weight,
 
       // NO DRAFTS
@@ -268,7 +266,6 @@ export async function generateActionProposal(
           urgency: proposal.urgency,
           dollar_value: proposal.dollarValue,
           offer_multiplier: offerMultiplier,
-          pain_factor: proposal.painFactor,
           weight,
           deal_type: dealType,
           is_high_value: containsHighValueSignals(

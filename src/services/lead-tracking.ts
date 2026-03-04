@@ -181,9 +181,8 @@ async function processConversationForLeadTracking(
   const basePriority = calculatePriorityScore({
     dollarValue: 0, // We don't know deal value from messages alone
     urgency: status === 'dead' ? 9 : status === 'cold' ? 7 : 5,
-    painFactor: status === 'dead' ? 9 : status === 'cold' ? 7 : 4,
     daysIgnored: daysSinceActivity,
-    offerMultiplier,
+    sellerMultiplier: offerMultiplier,
     kcLowValue: settings.kc_low_value,
     kcHighValue: settings.kc_high_value,
   })
@@ -220,7 +219,6 @@ async function processConversationForLeadTracking(
     dollar_value: 0,
     offer_multiplier: offerMultiplier,
     urgency: status === 'dead' ? 9 : status === 'cold' ? 7 : 5,
-    pain_factor: status === 'dead' ? 9 : status === 'cold' ? 7 : 4,
     draft_subject: null,
     draft_body_text: null,
     payload: {
@@ -232,7 +230,6 @@ async function processConversationForLeadTracking(
         urgency: status === 'dead' ? 9 : status === 'cold' ? 7 : 5,
         dollar_value: 0,
         offer_multiplier: offerMultiplier,
-        pain_factor: status === 'dead' ? 9 : status === 'cold' ? 7 : 4,
       },
       // Lead tracking metadata
       is_follow_up: true,

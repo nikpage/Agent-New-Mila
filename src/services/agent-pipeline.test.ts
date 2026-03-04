@@ -112,7 +112,7 @@ beforeEach(() => {
   } as never)
   vi.mocked(proposeAction).mockResolvedValue({
     actionType: 'REPLY', rationale_cs: 'Test', intent_cs: 'Test intent',
-    missingInfo: [], dollarValue: 1000000, urgency: 5, painFactor: 3,
+    missingInfo: [], dollarValue: 1000000, urgency: 5,
     weight: 30, dealType: 'sale',
   } as never)
 })

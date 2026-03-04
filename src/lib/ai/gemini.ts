@@ -175,7 +175,6 @@ export async function proposeAction(
   missingInfo: { label: string; value: null }[]
   urgency: number
   dollarValue: number
-  painFactor: number
   weight: number
   dealType: DealType
   suggestedLocation?: string | null
@@ -260,7 +259,6 @@ Respond with ONLY valid JSON:
   "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
   "urgency": 1-10 (10 = needs immediate attention),
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
-  "painFactor": 1-10 (how much pain from ignoring this),
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
   "suggestedLocation": "Physical meeting location if mentioned or clearly implied. null if not specified.",

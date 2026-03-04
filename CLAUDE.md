@@ -212,10 +212,23 @@ Key tables: `users`, `cps`, `conversation_threads`, `messages`, `action_proposal
 
 ## Priority Scoring
 
-**Formula (log-scale normalization):**
-1. `effectiveValue = dollarValue × offerMultiplier` (seller deals worth more — applied BEFORE log)
-2. `normalizedValue = log-scale compress into [1, 34]` (kcLowValue→2, kcHighValue→13)
-3. `Total = (normalizedValue × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
+**Formula:** `score = normVal + U + daysIgnored² + W`
+
+Four independent terms — each measures a different dimension, no cross-contamination:
+1. `normVal = log_compress(dollarValue) × sellerMultiplier` — deal size (post-log multiplier so it's a real % boost)
+2. `U` — urgency: AI-assessed starting pressure (1-10). Also the baseline for non-deal tasks (doctor appointment, printer deadline)
+3. `daysIgnored²` — time pressure that escalates quadratically. Day 0 = 0, day 1 = 1, day 3 = 9, day 7 = 49
+4. `W` — weight/immovability: flat, never changes. 1-10 for normal items, 100 for absolutely immovable (court date, kids concert)
+
+**Why these are independent:**
+- **normVal** answers "how much money is at stake?" — static for the deal's lifetime
+- **U** answers "how urgently does this need doing?" — sets both the starting floor and baseline pressure
+- **daysIgnored²** answers "how long has this been sitting?" — escalates equally regardless of deal value
+- **W** answers "can this be moved?" — kid's concert is W=100 from day 1 to day 1000, never changes
+
+**Why log normalization exists:** Different users have different deal ranges. Agent A sells 2M-5M homes, Agent B sells 10M-100M. The log scale maps both to the same score range (~2-13 for their respective kcLow→kcHigh). Like Fibonacci tiers (1,2,3,5,8,13,21,34) but smooth — no jumps between values. User sets their own anchors via `kc_low_value` and `kc_high_value`. Below-floor deals go below 2 (can be negative) — they sink naturally.
+
+**Why sellerMultiplier is post-log:** Applied AFTER log compression so 1.5× actually gives 50% more score. Pre-log it gets swallowed by the logarithm and barely moves the needle. Default 1.5 for sellers, 1.0 for buyers (user-configurable).
 
 **Implementation:** `src/lib/db/actions.ts` → `calculatePriorityScore()`
 
@@ -224,19 +237,16 @@ Key tables: `users`, `cps`, `conversation_threads`, `messages`, `action_proposal
 | `dollarValue` | 0+ (CZK) | Deal/transaction value |
 | `kcLowValue` | default 500000 | "Small deal" anchor from `settings.kc_low_value`. Maps to normalized score ~2. |
 | `kcHighValue` | default 5000000 | "Big deal" anchor from `settings.kc_high_value`. Maps to normalized score ~13. |
-| `offerMultiplier` | default 1 | Applied to raw value BEFORE log. From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
+| `sellerMultiplier` | default 1 | Applied AFTER log. From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
 | `urgency` | 1-10 | AI-assessed, safe default 1 |
-| `painFactor` | 1-10 | AI-assessed relationship pain, safe default 1 |
-| `daysIgnored` | 0+ | Days since last activity (squared growth) |
+| `daysIgnored` | 0+ | Days since last activity (squared: day 3 = 9, day 7 = 49) |
 | `weight` | 1-10 or 100 | How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable (court date, kids concert, airport pickup). No values between 10-100. |
 
-**Normalization range:** No clamping. Values below kcLowValue go below 2 (can be negative for very small deals). Values between anchors map smoothly to 2-13. Values above kcHighValue extend beyond 13. The log scale naturally compresses extremes.
+Safe defaults: `urgency`, `sellerMultiplier` fallback to 1 if 0/null (prevents score collapse). `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue (falls back to kcLowValue × 10).
 
-Safe defaults: `urgency`, `painFactor`, `offerMultiplier` fallback to 1 if 0/null (prevents score collapse). `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue (falls back to kcLowValue × 10).
+**DO NOT REMOVE OR CHANGE** the log-scale normalization, the four-term independence, or `weight` wiring without explicit user permission.
 
-**DO NOT REMOVE OR CHANGE** the log-scale normalization or `weight` wiring without explicit user permission.
-
-**Wiring:** `planning.ts` passes `offerMultiplier` (from CP role), `kcLowValue`/`kcHighValue` (from user settings), and `weight` (from AI response) to `calculatePriorityScore()`. `lead-tracking.ts` also passes `offerMultiplier` and `kcLowValue`/`kcHighValue` for follow-up actions.
+**Wiring:** `planning.ts` passes `sellerMultiplier` (from CP role via `selectOfferMultiplier`), `kcLowValue`/`kcHighValue` (from user settings), and `weight` (from AI response) to `calculatePriorityScore()`. `lead-tracking.ts` also passes `sellerMultiplier` and `kcLowValue`/`kcHighValue` for follow-up actions.
 
 ## AI Model Configuration
 
@@ -330,7 +340,7 @@ When a new meeting conflicts with existing events:
 **Language:** Czech (configured in `src/config/client.ts` → `ai.language`)
 **Channel-aware tone:** Implemented — email gets formal tone + signature; WhatsApp gets short, conversational messages.
 
-Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`, `weight`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `weight`, `is_high_value`) is stored in `payload.action_metadata`.
+Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`, `weight`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `weight`, `is_high_value`) is stored in `payload.action_metadata`. Note: `pain_factor` column exists in DB but is no longer used — removed from formula.
 
 `generateFinalDraft()` in `src/lib/ai/gemini.ts` takes conversation context + intent + user notes + channel → returns `{ subject, body }`.
 

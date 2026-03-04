@@ -63,36 +63,33 @@ describe('offer multiplier affects priority scoring', () => {
   const baseParams = {
     dollarValue: 5_000_000, // 5M CZK typical deal
     urgency: 5,
-    painFactor: 3,
     daysIgnored: 2,
   }
 
   it('seller deal scores higher than buyer deal (same dollar value)', () => {
     const sellerScore = calculatePriorityScore({
       ...baseParams,
-      offerMultiplier: selectOfferMultiplier('seller', 1.5, 1.0),
+      sellerMultiplier: selectOfferMultiplier('seller', 1.5, 1.0),
     })
     const buyerScore = calculatePriorityScore({
       ...baseParams,
-      offerMultiplier: selectOfferMultiplier('buyer', 1.5, 1.0),
+      sellerMultiplier: selectOfferMultiplier('buyer', 1.5, 1.0),
     })
     expect(sellerScore).toBeGreaterThan(buyerScore)
-    // With log-scale: seller's offerMultiplier (1.5) is applied BEFORE log,
-    // so 5M×1.5=7.5M effective vs 5M×1.0=5M effective.
-    // Both compress to similar range (~13 vs ~15) but seller still wins.
-    // The difference is modest (not millions) — that's the whole point of log normalization.
+    // sellerMultiplier (1.5) is applied AFTER log, so normVal = 13 * 1.5 = 19.5 vs 13 * 1.0 = 13
+    // Difference = 6.5, which is a real boost (not compressed by log)
     expect(sellerScore - buyerScore).toBeGreaterThan(0)
-    expect(sellerScore - buyerScore).toBeLessThan(100) // log-compressed, not millions apart
+    expect(sellerScore - buyerScore).toBeLessThan(100)
   })
 
   it('unknown CP role defaults to buyer multiplier', () => {
     const unknownScore = calculatePriorityScore({
       ...baseParams,
-      offerMultiplier: selectOfferMultiplier(null, 1.5, 1.0),
+      sellerMultiplier: selectOfferMultiplier(null, 1.5, 1.0),
     })
     const buyerScore = calculatePriorityScore({
       ...baseParams,
-      offerMultiplier: selectOfferMultiplier('buyer', 1.5, 1.0),
+      sellerMultiplier: selectOfferMultiplier('buyer', 1.5, 1.0),
     })
     expect(unknownScore).toBe(buyerScore)
   })

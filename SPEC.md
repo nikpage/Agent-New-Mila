@@ -185,23 +185,25 @@ When a new meeting conflicts with existing events:
 
 ## Priority Scoring
 
-**Formula (log-scale normalization):**
-1. `effectiveValue = dollarValue × offerMultiplier` (seller deals worth more — applied BEFORE log)
-2. `normalizedValue = log-scale compress, no clamping` (kcLowValue→2, kcHighValue→13, below/above extends naturally)
-3. `Total = (normalizedValue × urgency) + (painFactor × (daysIgnored + 1)²) + weight`
+**Formula:** `score = normVal + U + daysIgnored² + W`
+
+Four independent terms:
+1. `normVal = log_compress(dollarValue) × sellerMultiplier` — deal size (post-log multiplier)
+2. `U` — urgency: AI-assessed starting pressure (1-10)
+3. `daysIgnored²` — time pressure, escalates quadratically
+4. `W` — weight/immovability: flat, never changes (1-10 or 100)
 
 | Input | Scale | Source |
 |-------|-------|--------|
 | `dollarValue` | 0+ CZK | AI-assessed from conversation |
 | `kcLowValue` | default 500000 | `settings.kc_low_value` — "small deal" anchor, maps to normalized score ~2 |
 | `kcHighValue` | default 5000000 | `settings.kc_high_value` — "big deal" anchor, maps to normalized score ~13 |
-| `offerMultiplier` | default 1 | Applied to raw value BEFORE log. User settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
+| `sellerMultiplier` | default 1 | Applied AFTER log. User settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
 | `urgency` | 1-10 | AI-assessed |
-| `painFactor` | 1-10 | AI-assessed relationship pain |
-| `daysIgnored` | 0+ | Days since last activity (squared growth) |
+| `daysIgnored` | 0+ | Days since last activity (squared: day 3 = 9, day 7 = 49) |
 | `weight` | 1-10 or 100 | How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable (court date, kids concert, airport pickup) |
 
-All multipliers fall back to 1 if 0/null to prevent score collapse. `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue.
+`sellerMultiplier` and `urgency` fall back to 1 if 0/null to prevent score collapse. `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue.
 
 ## AI Architecture
 
