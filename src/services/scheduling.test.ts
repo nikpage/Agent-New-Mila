@@ -9,7 +9,9 @@
  * What we prove against the spec:
  * - ONE hold per meeting — optimizer picks the optimal slot, not multiple options
  * - Batch optimization: collects ALL pending unsent SCHEDULE actions, one slot each
- * - Sent invites are fixed walls — optimizer never touches them
+ * - Optimization priority order: CP availability > user availability > travel > conflict resolution
+ * - Sent invites are fixed walls — never auto-moved (but Mila may suggest moving if conflict requires it)
+ * - Conflict resolution is last resort: prefer scheduling without moving existing events
  * - Confirm → hold becomes confirmed event + invite sent to CP (spec step 8)
  * - Reject → hold cleared (spec step 9)
  * - Slot finding respects working hours, buffer, working days
@@ -706,6 +708,168 @@ describe('Scheduling — Batch Optimization', () => {
 
     expect(result.optimized).toBe(0)
     expect(mockCreateHoldEvent).not.toHaveBeenCalled()
+  })
+})
+
+// ── Optimization Priority Order (spec step 2: CP avail > user avail > travel > conflict) ──
+
+describe('Scheduling — Optimization Priority Order', () => {
+  it('priority 1: respects CP availability from conversation context', async () => {
+    // CP said "I can only do Tuesday afternoon" — optimizer must pick a Tuesday PM slot
+    // even if Monday morning is free and closer to other meetings
+    const { optimizeScheduleActions } = await import('./scheduling')
+
+    mockGetPendingScheduleActions.mockResolvedValue([{
+      id: 'action-1',
+      cp_id: 'cp-1',
+      payload: { channel: 'email', cp_availability: 'Tuesday afternoon only' },
+    }])
+
+    // Monday 9am is free (better for travel), Tuesday 14:00 matches CP constraint
+    mockFindFreeSlots.mockResolvedValue([
+      { start: new Date('2026-03-09T09:00:00'), end: new Date('2026-03-09T09:30:00') }, // Monday
+      { start: new Date('2026-03-10T14:00:00'), end: new Date('2026-03-10T14:30:00') }, // Tuesday PM
+    ])
+    mockFindConflicts.mockResolvedValue([])
+    mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+
+    const result = await optimizeScheduleActions('user-1')
+
+    expect(result.optimized).toBe(1)
+    // Should pick Tuesday PM (CP availability) over Monday AM (travel-optimal)
+    expect(mockCreateTentativeCalendarEvent).toHaveBeenCalledWith('user-1', expect.objectContaining({
+      start: expect.objectContaining({ dateTime: expect.stringContaining('2026-03-10T14:00') }),
+    }))
+  })
+
+  it('priority 2: respects user availability — skips conflicting slots', async () => {
+    const { optimizeScheduleActions } = await import('./scheduling')
+
+    mockGetPendingScheduleActions.mockResolvedValue([{
+      id: 'action-1',
+      cp_id: 'cp-1',
+      payload: { channel: 'email' },
+    }])
+
+    // Only one free slot — the other times are blocked by user's calendar
+    mockFindFreeSlots.mockResolvedValue([
+      { start: new Date('2026-03-10T14:00:00'), end: new Date('2026-03-10T14:30:00') },
+    ])
+    mockFindConflicts.mockResolvedValue([])
+    mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+
+    const result = await optimizeScheduleActions('user-1')
+
+    expect(result.optimized).toBe(1)
+    // Takes the only available slot
+    expect(mockCreateHoldEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('priority 3: travel optimization — clusters nearby meetings when possible', async () => {
+    // Two meetings: one in Karlín, one in Žižkov (nearby). Should schedule them
+    // close together rather than spreading across the day to minimize travel
+    const { optimizeScheduleActions } = await import('./scheduling')
+
+    mockGetPendingScheduleActions.mockResolvedValue([
+      { id: 'action-1', cp_id: 'cp-1', payload: { channel: 'email', location: 'Karlín 8, Praha' } },
+      { id: 'action-2', cp_id: 'cp-2', payload: { channel: 'email', location: 'Žižkov 5, Praha' } },
+    ])
+
+    mockFindFreeSlots.mockResolvedValue([
+      { start: new Date('2026-03-10T09:00:00'), end: new Date('2026-03-10T09:30:00') },
+      { start: new Date('2026-03-10T10:00:00'), end: new Date('2026-03-10T10:30:00') },
+      { start: new Date('2026-03-10T15:00:00'), end: new Date('2026-03-10T15:30:00') },
+    ])
+    mockFindConflicts.mockResolvedValue([])
+    // Karlín→Žižkov is short; Office→Karlín and Office→Žižkov are longer
+    mockGetTravelTime.mockImplementation(async (origin: string, dest: string) => {
+      if (origin.includes('Karlín') && dest.includes('Žižkov'))
+        return { durationSeconds: 300, durationText: '5 min', distanceMeters: 1500, distanceText: '1.5 km' }
+      if (origin.includes('Žižkov') && dest.includes('Karlín'))
+        return { durationSeconds: 300, durationText: '5 min', distanceMeters: 1500, distanceText: '1.5 km' }
+      return { durationSeconds: 1800, durationText: '30 min', distanceMeters: 12000, distanceText: '12 km' }
+    })
+    mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+
+    const result = await optimizeScheduleActions('user-1')
+
+    expect(result.optimized).toBe(2)
+    // Both meetings should be clustered in consecutive slots (9:00 + 10:00)
+    // rather than spread apart (9:00 + 15:00)
+    const holdCalls = mockCreateTentativeCalendarEvent.mock.calls
+    const times = holdCalls.map((c: unknown[]) => (c[1] as { start: { dateTime: string } }).start.dateTime)
+    // Both should be in the morning block, not one morning + one afternoon
+    const hours = times.map((t: string) => new Date(t).getHours())
+    expect(Math.max(...hours) - Math.min(...hours)).toBeLessThanOrEqual(2)
+  })
+
+  it('priority 4 (last resort): suggests moving existing event only when CP is time-constrained', async () => {
+    // CP can ONLY meet at 10:00 (from conversation). User has a low-weight event at 10:00.
+    // Optimizer should suggest moving the existing event rather than failing to schedule.
+    const { optimizeScheduleActions } = await import('./scheduling')
+
+    mockGetPendingScheduleActions.mockResolvedValue([{
+      id: 'action-1',
+      cp_id: 'cp-1',
+      priority_score: 150, // high priority
+      payload: { channel: 'email', cp_availability: 'Only available at 10:00 on Tuesday' },
+    }])
+
+    // Only free slot is 10:00 but it conflicts with existing low-weight event
+    mockFindFreeSlots.mockResolvedValue([
+      { start: new Date('2026-03-10T10:00:00'), end: new Date('2026-03-10T10:30:00') },
+    ])
+    mockFindConflicts.mockResolvedValue([{
+      id: 'existing-1',
+      weight: 3, // low weight — movable
+      start_time: '2026-03-10T10:00:00Z',
+      end_time: '2026-03-10T10:30:00Z',
+    }])
+    mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+
+    const result = await optimizeScheduleActions('user-1')
+
+    // Optimizer should still schedule (with a move suggestion), not fail
+    expect(result.optimized).toBe(1)
+    // Result should include a suggestion to move the conflicting event
+    expect(result.moveSuggestions).toBeDefined()
+    expect(result.moveSuggestions!.length).toBe(1)
+    expect(result.moveSuggestions![0].existingEventId).toBe('existing-1')
+  })
+
+  it('conflict resolution prefers declining over moving existing events', async () => {
+    // When there's no CP time constraint, optimizer should decline rather than
+    // suggest moving an existing event — even if the existing has low weight
+    const { optimizeScheduleActions } = await import('./scheduling')
+
+    mockGetPendingScheduleActions.mockResolvedValue([{
+      id: 'action-1',
+      cp_id: 'cp-1',
+      priority_score: 50, // moderate priority
+      payload: { channel: 'email' }, // no CP availability constraint
+    }])
+
+    // All slots conflict
+    mockFindFreeSlots.mockResolvedValue([
+      { start: new Date('2026-03-10T10:00:00'), end: new Date('2026-03-10T10:30:00') },
+    ])
+    mockFindConflicts.mockResolvedValue([{
+      id: 'existing-1',
+      weight: 3,
+      start_time: '2026-03-10T10:00:00Z',
+      end_time: '2026-03-10T10:30:00Z',
+    }])
+
+    const result = await optimizeScheduleActions('user-1')
+
+    // Should NOT suggest moving — no CP constraint forces this time
+    // Should report as unscheduled, not force a move
+    expect(result.moveSuggestions ?? []).toHaveLength(0)
+    expect(result.unscheduled).toBe(1)
   })
 })
 
