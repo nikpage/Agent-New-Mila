@@ -307,21 +307,45 @@ Safe defaults: `urgency`, `sellerMultiplier` fallback to 1 if 0/null (prevents s
 - `whatsapp`: Minimal — system messages and forwarded labels only
 - `cleanEmailText()` is a backward-compatible alias for `cleanMessageText(text, 'email')`
 
-## Scheduling & Conflict Resolution
+## Scheduling & Calendar Management
 
 **Implementation:** `src/services/scheduling.ts` (702 lines — largest service)
 
+### Core Flow — Batch Schedule Optimization
+When the brief is being prepared, Mila pre-optimizes ALL unsent SCHEDULE actions as a batch:
+1. Collects all pending, unsent SCHEDULE actions
+2. Considers the user's existing (confirmed) calendar, travel time between locations, and any stated CP availability
+3. Picks THE optimal slot for each meeting — one slot per meeting, not multiple options
+4. Creates a tentative **hold event** for each chosen slot (prevents double-booking while user reviews)
+5. Presents a single **batch schedule card** in the brief, grouped by day
+6. Each sub-card shows: suggested time, CP name, location, deal value, and Mila's reasoning for that slot
+7. Standard CTAs per sub-card (UDĚLAT / UPRAVIT / UDĚLÁM SÁM) plus a batch "UDĚLAT VŠE" button
+8. On approval: hold becomes confirmed event, invite sent to CP
+9. On rejection or edit via UPRAVIT: hold is cleared, new hold created if user picks a different time
+
+**Scope rules:**
+- **Only touches penciled-in (unsent) meetings.** Once an invite is sent to CP, that slot is locked — treated as a confirmed event
+- Sent invites and confirmed events are fixed walls the optimizer plans around — never moved
+- For a single SCHEDULE action, the same flow applies — Mila picks the optimal slot and presents it
+
 ### Slot Finding
-- `findFreeSlots()` scans working hours for gaps between ALL calendar events
+- `findFreeSlots()` scans working hours for gaps between ALL calendar events (including holds)
 - Respects `working_hours_start/end`, `working_days` from user settings
 - Applies `meeting_buffer_minutes` (default 15m) between meetings
 
 ### Travel Time
 - `calculateTravelForSlot()` uses Google Maps Distance Matrix API (`src/lib/google/maps.ts`)
 - Origin: previous event location → office_location → home_location (fallback chain)
-- Buffer = `max(travelTime + 10min, 15min minimum)`
+- **>500m**: always driving via Google Maps. Factors in road work (persistent); ignores short-term incidents (accidents clear before the meeting, which is usually days away)
+- **≤500m**: 15min flat buffer (walking distance)
+- Buffer formula for >500m: `max(travelMinutes + 10, 15min minimum)`
 - Creates travel buffer events linked via `parent_event_id`
-- Travel mode from user settings: driving/walking/transit/bicycling
+
+### Hold Events
+- One hold per meeting — the optimal slot Mila chose
+- Prevents double-booking between brief generation and user action
+- **Short-lived**: approved → becomes confirmed event. Rejected/edited → cleared
+- If user doesn't act by next brief, the hold remains and the brief nudges again
 
 ### Priority-Based Conflict Resolution
 When a new meeting conflicts with existing events:
@@ -329,10 +353,15 @@ When a new meeting conflicts with existing events:
 - **New score > existing score** → `recommendation: 'move_existing'`
 - **New score ≤ existing score** → `recommendation: 'suggest_alternate'`
 - **User-created events default weight = 100** (treated as immovable)
+- Conflict resolution handles rare conflicts with confirmed events — separate from batch optimization
+
+### Calendar Invitations
+- When Mila detects an invitation (from email/WhatsApp text or calendar event), she always creates a **SCHEDULE action** for user approval — human in the loop, no auto-accept
+- Mila checks user's calendar and suggests accept/reject/propose new time
 
 ### Personal Calendar Events
-- Personal events (matching keywords in `src/config/client.ts` → `calendar.personalEventKeywords`) **block time** but **do NOT generate action proposals**
-- Detection via `isPersonalEvent(title)` in `calendar-ingestion.ts`
+- Personal events (matching `isPersonalEvent(title, settings)`) **block time** but **do NOT generate action proposals**
+- Detection in `calendar-ingestion.ts`
 
 ## Draft Generation
 

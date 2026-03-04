@@ -167,21 +167,43 @@ Conversation summaries are rebuilt after N new messages. Each summary includes: 
 
 ## Calendar & Scheduling
 
-When Mila proposes a SCHEDULE action:
+### Core Flow — Batch Schedule Optimization
+When the brief is being prepared, Mila pre-optimizes ALL unsent SCHEDULE actions as a batch:
+1. Collects all pending, unsent SCHEDULE actions
+2. Considers existing (confirmed) calendar, travel between locations, stated CP availability
+3. Picks THE optimal slot for each meeting — one slot per meeting, not multiple options
+4. Creates a tentative hold event for each chosen slot (prevents double-booking while user reviews)
+5. Presents a single batch schedule card in the brief, grouped by day
+6. Each sub-card: suggested time, CP name, location, deal value, reasoning
+7. CTAs per sub-card (UDĚLAT / UPRAVIT / UDĚLÁM SÁM) plus batch "UDĚLAT VŠE"
+8. Approved → hold becomes confirmed, invite sent to CP. Rejected/edited → hold cleared
+9. Only touches penciled-in (unsent) meetings. Sent invites and confirmed events are fixed walls — never moved
 
-1. `findFreeSlots()` scans working hours for gaps between all calendar events
-2. Respects user settings: working hours, working days, meeting buffer
-3. `calculateTravelForSlot()` uses Google Maps Distance Matrix API for travel time between locations
-4. Creates travel buffer events linked via `parent_event_id`
-5. Blocks proposed slots in user's calendar as tentative holds
-6. On approval, Mila sends email to counterparty offering the time slots
+### Slot Finding
+- `findFreeSlots()` scans working hours for gaps between all calendar events (including holds)
+- Respects user settings: working hours, working days, meeting buffer
+
+### Travel Time
+- >500m = always driving via Google Maps (road work factored in, short-term incidents ignored)
+- ≤500m = 15min flat buffer (walking distance)
+- Buffer for >500m: `max(travelMinutes + 10, 15min minimum)`. Creates travel buffer events linked via `parent_event_id`
+
+### Hold Events
+- One hold per meeting — the optimal slot Mila chose
+- Prevents double-booking between brief generation and user action
+- Short-lived: approved → confirmed. Rejected/edited → cleared. Not acted on → remains, next brief nudges
+
+### Calendar Invitations
+- Detected invitations always create a SCHEDULE action — human in the loop, no auto-accept
+- Mila checks user's calendar and suggests accept/reject/propose new time
 
 ### Conflict Resolution
-
-When a new meeting conflicts with existing events:
-- Compares event scores (new vs existing)
-- Higher score wins: either move existing event or suggest alternate time
+- Compares event scores (new vs existing). Higher score wins
 - User-created events default weight = 100 (treated as immovable)
+- Handles rare conflicts with confirmed events — separate from batch optimization
+
+### Personal Calendar Events
+- Personal events (matching `isPersonalEvent(title, settings)`) block time but do NOT generate action proposals
 
 ## Priority Scoring
 

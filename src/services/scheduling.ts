@@ -165,16 +165,21 @@ async function calculateTravelForSlot(
 
   if (!origin || !meetingLocation) return null
 
-  const travelTime = await getTravelTime(
-    origin,
-    meetingLocation,
-    settings.travel_mode
-  )
+  // Always driving — no configurable travel mode
+  const travelTime = await getTravelTime(origin, meetingLocation, 'driving')
 
   if (!travelTime) return null
 
-  const travelMinutes = Math.ceil(travelTime.durationSeconds / 60)
-  const travelBufferMinutes = Math.max(travelMinutes + 10, MIN_TRAVEL_BUFFER_MINUTES) // 10 min extra + minimum 15
+  // ≤500m = walking distance, use flat 15min buffer (no travel calc needed)
+  // >500m = driving, use Maps travel time with formula
+  let travelBufferMinutes: number
+  if (travelTime.distanceMeters <= 500) {
+    travelBufferMinutes = MIN_TRAVEL_BUFFER_MINUTES
+  } else {
+    const travelMinutes = Math.ceil(travelTime.durationSeconds / 60)
+    travelBufferMinutes = Math.max(travelMinutes + 10, MIN_TRAVEL_BUFFER_MINUTES)
+  }
+
   // Total = standard meeting buffer + travel buffer
   const bufferMinutes = settings.meeting_buffer_minutes + travelBufferMinutes
 
@@ -365,12 +370,19 @@ async function bookTravelBuffer(
 
   if (!origin || !meetingLocation) return null
 
-  const travelTime = await getTravelTime(origin, meetingLocation, settings.travel_mode)
+  // Always driving — no configurable travel mode
+  const travelTime = await getTravelTime(origin, meetingLocation, 'driving')
   if (!travelTime) return null
 
-  const travelMinutes = Math.ceil(travelTime.durationSeconds / 60)
-  // Travel buffer = standard meeting buffer + actual travel time (+ 10 min padding, min 15 min travel)
-  const travelBufferMinutes = Math.max(travelMinutes + 10, MIN_TRAVEL_BUFFER_MINUTES)
+  // ≤500m = walking distance, flat 15min buffer
+  // >500m = driving, use Maps travel time with formula
+  let travelBufferMinutes: number
+  if (travelTime.distanceMeters <= 500) {
+    travelBufferMinutes = MIN_TRAVEL_BUFFER_MINUTES
+  } else {
+    const travelMinutes = Math.ceil(travelTime.durationSeconds / 60)
+    travelBufferMinutes = Math.max(travelMinutes + 10, MIN_TRAVEL_BUFFER_MINUTES)
+  }
   const totalBufferMinutes = settings.meeting_buffer_minutes + travelBufferMinutes
 
   const bufferStart = new Date(eventStart.getTime() - totalBufferMinutes * 60 * 1000)
