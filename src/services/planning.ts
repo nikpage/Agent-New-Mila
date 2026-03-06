@@ -3,6 +3,7 @@ import type { ProposedAction } from '@/lib/ai/gemini'
 import {
   createAction,
   calculatePriorityScore,
+  hasPendingAction,
 } from '@/lib/db/actions'
 import { getConversationById, getRecentMessages, updateConversation } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
@@ -59,6 +60,9 @@ export async function generateActionProposal(
     .pop()
 
   if (!latestWithCP?.cp_id) return []
+
+  // Skip if conversation already has pending actions (e.g. from calendar ingestion)
+  if (await hasPendingAction(conversation.id)) return []
 
   const cp = await getCPById(latestWithCP.cp_id)
   if (!cp || cp.is_blacklisted) return []
