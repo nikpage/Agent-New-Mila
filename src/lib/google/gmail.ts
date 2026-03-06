@@ -426,6 +426,126 @@ export async function fetchEmailsBatch(
   }
 }
 
+export interface SendCalendarInviteParams {
+  to: string
+  organizerEmail: string
+  organizerName?: string
+  summary: string
+  description: string
+  location?: string
+  startTime: Date
+  endTime: Date
+  /** Google Calendar event ID — used to build iCal UID for response sync */
+  gcalEventId: string
+}
+
+/**
+ * Send a calendar invite email with Importance: high.
+ * Builds an iCalendar REQUEST and sends it inline via Gmail so the recipient
+ * sees a calendar invite that is marked Important in their inbox.
+ */
+export async function sendCalendarInviteEmail(
+  userId: string,
+  params: SendCalendarInviteParams
+): Promise<string> {
+  const gmail = await getGmailClient(userId)
+  const userEmail = params.organizerEmail
+
+  // Format dates to iCalendar YYYYMMDDTHHMMSSZ format
+  const fmtDate = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+  const now = new Date()
+  const uid = `${params.gcalEventId}@google.com`
+
+  // Build iCalendar content
+  const icsLines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//Mila//Agent//EN',
+    'METHOD:REQUEST',
+    'BEGIN:VEVENT',
+    `UID:${uid}`,
+    `DTSTAMP:${fmtDate(now)}`,
+    `DTSTART:${fmtDate(params.startTime)}`,
+    `DTEND:${fmtDate(params.endTime)}`,
+    `SUMMARY:${escapeICalText(params.summary)}`,
+    `DESCRIPTION:${escapeICalText(params.description)}`,
+    ...(params.location ? [`LOCATION:${escapeICalText(params.location)}`] : []),
+    `ORGANIZER;CN=${escapeICalText(params.organizerName || userEmail)}:mailto:${userEmail}`,
+    `ATTENDEE;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:${params.to}`,
+    'PRIORITY:1',
+    'STATUS:CONFIRMED',
+    'SEQUENCE:0',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ]
+  const icsContent = icsLines.join('\r\n')
+
+  // Build multipart/mixed MIME: text/plain (agenda) + text/calendar (invite)
+  const boundary = `----=_MilaInvite_${Date.now()}`
+  const calBoundary = `----=_MilaAlt_${Date.now()}`
+
+  const createBase64Part = (contentType: string, content: string) => {
+    const encoded = Buffer.from(content).toString('base64').match(/.{1,76}/g)?.join('\r\n') || ''
+    return [
+      `Content-Type: ${contentType}; charset="UTF-8"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      encoded
+    ].join('\r\n')
+  }
+
+  const messageParts: string[] = []
+  messageParts.push(`From: ${params.organizerName ? `${encodeHeader(params.organizerName)} <${userEmail}>` : userEmail}`)
+  messageParts.push(`To: ${params.to}`)
+  messageParts.push(`Subject: ${encodeHeader(params.summary)}`)
+  messageParts.push('MIME-Version: 1.0')
+  messageParts.push('Importance: high')
+  messageParts.push('X-Priority: 1')
+  messageParts.push(`Content-Type: multipart/alternative; boundary="${calBoundary}"`)
+  messageParts.push('')
+
+  // Part 1: plain text body (agenda)
+  messageParts.push(`--${calBoundary}`)
+  messageParts.push(createBase64Part('text/plain', params.description))
+
+  // Part 2: iCalendar invite (shows as calendar invite in mail clients)
+  messageParts.push(`--${calBoundary}`)
+  const icsEncoded = Buffer.from(icsContent).toString('base64').match(/.{1,76}/g)?.join('\r\n') || ''
+  messageParts.push('Content-Type: text/calendar; charset="UTF-8"; method=REQUEST')
+  messageParts.push('Content-Transfer-Encoding: base64')
+  messageParts.push('')
+  messageParts.push(icsEncoded)
+
+  messageParts.push(`--${calBoundary}--`)
+
+  const rawMessage = messageParts.join('\r\n')
+  const encodedMessage = Buffer.from(rawMessage)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '')
+
+  const response = await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: {
+      raw: encodedMessage,
+    },
+  })
+
+  return response.data.id || ''
+}
+
+/**
+ * Escape text for iCalendar format (RFC 5545)
+ */
+function escapeICalText(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,')
+    .replace(/\n/g, '\\n')
+}
+
 /**
  * Gmail category labels that indicate non-primary mail.
  * Messages with these labels are skipped during bulk ingestion.

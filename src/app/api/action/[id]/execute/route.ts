@@ -3,7 +3,7 @@ import { getActionById, completeAction, updateActionDraft } from '@/lib/db/actio
 import { getConversationById } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
 import { validateActionToken } from '@/lib/auth/tokens'
-import { sendEmail } from '@/lib/google/gmail'
+import { sendEmail, sendCalendarInviteEmail, getUserEmail } from '@/lib/google/gmail'
 import { sendWhatsAppMessage } from '@/lib/whatsapp/sender'
 import { generateFinalDraft } from '@/lib/ai/gemini'
 import { acceptInvitation, declineInvitation, confirmSlot } from '@/services/scheduling'
@@ -176,16 +176,31 @@ export async function POST(
           finalTitle = loc
         }
 
-        // 1. Confirm GCal Event (sends invite to CP)
+        const conversation = await getConversationById(action.conversation_id)
+        const startDate = holdStart ? new Date(holdStart) : new Date()
+        const endDate = holdEnd ? new Date(holdEnd) : new Date()
+
+        // Generate agenda text — goes into calendar invite description (not a separate email)
+        const draft = await generateFinalDraft(
+          conversation?.summary_json,
+          `Potvrzuji termín schůzky: ${formatDate(startDate)}, ${formatTime(startDate)} - ${formatTime(endDate)}.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
+          settings,
+          userNotes || undefined,
+          undefined,
+          cp.name || cp.primary_identifier
+        )
+        const agendaText = draft.body
+
+        // 1. Confirm GCal Event on user's calendar (sendUpdates: 'none' — we send invite ourselves via Gmail)
         if (gcalEventId) {
           await confirmCalendarEvent(
             action.user_id,
             gcalEventId,
-            [cp.primary_identifier],
+            undefined, // Don't add attendees here — we send the invite via Gmail
             {
               summary: finalTitle,
               location: loc,
-              description: `Schůzka s ${cp.name || cp.primary_identifier}`
+              description: agendaText,
             }
           )
         }
@@ -194,30 +209,28 @@ export async function POST(
         await confirmSlot(
           action.user_id,
           holdEventId,
-          undefined, // cpEmail — already sent invite via GCal
+          undefined,
           loc,
           finalTitle
         )
 
-        // 3. Generate and send confirmation email
-        const conversation = await getConversationById(action.conversation_id)
-        const startDate = holdStart ? new Date(holdStart) : new Date()
-        const endDate = holdEnd ? new Date(holdEnd) : new Date()
+        // 3. Send calendar invite email with Importance: high (replaces separate email)
+        if (gcalEventId) {
+          const organizerEmail = await getUserEmail(action.user_id)
+          const organizerName = settings.client_name || undefined
 
-        const draft = await generateFinalDraft(
-          conversation?.summary_json,
-          `Potvrzuji termín schůzky: ${formatDate(startDate)}, ${formatTime(startDate)} - ${formatTime(endDate)}. Pozvánka v kalendáři byla odeslána.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
-          settings,
-          userNotes || undefined,
-          undefined,
-          cp.name || cp.primary_identifier
-        )
-
-        await sendEmail(action.user_id, {
-          to: cp.primary_identifier,
-          subject: draft.subject || `Potvrzení schůzky`,
-          body: draft.body,
-        })
+          await sendCalendarInviteEmail(action.user_id, {
+            to: cp.primary_identifier,
+            organizerEmail,
+            organizerName,
+            summary: finalTitle,
+            description: agendaText,
+            location: loc,
+            startTime: startDate,
+            endTime: endDate,
+            gcalEventId,
+          })
+        }
 
         await completeAction(actionId)
         return NextResponse.json({
@@ -232,14 +245,33 @@ export async function POST(
         ?.[0]?.value
 
       if (userTimeInput) {
-        // Create a calendar event with the CP
+        const manualStart = new Date(userTimeInput)
+        const manualEnd = new Date(manualStart.getTime() + settings.default_meeting_duration * 60 * 1000)
+        const manualTitle = `Schůzka s ${cp.name || cp.primary_identifier}`
+        const manualDescription = action.intent_cs || action.rationale || ''
+
+        // Create calendar event on user's calendar (no attendee notification — we send invite ourselves)
         const gcalEvent = await createCalendarEvent(action.user_id, {
-          summary: `Schůzka s ${cp.name || cp.primary_identifier}`,
-          description: action.intent_cs || action.rationale || undefined,
-          startTime: new Date(userTimeInput),
-          endTime: new Date(new Date(userTimeInput).getTime() + settings.default_meeting_duration * 60 * 1000),
-          attendees: [cp.primary_identifier],
-          sendUpdates: 'all',
+          summary: manualTitle,
+          description: manualDescription,
+          startTime: manualStart,
+          endTime: manualEnd,
+          sendUpdates: 'none',
+        })
+
+        // Send calendar invite via Gmail with Importance: high
+        const organizerEmail = await getUserEmail(action.user_id)
+        const organizerName = settings.client_name || undefined
+
+        await sendCalendarInviteEmail(action.user_id, {
+          to: cp.primary_identifier,
+          organizerEmail,
+          organizerName,
+          summary: manualTitle,
+          description: manualDescription,
+          startTime: manualStart,
+          endTime: manualEnd,
+          gcalEventId: gcalEvent.id,
         })
 
         await completeAction(actionId)
