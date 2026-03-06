@@ -7,7 +7,7 @@ import { sendEmail } from '@/lib/google/gmail'
 import { sendWhatsAppMessage } from '@/lib/whatsapp/sender'
 import { generateFinalDraft } from '@/lib/ai/gemini'
 import { acceptInvitation, declineInvitation, confirmSlot } from '@/services/scheduling'
-import { createCalendarEvent, confirmCalendarEvent } from '@/lib/google/calendar'
+import { createCalendarEvent } from '@/lib/google/calendar'
 import { getUserSettings } from '@/lib/db/users'
 
 export async function POST(
@@ -191,27 +191,14 @@ export async function POST(
         )
         const agendaText = draft.body
 
-        // 1. Confirm GCal Event — add CP as attendee, Google Calendar sends the invite natively
-        if (gcalEventId) {
-          await confirmCalendarEvent(
-            action.user_id,
-            gcalEventId,
-            [cp.primary_identifier],
-            {
-              summary: finalTitle,
-              location: loc,
-              description: agendaText,
-            }
-          )
-        }
-
-        // 2. Confirm local hold event in DB
+        // Confirm hold event in DB + GCal (adds CP as attendee, Google sends invite)
         await confirmSlot(
           action.user_id,
           holdEventId,
-          undefined,
+          cp.primary_identifier,
           loc,
-          finalTitle
+          finalTitle,
+          agendaText
         )
 
         await completeAction(actionId)
