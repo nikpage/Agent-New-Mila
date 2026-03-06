@@ -162,13 +162,7 @@ Be concise. Focus on actionable insights.`
  * Determine what action should be proposed (Intent Only - NO DRAFTS)
  * Stage: planning (gemini-2.5-flash → claude-sonnet)
  */
-export async function proposeAction(
-  conversationSummary: ConversationSummary,
-  recentMessages: { direction: string; text: string }[],
-  cpName: string | null,
-  settings: UserSettings,
-  channel: 'email' | 'whatsapp' = 'email'
-): Promise<{
+export type ProposedAction = {
   actionType: ActionType
   rationale_cs: string
   intent_cs: string
@@ -179,7 +173,15 @@ export async function proposeAction(
   dealType: DealType
   suggestedLocation?: string | null
   suggestedTime?: string | null
-}> {
+}
+
+export async function proposeAction(
+  conversationSummary: ConversationSummary,
+  recentMessages: { direction: string; text: string }[],
+  cpName: string | null,
+  settings: UserSettings,
+  channel: 'email' | 'whatsapp' = 'email'
+): Promise<ProposedAction[]> {
   console.log(`[AI:proposeAction] Running stage 'planning' for ${cpName || 'unknown CP'}`)
   const recentText = recentMessages
     .slice(-3)
@@ -229,6 +231,13 @@ CRITICAL - ACTION TYPE RULES:
 7. WAIT = no action needed now, waiting for counterparty response. Internal state — not shown to user.
 8. ARCHIVE = conversation is done, no further action. Internal state — not shown to user.
 
+CRITICAL - ONE ACTION PER TYPE, MULTIPLE ACTIONS ALLOWED:
+- If the conversation needs BOTH a reply AND scheduling, return TWO separate actions in the "actions" array.
+- NEVER combine reply content and scheduling into a single action. Each action must be pure.
+- A REPLY action handles answering questions, providing information, following up.
+- A SCHEDULE action handles meeting logistics only — finding a time, confirming a slot.
+- Example: CP asks about property details AND wants to schedule a viewing → return BOTH a REPLY (answer questions) and a SCHEDULE (set up viewing).
+
 CRITICAL - VOICE AND PERSPECTIVE:
 - You are Mila, the user's assistant. Address the user directly as "vy" (you).
 - NEVER refer to the user in 3rd person. NEVER write "uživatel" (the user). Write "vy" (you).
@@ -251,7 +260,9 @@ BAD examples (NEVER write like this):
 - "Navrhuji se zeptat na více podrobností" (vague, no concrete action)
 - "Navrhuji odpovědět na dotazy" (no specifics)
 
-Respond with ONLY valid JSON:
+Respond with ONLY valid JSON. If the conversation needs multiple actions (e.g. reply + schedule), return an array. Otherwise return a single object.
+
+Single action format:
 {
   "actionType": "REPLY" | "SCHEDULE" | "TODO" | "WAIT" | "ARCHIVE",
   "rationale_cs": "One sentence in CZECH explaining WHY this action is needed now.",
@@ -265,17 +276,32 @@ Respond with ONLY valid JSON:
   "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). null if no specific time mentioned."
 }
 
+Multiple actions format (when conversation needs BOTH reply AND scheduling):
+{ "actions": [ { ...action1 }, { ...action2 } ] }
+
 Rules:
 - DO NOT write the email draft.
-- For SCHEDULE: intent_cs should say Mila will check calendar and prepare time slots.
+- For SCHEDULE: intent_cs should say Mila will check calendar and prepare time slots. missingInfo should be empty (scheduling handles it).
+- For REPLY: intent_cs should describe the email content Mila will prepare. missingInfo should contain questions CP asked.
+- NEVER put scheduling content into a REPLY action or reply content into a SCHEDULE action.
 - missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in Czech. Do NOT shorten to keywords. Examples: "Je tam sklep nebo komora?" not "Sklep/Komora".`
 
   const text = await runAITask('planning', prompt)
 
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  const jsonMatch = text.match(/[\[{][\s\S]*[\]}]/)
   if (!jsonMatch) throw new Error('Failed to parse action proposal')
 
-  return JSON.parse(jsonMatch[0])
+  const parsed = JSON.parse(jsonMatch[0])
+
+  // Handle both formats: single object or { actions: [...] } or bare array
+  if (Array.isArray(parsed)) {
+    return parsed
+  }
+  if (parsed.actions && Array.isArray(parsed.actions)) {
+    return parsed.actions
+  }
+  // Single action object
+  return [parsed]
 }
 
 /**

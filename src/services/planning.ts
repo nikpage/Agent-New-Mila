@@ -1,4 +1,5 @@
 import { proposeAction, generateFinalDraft } from '@/lib/ai/gemini'
+import type { ProposedAction } from '@/lib/ai/gemini'
 import {
   createAction,
   calculatePriorityScore,
@@ -45,7 +46,7 @@ export function selectOfferMultiplier(
 
 export async function generateActionProposal(
   conversation: ConversationThread
-): Promise<ActionProposal | null> {
+): Promise<ActionProposal[]> {
   const summary = conversation.summary_json as unknown as ConversationSummary
 
   const recentMessages = await getRecentMessages(conversation.id, 10)
@@ -57,10 +58,10 @@ export async function generateActionProposal(
     .filter(m => m.cp_id)
     .pop()
 
-  if (!latestWithCP?.cp_id) return null
+  if (!latestWithCP?.cp_id) return []
 
   const cp = await getCPById(latestWithCP.cp_id)
-  if (!cp || cp.is_blacklisted) return null
+  if (!cp || cp.is_blacklisted) return []
 
   // Detect channel from most recent message
   const lastMessage = recentMessages[recentMessages.length - 1]
@@ -91,111 +92,10 @@ export async function generateActionProposal(
     // Get user settings for AI context
     const settings = await getUserSettings(conversation.user_id)
 
-    // Get AI recommendation (Intent Only)
-    const proposal = await proposeAction(summary, formattedMessages, cp.name, settings, channel)
+    // Get AI recommendation(s) — may return multiple actions (e.g. REPLY + SCHEDULE)
+    const proposals = await proposeAction(summary, formattedMessages, cp.name, settings, channel)
 
-    // Validate and write deal_type onto conversation thread if AI classified it
-    const dealType = validateDealType(proposal.dealType)
-    if (dealType) {
-      await updateConversation(conversation.id, { deal_type: dealType })
-    }
-
-    // Proactive Calendar: If SCHEDULE action, use full scheduling service
-    // Mila acts as a human assistant - finds best slots, blocks them IN USER'S CALENDAR ONLY,
-    // prepares everything for user to approve. User approves → Mila sends EMAIL to CP with options.
-    // Calendar blocks are USER-ONLY. CP gets options via email, never calendar holds.
-    let schedulingPayload: Record<string, unknown> = {}
-    if (proposal.actionType === 'SCHEDULE') {
-      try {
-        const cpName = cp.name || cp.primary_identifier
-
-        // Extract meeting location from: AI suggestion, CP's known locations, or null
-        let meetingLocation: string | undefined
-        if (proposal.suggestedLocation) {
-          meetingLocation = proposal.suggestedLocation
-        } else if (cp.locations) {
-          const locations = cp.locations as unknown
-          if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
-            meetingLocation = locations[0]
-          } else if (typeof locations === 'string') {
-            meetingLocation = locations
-          }
-        }
-
-        // Extract preferred date if CP or user proposed a specific time
-        let preferredDate: Date | undefined
-        if (proposal.suggestedTime) {
-          try {
-            preferredDate = new Date(proposal.suggestedTime)
-            if (isNaN(preferredDate.getTime())) {
-              preferredDate = undefined
-            }
-          } catch {
-            preferredDate = undefined
-          }
-        }
-
-        // Single call: find best slots, check conflicts, block them in user's calendar
-        const schedulingResult = await proposeMeeting(
-          conversation.user_id,
-          cp.id,
-          settings.default_meeting_duration,
-          meetingLocation,
-          preferredDate
-        )
-
-        if (schedulingResult.success && schedulingResult.holdEvent) {
-          // Format the single optimal slot for display to USER
-          const hold = schedulingResult.holdEvent
-          const start = new Date(hold.start_time)
-          const end = new Date(hold.end_time)
-          const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
-          const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
-          const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
-          const slotText = `${dateStr}, ${startStr} - ${endStr}`
-
-          // Proactive intent: tell user what Mila DID (blocked one optimal slot)
-          proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${meetingLocation ? `\nMísto: ${meetingLocation}` : ''}\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
-
-          proposal.missingInfo = []
-
-          if (schedulingResult.conflicts && schedulingResult.conflicts.length > 0) {
-            const conflictNote = schedulingResult.conflicts.map(c =>
-              `${c.existingEvent.title}: ${c.recommendation === 'move_existing' ? 'navrhuji přesunout' : 'navrhuji alternativní čas'}`
-            ).join('; ')
-            proposal.intent_cs += `\n\nKonflikty: ${conflictNote}`
-          }
-
-          schedulingPayload = {
-            hold_event_id: schedulingResult.holdEvent.id,
-            gcal_event_id: schedulingResult.gcalEventId,
-            start: schedulingResult.holdEvent.start_time,
-            end: schedulingResult.holdEvent.end_time,
-            location: meetingLocation || null,
-            conflicts: schedulingResult.conflicts?.map(c => ({
-              event_title: c.existingEvent.title,
-              recommendation: c.recommendation,
-            })),
-          }
-        } else {
-          // Scheduling failed or no slots found - fall back to manual
-          proposal.missingInfo.push({
-            label: schedulingResult.error || 'V nejbližších 14 dnech nejsou volné termíny v pracovní době. Napište preferovaný čas.',
-            value: null,
-          })
-        }
-      } catch (calendarError) {
-        console.error('Failed to run scheduling service:', calendarError)
-        // Continue without calendar - user can enter time manually
-        proposal.missingInfo.push({
-          label: 'Kdy byste chtěl/a se sejít? (Napište preferovaný čas)',
-          value: null,
-        })
-      }
-    }
-
-    // Measure days since last INBOUND message from the counterparty,
-    // not conversation.last_updated (which resets on every summary rebuild).
+    // Shared context: days ignored, offer multiplier, deal type (same for all actions in this conversation)
     const latestInbound = await getLatestMessageFromCP(conversation.user_id, cp.id)
     const lastContactDate = latestInbound?.timestamp
       ? new Date(latestInbound.timestamp)
@@ -205,75 +105,162 @@ export async function generateActionProposal(
     const daysIgnored = Math.floor(
       (Date.now() - lastContactDate.getTime()) / (1000 * 60 * 60 * 24)
     )
-
-    // Select offer multiplier based on counterparty role (seller earns more commission)
     const offerMultiplier = selectOfferMultiplier(
       cp.role, settings.offer_multiplier_seller, settings.offer_multiplier_buyer
     )
+    const isHighValue = containsHighValueSignals(
+      formattedMessages.map(m => m.text).join(' '),
+      settings
+    )
 
-    const weight = proposal.weight || 0
+    // Write deal_type from first proposal that has one
+    const firstDealType = proposals.map(p => validateDealType(p.dealType)).find(d => d !== null) ?? null
+    if (firstDealType) {
+      await updateConversation(conversation.id, { deal_type: firstDealType })
+    }
 
-    const priorityScore = calculatePriorityScore({
-      dollarValue: proposal.dollarValue,
-      urgency: proposal.urgency,
-      daysIgnored,
-      sellerMultiplier: offerMultiplier,
-      kcLowValue: settings.kc_low_value,
-      kcHighValue: settings.kc_high_value,
-      weight,
-    })
+    const createdActions: ActionProposal[] = []
 
-    // Create the action proposal with CLEAN columns
-    const action = await createAction({
-      id: uuidv4(),
-      user_id: conversation.user_id,
-      conversation_id: conversation.id,
-      cp_id: cp.id,
-      action_type: proposal.actionType,
+    for (const proposal of proposals) {
+      const dealType = validateDealType(proposal.dealType) ?? firstDealType
 
-      // New Columns
-      intent_cs: proposal.intent_cs,
-      rationale_cs: proposal.rationale_cs,
-      missing_info: proposal.missingInfo, // Dynamic form definition
+      // Proactive Calendar: If SCHEDULE action, use full scheduling service
+      let schedulingPayload: Record<string, unknown> = {}
+      if (proposal.actionType === 'SCHEDULE') {
+        try {
+          const cpName = cp.name || cp.primary_identifier
 
-      // Legacy/System columns
-      rationale: proposal.rationale_cs, // Keep for backward compat if needed, or use English if you prefer logs in EN
-      priority_score: priorityScore,
-      dollar_value: proposal.dollarValue,
-      offer_multiplier: offerMultiplier,
-      urgency: proposal.urgency,
-      weight,
+          let meetingLocation: string | undefined
+          if (proposal.suggestedLocation) {
+            meetingLocation = proposal.suggestedLocation
+          } else if (cp.locations) {
+            const locations = cp.locations as unknown
+            if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
+              meetingLocation = locations[0]
+            } else if (typeof locations === 'string') {
+              meetingLocation = locations
+            }
+          }
 
-      // NO DRAFTS
-      draft_subject: null,
-      draft_body_text: null,
+          let preferredDate: Date | undefined
+          if (proposal.suggestedTime) {
+            try {
+              preferredDate = new Date(proposal.suggestedTime)
+              if (isNaN(preferredDate.getTime())) {
+                preferredDate = undefined
+              }
+            } catch {
+              preferredDate = undefined
+            }
+          }
 
-      payload: {
+          const schedulingResult = await proposeMeeting(
+            conversation.user_id,
+            cp.id,
+            settings.default_meeting_duration,
+            meetingLocation,
+            preferredDate
+          )
+
+          if (schedulingResult.success && schedulingResult.holdEvent) {
+            const hold = schedulingResult.holdEvent
+            const start = new Date(hold.start_time)
+            const end = new Date(hold.end_time)
+            const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
+            const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+            const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+            const slotText = `${dateStr}, ${startStr} - ${endStr}`
+
+            proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${meetingLocation ? `\nMísto: ${meetingLocation}` : ''}\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
+            proposal.missingInfo = []
+
+            if (schedulingResult.conflicts && schedulingResult.conflicts.length > 0) {
+              const conflictNote = schedulingResult.conflicts.map(c =>
+                `${c.existingEvent.title}: ${c.recommendation === 'move_existing' ? 'navrhuji přesunout' : 'navrhuji alternativní čas'}`
+              ).join('; ')
+              proposal.intent_cs += `\n\nKonflikty: ${conflictNote}`
+            }
+
+            schedulingPayload = {
+              hold_event_id: schedulingResult.holdEvent.id,
+              gcal_event_id: schedulingResult.gcalEventId,
+              start: schedulingResult.holdEvent.start_time,
+              end: schedulingResult.holdEvent.end_time,
+              location: meetingLocation || null,
+              conflicts: schedulingResult.conflicts?.map(c => ({
+                event_title: c.existingEvent.title,
+                recommendation: c.recommendation,
+              })),
+            }
+          } else {
+            proposal.missingInfo.push({
+              label: schedulingResult.error || 'V nejbližších 14 dnech nejsou volné termíny v pracovní době. Napište preferovaný čas.',
+              value: null,
+            })
+          }
+        } catch (calendarError) {
+          console.error('Failed to run scheduling service:', calendarError)
+          proposal.missingInfo.push({
+            label: 'Kdy byste chtěl/a se sejít? (Napište preferovaný čas)',
+            value: null,
+          })
+        }
+      }
+
+      const weight = proposal.weight || 0
+      const priorityScore = calculatePriorityScore({
+        dollarValue: proposal.dollarValue,
+        urgency: proposal.urgency,
+        daysIgnored,
+        sellerMultiplier: offerMultiplier,
+        kcLowValue: settings.kc_low_value,
+        kcHighValue: settings.kc_high_value,
+        weight,
+      })
+
+      const action = await createAction({
+        id: uuidv4(),
+        user_id: conversation.user_id,
+        conversation_id: conversation.id,
+        cp_id: cp.id,
+        action_type: proposal.actionType,
         intent_cs: proposal.intent_cs,
-        execution_plan: proposal.rationale_cs,
-        required_inputs: proposal.missingInfo,
-        channel,
-        action_metadata: {
-          action_type: proposal.actionType,
-          urgency: proposal.urgency,
-          dollar_value: proposal.dollarValue,
-          offer_multiplier: offerMultiplier,
-          weight,
-          deal_type: dealType,
-          is_high_value: containsHighValueSignals(
-            formattedMessages.map(m => m.text).join(' '),
-            settings
-          ),
+        rationale_cs: proposal.rationale_cs,
+        missing_info: proposal.missingInfo,
+        rationale: proposal.rationale_cs,
+        priority_score: priorityScore,
+        dollar_value: proposal.dollarValue,
+        offer_multiplier: offerMultiplier,
+        urgency: proposal.urgency,
+        weight,
+        draft_subject: null,
+        draft_body_text: null,
+        payload: {
+          intent_cs: proposal.intent_cs,
+          execution_plan: proposal.rationale_cs,
+          required_inputs: proposal.missingInfo,
+          channel,
+          action_metadata: {
+            action_type: proposal.actionType,
+            urgency: proposal.urgency,
+            dollar_value: proposal.dollarValue,
+            offer_multiplier: offerMultiplier,
+            weight,
+            deal_type: dealType,
+            is_high_value: isHighValue,
+          },
+          ...schedulingPayload,
         },
-        ...schedulingPayload,
-      },
-      queued_for_brief: true,
-    })
+        queued_for_brief: true,
+      })
 
-    return action
+      createdActions.push(action)
+    }
+
+    return createdActions
   } catch (error) {
     console.error('Failed to generate action proposal:', error)
-    return null
+    return []
   }
 }
 
@@ -302,7 +289,8 @@ export async function generateActionsForConversations(
 
     for (const result of results) {
       if (result.status === 'fulfilled' && result.value) {
-        actions.push(result.value)
+        // generateActionProposal now returns an array of actions
+        actions.push(...result.value)
       } else if (result.status === 'rejected') {
         console.error('[Planning] Parallel action generation failed:', result.reason)
       }

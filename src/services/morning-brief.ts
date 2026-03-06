@@ -71,7 +71,7 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       const token = generateActionToken(action.id, userId)
       const actionUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&view=details`
       const editUrl = `${APP_BASE_URL}/action/${action.id}/edit?token=${token}`
-      const executeUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute`
+      const executeUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute&type=${action.action_type}`
       const todoUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`
       const blacklistUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`
 
@@ -331,7 +331,7 @@ async function sendInstantNotificationForUser(
       const token = generateActionToken(action.id, userId)
       const actionUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&view=details`
       const editUrl = `${APP_BASE_URL}/action/${action.id}/edit?token=${token}`
-      const executeUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute`
+      const executeUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute&type=${action.action_type}`
       const todoUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`
       const blacklistUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`
 

@@ -85,6 +85,8 @@ function DraftReviewView({ actionId, token }: { actionId: string; token: string 
   const [error, setError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [success, setSuccess] = useState<SuccessState>({ show: false, message: '' })
+  // If action is not REPLY, redirect to DirectExecuteView (handles old URLs without &type=)
+  const [redirectToDirectExecute, setRedirectToDirectExecute] = useState(false)
 
   const [cpName, setCpName] = useState('')
   const [topic, setTopic] = useState('')
@@ -102,6 +104,14 @@ function DraftReviewView({ actionId, token }: { actionId: string; token: string 
           throw new Error(err.error || 'Failed to load action')
         }
         const actionData = await actionRes.json() as ActionPageData
+
+        // Non-REPLY actions should not show email draft form
+        if (actionData.action.action_type !== 'REPLY') {
+          setRedirectToDirectExecute(true)
+          setLoading(false)
+          return
+        }
+
         setCpName(actionData.cp.name || actionData.cp.primary_identifier)
         setTopic(actionData.conversation.topic || '')
 
@@ -175,6 +185,11 @@ function DraftReviewView({ actionId, token }: { actionId: string; token: string 
 
   if (loading) return <Spinner message="Připravuji koncept..." />
   if (error) return <ErrorDisplay message={error} />
+
+  // Non-REPLY action detected after loading — render DirectExecuteView instead of email form
+  if (redirectToDirectExecute) {
+    return <DirectExecuteView actionId={actionId} token={token} />
+  }
 
   return (
     <Card style={{ width: '100%', maxWidth: '672px', margin: '0 auto' }}>
@@ -276,6 +291,119 @@ function QuickActionView({ actionId, token, doAction }: { actionId: string; toke
   if (error) return <ErrorDisplay message={error} />
 
   return <Spinner message="Provádím akci..." />
+}
+
+// ─── Direct Execute View (for SCHEDULE/TODO ?do=execute) ────────────────────
+// Loads action, shows confirmation with intent, then executes directly (no email draft).
+
+function DirectExecuteView({ actionId, token }: { actionId: string; token: string }) {
+  const [loading, setLoading] = useState(true)
+  const [executing, setExecuting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<SuccessState>({ show: false, message: '' })
+  const [actionData, setActionData] = useState<ActionPageData | null>(null)
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const actionRes = await fetch(`/api/action/${actionId}?token=${token}`)
+        if (!actionRes.ok) {
+          const err = await actionRes.json()
+          throw new Error(err.error || 'Failed to load action')
+        }
+        const data = await actionRes.json() as ActionPageData
+        if (data.action.status !== 'pending' && data.action.status !== 'approved') {
+          throw new Error('Tato akce již byla provedena.')
+        }
+        setActionData(data)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load action')
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [actionId, token])
+
+  async function handleConfirm() {
+    setExecuting(true)
+    try {
+      const execRes = await fetch(`/api/action/${actionId}/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      })
+      if (!execRes.ok) {
+        const err = await execRes.json()
+        throw new Error(err.error || 'Failed to execute action')
+      }
+
+      const actionType = actionData?.action.action_type
+      if (actionType === 'SCHEDULE') {
+        setSuccess({
+          show: true,
+          message: 'Schůzka potvrzena!',
+          subMessage: `Pozvánka odeslána pro ${actionData?.cp.name || actionData?.cp.primary_identifier || 'kontakt'}.`,
+        })
+      } else {
+        setSuccess({
+          show: true,
+          message: 'Hotovo!',
+          subMessage: 'Úkol splněn.',
+        })
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to execute')
+      setExecuting(false)
+    }
+  }
+
+  if (success.show) {
+    return <SuccessOverlay message={success.message} subMessage={success.subMessage} />
+  }
+  if (loading) return <Spinner message="Načítání..." />
+  if (error) return <ErrorDisplay message={error} />
+  if (!actionData) return <ErrorDisplay message="Akce nenalezena" />
+
+  const { action, cp, conversation } = actionData
+  const intent = action.intent_cs || action.rationale_cs || action.rationale || ''
+  const cpName = cp.name || cp.primary_identifier
+  const typeLabel = action.action_type === 'SCHEDULE' ? 'Schůzka' : 'Úkol'
+
+  return (
+    <Card style={{ width: '100%', maxWidth: '672px', margin: '0 auto' }}>
+      <div style={{ padding: `${theme.spacing.lg} ${theme.spacing.lg} ${theme.spacing.sm}` }}>
+        <p style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {typeLabel}
+        </p>
+        <h2 style={{ fontSize: theme.typography.sizes.lg, fontWeight: theme.typography.weights.semibold, color: theme.colors.text, marginTop: theme.spacing.xs }}>
+          {cpName}
+        </h2>
+        {conversation.topic && (
+          <p style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, marginTop: '2px' }}>{conversation.topic}</p>
+        )}
+      </div>
+
+      <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}`, fontSize: theme.typography.sizes.base, color: theme.colors.text, lineHeight: '1.625', whiteSpace: 'pre-wrap' }}>
+        {intent}
+      </div>
+
+      <div style={{
+        padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+        display: 'flex',
+        gap: theme.spacing.sm,
+        borderTop: `1px solid ${theme.colors.border}`
+      }}>
+        <Button
+          variant="primary"
+          onClick={handleConfirm}
+          loading={executing}
+        >
+          {action.action_type === 'SCHEDULE' ? 'Potvrdit a odeslat pozvánku' : 'Splněno'}
+        </Button>
+      </div>
+    </Card>
+  )
 }
 
 // ─── Detail View (no ?do param — DETAILY link from email) ───────────────────
@@ -410,8 +538,16 @@ function ActionContent() {
     return <ErrorDisplay message="Chybí autorizační token." />
   }
 
-  // ?do=execute → Draft review page (editable draft, confirm to send)
+  // ?do=execute → Route by action type
+  // REPLY: Draft review page (editable draft, confirm to send)
+  // SCHEDULE/TODO: Direct execute (no email draft — calendar invite or mark done)
   if (doAction === 'execute') {
+    const actionType = searchParams.get('type')
+    if (actionType === 'SCHEDULE' || actionType === 'TODO') {
+      return <DirectExecuteView actionId={actionId} token={token} />
+    }
+    // No type param (old URLs) or REPLY → email draft review
+    // DraftReviewView also detects non-REPLY types and redirects to DirectExecuteView
     return <DraftReviewView actionId={actionId} token={token} />
   }
 
