@@ -3,7 +3,7 @@ import { getActionById, completeAction, updateActionDraft } from '@/lib/db/actio
 import { getConversationById } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
 import { validateActionToken } from '@/lib/auth/tokens'
-import { sendEmail, sendCalendarInviteEmail, getUserEmail } from '@/lib/google/gmail'
+import { sendEmail } from '@/lib/google/gmail'
 import { sendWhatsAppMessage } from '@/lib/whatsapp/sender'
 import { generateFinalDraft } from '@/lib/ai/gemini'
 import { acceptInvitation, declineInvitation, confirmSlot } from '@/services/scheduling'
@@ -191,12 +191,12 @@ export async function POST(
         )
         const agendaText = draft.body
 
-        // 1. Confirm GCal Event on user's calendar (sendUpdates: 'none' — we send invite ourselves via Gmail)
+        // 1. Confirm GCal Event — add CP as attendee, Google Calendar sends the invite natively
         if (gcalEventId) {
           await confirmCalendarEvent(
             action.user_id,
             gcalEventId,
-            undefined, // Don't add attendees here — we send the invite via Gmail
+            [cp.primary_identifier],
             {
               summary: finalTitle,
               location: loc,
@@ -213,24 +213,6 @@ export async function POST(
           loc,
           finalTitle
         )
-
-        // 3. Send calendar invite email with Importance: high (replaces separate email)
-        if (gcalEventId) {
-          const organizerEmail = await getUserEmail(action.user_id)
-          const organizerName = settings.client_name || undefined
-
-          await sendCalendarInviteEmail(action.user_id, {
-            to: cp.primary_identifier,
-            organizerEmail,
-            organizerName,
-            summary: finalTitle,
-            description: agendaText,
-            location: loc,
-            startTime: startDate,
-            endTime: endDate,
-            gcalEventId,
-          })
-        }
 
         await completeAction(actionId)
         return NextResponse.json({
@@ -250,28 +232,14 @@ export async function POST(
         const manualTitle = `Schůzka s ${cp.name || cp.primary_identifier}`
         const manualDescription = action.intent_cs || action.rationale || ''
 
-        // Create calendar event on user's calendar (no attendee notification — we send invite ourselves)
-        const gcalEvent = await createCalendarEvent(action.user_id, {
+        // Create calendar event with CP as attendee — Google Calendar sends the invite natively
+        await createCalendarEvent(action.user_id, {
           summary: manualTitle,
           description: manualDescription,
           startTime: manualStart,
           endTime: manualEnd,
-          sendUpdates: 'none',
-        })
-
-        // Send calendar invite via Gmail with Importance: high
-        const organizerEmail = await getUserEmail(action.user_id)
-        const organizerName = settings.client_name || undefined
-
-        await sendCalendarInviteEmail(action.user_id, {
-          to: cp.primary_identifier,
-          organizerEmail,
-          organizerName,
-          summary: manualTitle,
-          description: manualDescription,
-          startTime: manualStart,
-          endTime: manualEnd,
-          gcalEventId: gcalEvent.id,
+          attendees: [cp.primary_identifier],
+          sendUpdates: 'all',
         })
 
         await completeAction(actionId)
