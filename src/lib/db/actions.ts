@@ -397,3 +397,24 @@ export async function hasPendingAction(conversationId: string): Promise<boolean>
 
   return (count || 0) > 0
 }
+
+/**
+ * Check if there's an existing pending action for a CP across ALL conversations for a user.
+ * Prevents duplicate actions when calendar ingestion and planning create separate conversations
+ * for the same counterparty.
+ */
+export async function hasPendingActionForCP(userId: string, cpId: string): Promise<boolean> {
+  const supabase = getSupabaseAdmin()
+  const { count, error } = await supabase
+    .from('action_proposals')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('cp_id', cpId)
+    .eq('status', 'pending')
+
+  if (error) {
+    throw new Error(`Failed to check pending action for CP: ${error.message}`)
+  }
+
+  return (count || 0) > 0
+}
