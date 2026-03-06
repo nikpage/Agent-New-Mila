@@ -159,6 +159,21 @@ export async function getCPById(cpId: string): Promise<CP | null> {
 }
 
 /**
+ * Get multiple counterparties by IDs in a single query
+ */
+export async function getCPsByIds(cpIds: string[]): Promise<CP[]> {
+  if (cpIds.length === 0) return []
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('cps')
+    .select('*')
+    .in('id', cpIds)
+
+  if (error) throw new Error(`Failed to get CPs: ${error.message}`)
+  return data || []
+}
+
+/**
  * Get a counterparty by primary identifier (email)
  */
 export async function getCPByIdentifier(

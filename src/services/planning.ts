@@ -4,7 +4,6 @@ import {
   createAction,
   calculatePriorityScore,
   hasPendingAction,
-  hasPendingActionForCP,
 } from '@/lib/db/actions'
 import { getConversationById, getRecentMessages, updateConversation } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
@@ -67,10 +66,6 @@ export async function generateActionProposal(
 
   const cp = await getCPById(latestWithCP.cp_id)
   if (!cp || cp.is_blacklisted) return []
-
-  // Skip if this CP already has a pending action on ANY conversation (e.g. calendar ingestion
-  // created a SCHEDULE action on a different conversation for the same person)
-  if (await hasPendingActionForCP(conversation.user_id, cp.id)) return []
 
   // Detect channel from most recent message
   const lastMessage = recentMessages[recentMessages.length - 1]

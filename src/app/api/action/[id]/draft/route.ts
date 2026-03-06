@@ -32,25 +32,35 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
-    const cp = await getCPById(action.cp_id)
+    // Fetch CP, conversation, settings all in parallel
+    const [cp, conversation, settings] = await Promise.all([
+      getCPById(action.cp_id),
+      getConversationById(action.conversation_id),
+      getUserSettings(action.user_id),
+    ])
     if (!cp) {
       return NextResponse.json({ error: 'Counterparty not found' }, { status: 404 })
     }
 
     const sendTo = ((action.payload as Record<string, unknown>)?.editedTo as string) || cp.primary_identifier
 
-    // If draft already exists, return it
+    // Action metadata for the client (avoids needing a separate GET call)
+    const actionMeta = {
+      action,
+      conversation,
+      cp,
+    }
+
+    // If draft already exists, return it with action metadata
     if (action.draft_body_text) {
       return NextResponse.json({
         subject: action.draft_subject || '',
         body: action.draft_body_text,
         to: sendTo,
+        ...actionMeta,
       })
     }
 
-    // Generate a new draft
-    const conversation = await getConversationById(action.conversation_id)
-    const settings = await getUserSettings(action.user_id)
     const payload = action.payload as Record<string, unknown> | null
     const userNotes = (payload?.userNotes as string) || undefined
     const missingInfo = (action.missing_info as { label: string; placeholder: string; value: string | null }[] | null) || undefined
@@ -88,6 +98,7 @@ export async function POST(
       subject: draft.subject,
       body: draft.body,
       to: sendTo,
+      ...actionMeta,
     })
 
   } catch (error) {

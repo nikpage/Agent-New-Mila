@@ -43,16 +43,18 @@ export async function POST(
       )
     }
 
-    // Get user settings for AI context
-    const settings = await getUserSettings(action.user_id)
+    // Fetch settings + CP in parallel (both only need IDs from action)
+    const [settings, cp] = await Promise.all([
+      getUserSettings(action.user_id),
+      getCPById(action.cp_id),
+    ])
+
+    if (!cp) {
+      return NextResponse.json({ error: 'Counterparty not found' }, { status: 404 })
+    }
 
     // Check action type and required data
     if (action.action_type === 'REPLY') {
-      // Get the CP to get the email address
-      const cp = await getCPById(action.cp_id)
-      if (!cp) {
-        return NextResponse.json({ error: 'Counterparty not found' }, { status: 404 })
-      }
 
       const actionPayload = (action.payload as Record<string, unknown>) || {}
       const channel = (actionPayload.channel as 'email' | 'whatsapp') || 'email'
@@ -129,10 +131,6 @@ export async function POST(
 
     if (action.action_type === 'SCHEDULE') {
       const payload = action.payload as Record<string, unknown>
-      const cp = await getCPById(action.cp_id)
-      if (!cp) {
-        return NextResponse.json({ error: 'Counterparty not found' }, { status: 404 })
-      }
 
       // Case 1: Incoming calendar invitation - accept or decline
       const calendarEventId = payload?.calendar_event_id as string | undefined

@@ -97,30 +97,7 @@ function DraftReviewView({ actionId, token }: { actionId: string; token: string 
   useEffect(() => {
     async function load() {
       try {
-        // Load action data for context (CP name, topic)
-        const actionRes = await fetch(`/api/action/${actionId}?token=${token}`)
-        if (!actionRes.ok) {
-          const err = await actionRes.json()
-          throw new Error(err.error || 'Failed to load action')
-        }
-        const actionData = await actionRes.json() as ActionPageData
-
-        // Non-REPLY actions should not show email draft form
-        if (actionData.action.action_type !== 'REPLY') {
-          setRedirectToDirectExecute(true)
-          setLoading(false)
-          return
-        }
-
-        setCpName(actionData.cp.name || actionData.cp.primary_identifier)
-        setTopic(actionData.conversation.topic || '')
-
-        // Check if action is still executable
-        if (actionData.action.status !== 'pending' && actionData.action.status !== 'approved') {
-          throw new Error('Tato akce již byla provedena.')
-        }
-
-        // Generate draft
+        // Single call — draft POST returns action metadata alongside the draft
         const draftRes = await fetch(`/api/action/${actionId}/draft`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -130,10 +107,25 @@ function DraftReviewView({ actionId, token }: { actionId: string; token: string 
           const err = await draftRes.json()
           throw new Error(err.error || 'Failed to generate draft')
         }
-        const draft = await draftRes.json()
-        setTo(draft.to || '')
-        setSubject(draft.subject || '')
-        setBody(draft.body || '')
+        const data = await draftRes.json()
+
+        // Non-REPLY actions should not show email draft form
+        if (data.action?.action_type !== 'REPLY') {
+          setRedirectToDirectExecute(true)
+          setLoading(false)
+          return
+        }
+
+        // Check if action is still executable
+        if (data.action.status !== 'pending' && data.action.status !== 'approved') {
+          throw new Error('Tato akce již byla provedena.')
+        }
+
+        setCpName(data.cp?.name || data.cp?.primary_identifier || '')
+        setTopic(data.conversation?.topic || '')
+        setTo(data.to || '')
+        setSubject(data.subject || '')
+        setBody(data.body || '')
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load draft')
       } finally {

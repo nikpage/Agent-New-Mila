@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getActionById } from '@/lib/db/actions'
 import { getConversationById, getRecentMessages, getParticipants } from '@/lib/db/conversations'
-import { getCPById } from '@/lib/db/counterparties'
+import { getCPById, getCPsByIds } from '@/lib/db/counterparties'
 import { validateActionToken } from '@/lib/auth/tokens'
 
 export async function GET(
@@ -40,10 +40,8 @@ export async function GET(
       return NextResponse.json({ error: 'Data not found' }, { status: 404 })
     }
 
-    // Resolve all participant CP details
-    const participantCPs = await Promise.all(
-      threadParticipants.map(p => getCPById(p.cp_id))
-    )
+    // Single batch query instead of N individual getCPById calls
+    const participantCPs = await getCPsByIds(threadParticipants.map(p => p.cp_id))
 
     return NextResponse.json({
       action,
@@ -51,7 +49,6 @@ export async function GET(
       cp,
       recentMessage: recentMessages[0] || null,
       participants: participantCPs
-        .filter((p): p is NonNullable<typeof p> => p !== null)
         .map(p => ({ name: p.name, role: p.role, primary_identifier: p.primary_identifier })),
     })
   } catch (error) {
