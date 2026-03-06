@@ -261,8 +261,7 @@ export async function confirmSlot(
   confirmedEventId: string,
   cpEmail?: string,
   location?: string,
-  newTitle?: string,
-  description?: string
+  newTitle?: string
 ): Promise<{ event: Event; travelBuffer?: Event }> {
   let confirmedEvent = await confirmEvent(confirmedEventId)
 
@@ -280,7 +279,6 @@ export async function confirmSlot(
         {
           summary: newTitle || confirmedEvent.title || 'Meeting',
           location: location || confirmedEvent.location || undefined,
-          description: description || undefined,
         }
       )
     } catch (error) {
