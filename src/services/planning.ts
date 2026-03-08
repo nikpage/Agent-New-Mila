@@ -9,6 +9,7 @@ import { getCPById } from '@/lib/db/counterparties'
 import { getLatestMessageFromCP } from '@/lib/db/messages'
 import { getUserSettings } from '@/lib/db/users'
 import { proposeMeeting } from './scheduling'
+import { geocodeAddress } from '@/lib/google/maps'
 import { containsHighValueSignals } from '@/config/client'
 import {
   VALID_DEAL_TYPES,
@@ -20,6 +21,41 @@ import type {
   DealType,
 } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
+
+/**
+ * Check if a string looks like a street address (has a number + street name).
+ * Matches patterns like "Vinohradská 45", "Pařížská 2, Praha 1", "Na Příkopě 12/3".
+ */
+const STREET_ADDRESS_RE = /\d+\s*[\/\-]?\s*\d*\s*,?\s*\w/
+
+/**
+ * Validate a meeting location string.
+ * Returns { location, needsConfirmation } where:
+ *   - Street addresses pass through directly
+ *   - Other strings are geocoded; if Maps resolves them, use the formatted address
+ *   - If geocode fails, location is cleared and needsConfirmation is true
+ */
+export async function validateMeetingLocation(
+  raw: string
+): Promise<{ location: string | undefined; needsConfirmation: boolean }> {
+  // Street address pattern — trust it directly
+  if (STREET_ADDRESS_RE.test(raw)) {
+    return { location: raw, needsConfirmation: false }
+  }
+
+  // Not a street address — try geocoding (catches real business names)
+  try {
+    const result = await geocodeAddress(raw)
+    if (result) {
+      return { location: result.formattedAddress, needsConfirmation: false }
+    }
+  } catch {
+    // Geocode failed — fall through
+  }
+
+  // Can't resolve — ask user
+  return { location: undefined, needsConfirmation: true }
+}
 
 /**
  * Validate AI-returned dealType against known values.
@@ -139,6 +175,15 @@ export async function generateActionProposal(
           }
         }
 
+        // Validate location: street addresses pass, business names get geocoded,
+        // unresolvable locations prompt user for confirmation
+        let locationNeedsConfirmation = false
+        if (meetingLocation) {
+          const validated = await validateMeetingLocation(meetingLocation)
+          meetingLocation = validated.location
+          locationNeedsConfirmation = validated.needsConfirmation
+        }
+
         let preferredDate: Date | undefined
         if (proposal.suggestedTime) {
           try {
@@ -170,6 +215,13 @@ export async function generateActionProposal(
 
           proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${meetingLocation ? `\nMísto: ${meetingLocation}` : ''}\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
           proposal.missingInfo = []
+
+          if (locationNeedsConfirmation) {
+            proposal.missingInfo.push({
+              label: 'Kde se má schůzka konat? (adresa)',
+              value: null,
+            })
+          }
 
           if (schedulingResult.conflicts && schedulingResult.conflicts.length > 0) {
             const conflictNote = schedulingResult.conflicts.map(c =>
