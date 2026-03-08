@@ -274,7 +274,7 @@ export function ActionCard({
           >
             UDĚLAT
           </Button>
-          <Button variant="secondary" onClick={() => setEditOpen(!editOpen)}>
+          <Button variant={doItDisabled ? 'primary' : 'secondary'} onClick={() => setEditOpen(!editOpen)}>
             UPRAVIT
           </Button>
           <Button variant="outline"  onClick={run('illdoit', onIllDoIt)} loading={loading === 'illdoit'}>

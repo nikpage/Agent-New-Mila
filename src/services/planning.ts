@@ -24,8 +24,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 /**
  * Validate a meeting location string.
- * Geocodes to verify it's a real place. Keeps the user's original text
- * (Google's formatted_address is ugly — adds postal codes, country, etc.).
+ * Always geocodes — returns the full formatted address (adds city, street etc.).
  * If geocoding fails, keeps raw text but flags for user confirmation.
  */
 export async function validateMeetingLocation(
@@ -34,7 +33,7 @@ export async function validateMeetingLocation(
   try {
     const result = await geocodeAddress(raw)
     if (result) {
-      return { location: raw, needsConfirmation: false }
+      return { location: result.formattedAddress, needsConfirmation: false }
     }
   } catch {
     // Geocode failed — fall through

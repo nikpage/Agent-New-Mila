@@ -138,7 +138,7 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
           <tr>
             <td>
               ${doItButton}
-              <a href="${editUrl}" style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.secondary}; color: ${theme.colors.text}; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none; margin-right: 8px;">UPRAVIT</a>
+              <a href="${editUrl}" style="display: inline-block; padding: 8px 16px; background-color: ${needsInput ? theme.colors.primary : theme.colors.secondary}; color: ${needsInput ? 'white' : theme.colors.text}; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none; margin-right: 8px;">UPRAVIT</a>
               <a href="${todoUrl}" style="display: inline-block; padding: 7px 15px; background-color: transparent; border: 1px solid ${theme.colors.border}; color: ${theme.colors.text}; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none;">UDĚLÁM SÁM</a>
             </td>
             <td style="text-align: right; vertical-align: middle;">
