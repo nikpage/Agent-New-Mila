@@ -40,6 +40,7 @@ export interface ActionCardEmailParams {
   todoUrl: string
   blacklistUrl: string
   needsInput?: boolean
+  location?: string | null
 }
 
 /**
@@ -77,7 +78,7 @@ function formatIntentHtml(text: string): string {
 }
 
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
-  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput } = params
+  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location } = params
 
   const typeLabel = TYPE_LABEL[actionType] || actionType
   const typeVariant = TYPE_VARIANT[actionType] || 'default'
@@ -114,6 +115,17 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
       <div style="padding: 0 24px 16px 24px; font-size: 16px; color: ${theme.colors.text}; line-height: 1.625;">
         ${formatIntentHtml(intent)}
       </div>
+
+      ${actionType === 'SCHEDULE' ? `
+      <!-- LOCATION -->
+      <div style="padding: 0 24px 12px 24px; font-size: 14px;">
+        <span style="color: ${theme.colors.textMuted};">Místo: </span>
+        ${location
+          ? `<span style="color: ${theme.colors.text};">${location}</span>`
+          : `<span style="color: ${theme.colors.accent};">Chybí — doplňte přes UPRAVIT</span>`
+        }
+      </div>
+      ` : ''}
 
       <!-- DETAILS LINK -->
       <div style="padding: 0 24px 16px 24px;">

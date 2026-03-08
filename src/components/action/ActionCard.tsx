@@ -103,12 +103,15 @@ export function ActionCard({
   const intent   = getIntent(action)
 
   // Determine if UDĚLAT should be disabled:
-  // Disabled when there are unfilled missing_info fields, UNLESS action has pre-blocked slots ready
+  // Hold satisfies TIME requirement only — missing location still blocks execution
   const missingInfoFields = (action.missing_info as { label: string; value: string | null }[] | null) || []
   const hasUnfilledFields = missingInfoFields.length > 0 && missingInfoFields.some(f => f.value === null || f.value === '')
+  const hasUnfilledLocation = missingInfoFields.some(
+    f => (f.value === null || f.value === '') && f.label.includes('adresa')
+  )
   const actionPayload = action.payload as Record<string, unknown> | null
   const hasHold = !!actionPayload?.hold_event_id
-  const doItDisabled = hasUnfilledFields && !hasHold
+  const doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold)
 
   const getUrgencyLabel = (urgency: number): string => {
     if (urgency >= 8) return 'TEĎ'
@@ -153,6 +156,17 @@ export function ActionCard({
       <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}`, fontSize: theme.typography.sizes.base, color: theme.colors.text, lineHeight: 1.6 }}>
         {renderIntent(intent)}
       </div>
+
+      {/* ─── LOCATION (SCHEDULE only) ────────────────────────────────── */}
+      {action.action_type === 'SCHEDULE' && (
+        <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.sm}`, fontSize: theme.typography.sizes.sm }}>
+          <span style={{ color: theme.colors.textMuted }}>Místo: </span>
+          {(actionPayload?.location as string)
+            ? <span style={{ color: theme.colors.text }}>{actionPayload?.location as string}</span>
+            : <span style={{ color: theme.colors.accent }}>Chybí — doplňte přes UPRAVIT</span>
+          }
+        </div>
+      )}
 
       {/* ─── DETAILS LINK ────────────────────────────────────────────── */}
       <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>

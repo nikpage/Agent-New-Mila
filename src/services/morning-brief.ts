@@ -211,9 +211,13 @@ function generateBriefEmailHtml(
     ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl }) => {
       const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
       const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
+      const hasUnfilledLocation = missingInfo.some(
+        f => (f.value === null || f.value === '') && f.label.includes('adresa')
+      )
       const payload = action.payload as Record<string, unknown> | null
       const hasHold = !!payload?.hold_event_id
-      const needsInput = hasUnfilled && !hasHold
+      const needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
+      const location = (payload?.location as string | null) || null
       return getActionCardEmailHtml({
         cpName,
         cpRole,
@@ -227,6 +231,7 @@ function generateBriefEmailHtml(
         todoUrl,
         blacklistUrl,
         needsInput,
+        location,
       })
     }).join('')}
   </div>
@@ -397,9 +402,13 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[]): string {
     ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl }) => {
       const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
       const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
+      const hasUnfilledLocation = missingInfo.some(
+        f => (f.value === null || f.value === '') && f.label.includes('adresa')
+      )
       const payload = action.payload as Record<string, unknown> | null
       const hasHold = !!payload?.hold_event_id
-      const needsInput = hasUnfilled && !hasHold
+      const needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
+      const location = (payload?.location as string | null) || null
       return getActionCardEmailHtml({
         cpName,
         cpRole,
@@ -413,6 +422,7 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[]): string {
         todoUrl,
         blacklistUrl,
         needsInput,
+        location,
       })
     }).join('')}
   </div>

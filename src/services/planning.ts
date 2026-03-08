@@ -23,38 +23,25 @@ import type {
 import { v4 as uuidv4 } from 'uuid'
 
 /**
- * Check if a string looks like a street address (has a number + street name).
- * Matches patterns like "Vinohradská 45", "Pařížská 2, Praha 1", "Na Příkopě 12/3".
- */
-const STREET_ADDRESS_RE = /\d+\s*[\/\-]?\s*\d*\s*,?\s*\w/
-
-/**
  * Validate a meeting location string.
- * Returns { location, needsConfirmation } where:
- *   - Street addresses pass through directly
- *   - Other strings are geocoded; if Maps resolves them, use the formatted address
- *   - If geocode fails, location is cleared and needsConfirmation is true
+ * Geocodes to verify it's a real place. Keeps the user's original text
+ * (Google's formatted_address is ugly — adds postal codes, country, etc.).
+ * If geocoding fails, keeps raw text but flags for user confirmation.
  */
 export async function validateMeetingLocation(
   raw: string
 ): Promise<{ location: string | undefined; needsConfirmation: boolean }> {
-  // Street address pattern — trust it directly
-  if (STREET_ADDRESS_RE.test(raw)) {
-    return { location: raw, needsConfirmation: false }
-  }
-
-  // Not a street address — try geocoding (catches real business names)
   try {
     const result = await geocodeAddress(raw)
     if (result) {
-      return { location: result.formattedAddress, needsConfirmation: false }
+      return { location: raw, needsConfirmation: false }
     }
   } catch {
     // Geocode failed — fall through
   }
 
-  // Can't resolve — ask user
-  return { location: undefined, needsConfirmation: true }
+  // Geocode couldn't resolve — keep raw text but ask user to confirm
+  return { location: raw, needsConfirmation: true }
 }
 
 /**
@@ -213,10 +200,17 @@ export async function generateActionProposal(
           const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
           const slotText = `${dateStr}, ${startStr} - ${endStr}`
 
-          proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${meetingLocation ? `\nMísto: ${meetingLocation}` : ''}\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
+          const hasLocation = !!meetingLocation && !locationNeedsConfirmation
+          const locationLine = hasLocation
+            ? `\nMísto: ${meetingLocation}`
+            : ''
+          const ctaLine = hasLocation
+            ? `\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
+            : `\n\nDoplňte místo schůzky přes UPRAVIT.`
+          proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${locationLine}${ctaLine}`
           proposal.missingInfo = []
 
-          if (locationNeedsConfirmation) {
+          if (!meetingLocation || locationNeedsConfirmation) {
             proposal.missingInfo.push({
               label: 'Kde se má schůzka konat? (adresa)',
               value: null,
