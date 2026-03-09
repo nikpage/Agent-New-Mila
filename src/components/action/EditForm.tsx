@@ -14,13 +14,24 @@ export interface EditFormProps {
 
 export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
   const [notes, setNotes] = useState('')
-  const [dynamicFields, setDynamicFields] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(false)
 
   const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
 
   // Detect SCHEDULE action with a hold event
   const payload = action.payload as Record<string, unknown> | null
+  const payloadLocation = (payload?.location as string) || ''
+
+  // Pre-populate dynamic fields from payload (e.g. location field from payload.location)
+  const [dynamicFields, setDynamicFields] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {}
+    for (const field of missingInfo) {
+      if (field.label.includes('adresa') && payloadLocation) {
+        initial[field.label] = payloadLocation
+      }
+    }
+    return initial
+  })
   const holdStart = payload?.start as string | undefined
   const holdEnd = payload?.end as string | undefined
   const isScheduleWithHold = action.action_type === 'SCHEDULE' && holdStart && holdEnd

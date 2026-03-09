@@ -104,12 +104,14 @@ export function ActionCard({
 
   // Determine if UDĚLAT should be disabled:
   // Hold satisfies TIME requirement only — missing location still blocks execution
+  // But if payload.location exists, location is known regardless of missing_info state
   const missingInfoFields = (action.missing_info as { label: string; value: string | null }[] | null) || []
   const hasUnfilledFields = missingInfoFields.length > 0 && missingInfoFields.some(f => f.value === null || f.value === '')
-  const hasUnfilledLocation = missingInfoFields.some(
+  const actionPayload = action.payload as Record<string, unknown> | null
+  const payloadLocation = actionPayload?.location as string | null
+  const hasUnfilledLocation = !payloadLocation && missingInfoFields.some(
     f => (f.value === null || f.value === '') && f.label.includes('adresa')
   )
-  const actionPayload = action.payload as Record<string, unknown> | null
   const hasHold = !!actionPayload?.hold_event_id
   const doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold)
 

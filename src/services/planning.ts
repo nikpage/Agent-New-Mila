@@ -199,17 +199,16 @@ export async function generateActionProposal(
           const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
           const slotText = `${dateStr}, ${startStr} - ${endStr}`
 
-          const hasLocation = !!meetingLocation && !locationNeedsConfirmation
-          const locationLine = hasLocation
+          const locationLine = meetingLocation
             ? `\nMísto: ${meetingLocation}`
             : ''
-          const ctaLine = hasLocation
+          const ctaLine = meetingLocation
             ? `\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
             : `\n\nDoplňte místo schůzky přes UPRAVIT.`
           proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${locationLine}${ctaLine}`
           proposal.missingInfo = []
 
-          if (!meetingLocation || locationNeedsConfirmation) {
+          if (!meetingLocation) {
             proposal.missingInfo.push({
               label: 'Kde se má schůzka konat? (adresa)',
               value: null,
