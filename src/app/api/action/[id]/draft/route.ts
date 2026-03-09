@@ -166,6 +166,17 @@ export async function PUT(
       await updateAction(actionId, {
         missing_info: updatedMissingInfo
       })
+
+      // If user filled in the location field, update payload.location too
+      // (execute route reads location from payload, not missing_info)
+      const locationField = missingInfo.find(f => f.label.includes('adresa'))
+      const locationValue = locationField ? dynamicFields[locationField.label] : undefined
+      if (locationValue) {
+        const currentPayload = (action.payload as Record<string, unknown>) || {}
+        await updateAction(actionId, {
+          payload: { ...currentPayload, location: locationValue },
+        })
+      }
     }
 
     // Persist edited recipient if provided

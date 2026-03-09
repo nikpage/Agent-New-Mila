@@ -380,6 +380,20 @@ function DirectExecuteView({ actionId, token }: { actionId: string; token: strin
         {intent}
       </div>
 
+      {action.action_type === 'SCHEDULE' && (() => {
+        const payload = action.payload as Record<string, unknown> | null
+        const location = payload?.location as string | null
+        return (
+          <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.sm}`, fontSize: theme.typography.sizes.sm }}>
+            <span style={{ color: theme.colors.textMuted }}>Místo: </span>
+            {location
+              ? <span style={{ color: theme.colors.text }}>{location}</span>
+              : <span style={{ color: theme.colors.accent }}>Chybí</span>
+            }
+          </div>
+        )
+      })()}
+
       <div style={{
         padding: `${theme.spacing.md} ${theme.spacing.lg}`,
         display: 'flex',
