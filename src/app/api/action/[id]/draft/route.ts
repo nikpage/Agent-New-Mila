@@ -73,8 +73,9 @@ export async function POST(
       const holdEnd = payload.end as string | undefined
 
       if (holdStart && holdEnd) {
-        const formatTime = (d: Date) => d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
-        const formatDate = (d: Date) => d.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
+        const tz = settings.timezone || 'Europe/Prague'
+        const formatTime = (d: Date) => d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+        const formatDate = (d: Date) => d.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
 
         const start = new Date(holdStart)
         const end = new Date(holdEnd)
@@ -138,6 +139,8 @@ export async function PUT(
     if (!validateActionToken(token, actionId, action.user_id)) {
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
+
+    const settings = await getUserSettings(action.user_id)
 
     // Check for verbal cancel commands in notes
     const notesLower = (notes || '').trim().toLowerCase()
@@ -204,8 +207,9 @@ export async function PUT(
       let updatedIntentCs = action.intent_cs
       if (holdStart && holdEnd) {
         const selection = dynamicFields.slotSelection
-        const formatTime = (d: Date) => d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
-        const formatDate = (d: Date) => d.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
+        const tz = settings.timezone || 'Europe/Prague'
+        const formatTime = (d: Date) => d.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+        const formatDate = (d: Date) => d.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
 
         const start = new Date(holdStart)
         const end = new Date(holdEnd)

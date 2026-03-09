@@ -165,8 +165,9 @@ export async function POST(
         const loc = payload?.location as string | undefined
         const userNotes = (payload?.userNotes as string) || ''
 
-        const formatTime = (date: Date) => date.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
-        const formatDate = (date: Date) => date.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
+        const tz = settings.timezone || 'Europe/Prague'
+        const formatTime = (date: Date) => date.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+        const formatDate = (date: Date) => date.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
 
         // Determine Title: Location OR "HOVOR - CP Name"
         let finalTitle = `HOVOR - ${cp.name || cp.primary_identifier}`

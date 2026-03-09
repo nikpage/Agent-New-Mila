@@ -194,9 +194,10 @@ export async function generateActionProposal(
           const hold = schedulingResult.holdEvent
           const start = new Date(hold.start_time)
           const end = new Date(hold.end_time)
-          const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
-          const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
-          const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+          const tz = 'Europe/Prague'
+          const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
+          const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+          const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
           const slotText = `${dateStr}, ${startStr} - ${endStr}`
 
           const locationLine = meetingLocation
