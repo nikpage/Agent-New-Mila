@@ -92,6 +92,16 @@ export async function generateActionProposal(
   const lastMessage = recentMessages[recentMessages.length - 1]
   const channel: 'email' | 'whatsapp' = lastMessage?.channel_id === 'whatsapp' ? 'whatsapp' : 'email'
 
+  // Extract highest classification priority from recent messages
+  // classifyEmail stores priority in tag_secondary during ingestion (Step 2)
+  const priorityRank = { high: 3, medium: 2, low: 1 } as const
+  const classificationPriority = recentMessages.reduce<'high' | 'medium' | 'low' | null>((best, m) => {
+    const p = m.tag_secondary as 'high' | 'medium' | 'low' | null
+    if (!p || !(p in priorityRank)) return best
+    if (!best) return p
+    return priorityRank[p] > priorityRank[best] ? p : best
+  }, null)
+
   // Prefer enriched_text (pre-extracted facts), fall back to cleaned_text.
   // Adaptive count: enough messages to reach ~2000 chars of enriched content,
   // minimum 3, maximum 10. Short enrichments (WhatsApp) naturally include
@@ -118,7 +128,7 @@ export async function generateActionProposal(
     const settings = await getUserSettings(conversation.user_id)
 
     // Get AI recommendation — one action per conversation
-    const proposal = await proposeAction(summary, formattedMessages, cp.name, settings, channel)
+    const proposal = await proposeAction(summary, formattedMessages, cp.name, settings, channel, classificationPriority)
 
     // Validate and write deal_type onto conversation thread if AI classified it
     const dealType = validateDealType(proposal.dealType)

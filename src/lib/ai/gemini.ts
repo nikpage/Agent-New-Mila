@@ -72,6 +72,7 @@ FORMATTING: Plain text only. No markdown, no ** bold **, no # headers.
 - If deal-related: stage, key numbers (price, area, dates), commitments made
 - If personal/admin: what it's about, any time sensitivity, any action needed
 - Core intent (what this message actually says or asks)
+- Urgency signals: deadlines, time pressure, explicit urgency language, consequences of delay (e.g. "do zítra", "ASAP", "jinak odstoupím", "deadline pátek"). Omit if none present
 
 Channel: ${channel}
 Direction: ${direction} (${directionLabel})
@@ -180,7 +181,8 @@ export async function proposeAction(
   recentMessages: { direction: string; text: string }[],
   cpName: string | null,
   settings: UserSettings,
-  channel: 'email' | 'whatsapp' = 'email'
+  channel: 'email' | 'whatsapp' = 'email',
+  classificationPriority: 'high' | 'medium' | 'low' | null = null
 ): Promise<ProposedAction> {
   console.log(`[AI:proposeAction] Running stage 'planning' for ${cpName || 'unknown CP'}`)
   const recentText = recentMessages
@@ -200,16 +202,23 @@ export async function proposeAction(
     ? 'HIGH-VALUE DEAL DETECTED — this conversation matches high-value signals. Prioritize accordingly and estimate dollar value carefully.'
     : ''
 
+<<<<<<< HEAD
   const now = new Date()
   const tz = settings.timezone || 'Europe/Prague'
   const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz })
   const timeStr = now.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
   const isoDate = now.toISOString().split('T')[0]
+=======
+  const classificationNote = classificationPriority
+    ? `EMAIL CLASSIFICATION PRIORITY: ${classificationPriority.toUpperCase()} — this was pre-classified as ${classificationPriority} priority during ingestion. Use this as a starting anchor for your urgency assessment.`
+    : ''
+>>>>>>> claude/fix-scheduling-system-IiqBC
 
   const prompt = `${systemContext}
 
 ${channelNote}
 ${highValueNote}
+${classificationNote}
 
 TODAY'S DATE: ${todayStr} (${isoDate}), current time: ${timeStr}, timezone: ${tz}
 Use this to resolve relative dates: "tomorrow" = ${new Date(now.getTime() + 86400000).toISOString().split('T')[0]}, "next week" = week of ${new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0]}.
@@ -268,7 +277,7 @@ Respond with ONLY valid JSON — a single object:
   "rationale_cs": "One sentence in CZECH explaining WHY this action is needed now.",
   "intent_cs": "PROACTIVE description in CZECH: what Mila HAS DONE + what she WILL DO on UDĚLAT. Include specific data points from conversation. For TODO: describe what the user needs to do themselves. Return null if WAIT/ARCHIVE.",
   "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
-  "urgency": 1-10 (10 = needs immediate attention),
+  "urgency": 1-10 (calibration: 1-3 = routine, no time pressure; 4-6 = should respond within days, mild sensitivity; 7-8 = explicit deadline, significant value at risk, CP waiting; 9 = tomorrow AT LATEST; 10 = less than 1 hour),
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
