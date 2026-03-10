@@ -5,6 +5,7 @@ import { getCPById } from '@/lib/db/counterparties'
 import { getUserSettings } from '@/lib/db/users'
 import { validateActionToken } from '@/lib/auth/tokens'
 import { generateFinalDraft } from '@/lib/ai/gemini'
+import { geocodeAddress } from '@/lib/google/maps'
 
 /**
  * POST — Generate a draft for an action without executing it.
@@ -122,7 +123,7 @@ export async function PUT(
   try {
     const { id: actionId } = await params
     const body = await request.json()
-    const { token, subject, body: draftBody, to, notes, dynamicFields } = body
+    const { token, subject, body: draftBody, to, notes, dynamicFields, isOnline } = body
 
     if (!token) {
       return NextResponse.json({ error: 'Missing token' }, { status: 401 })
@@ -172,14 +173,34 @@ export async function PUT(
 
       // If user filled in the location field, update payload.location too
       // (execute route reads location from payload, not missing_info)
+      // Re-geocode to validate/complete the address
       const locationField = missingInfo.find(f => f.label.includes('adresa'))
       const locationValue = locationField ? dynamicFields[locationField.label] : undefined
       if (locationValue) {
         const currentPayload = (action.payload as Record<string, unknown>) || {}
+        let resolvedLocation = locationValue
+        let locationPartial = true
+        try {
+          const geocoded = await geocodeAddress(locationValue)
+          if (geocoded) {
+            resolvedLocation = geocoded.formattedAddress
+            locationPartial = false
+          }
+        } catch {
+          // Geocoding failed — keep raw value, mark as partial
+        }
         await updateAction(actionId, {
-          payload: { ...currentPayload, location: locationValue },
+          payload: { ...currentPayload, location: resolvedLocation, location_partial: locationPartial },
         })
       }
+    }
+
+    // Persist is_online flag in payload
+    if (typeof isOnline === 'boolean' && action.action_type === 'SCHEDULE') {
+      const currentPayload = (action.payload as Record<string, unknown>) || {}
+      await updateAction(actionId, {
+        payload: { ...currentPayload, is_online: isOnline },
+      })
     }
 
     // Persist edited recipient if provided

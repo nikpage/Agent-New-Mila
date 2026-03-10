@@ -213,10 +213,14 @@ function generateBriefEmailHtml(
       const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
       const payload = action.payload as Record<string, unknown> | null
       const payloadLocation = payload?.location as string | null
-      const hasUnfilledLocation = !payloadLocation && missingInfo.some(
-        f => (f.value === null || f.value === '') && f.label.includes('adresa')
-      )
+      const isOnline = !!payload?.is_online
+      const locationPartial = !!payload?.location_partial
       const hasHold = !!payload?.hold_event_id
+      const hasUnfilledLocation = !isOnline && (
+        !payloadLocation
+          ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
+          : locationPartial
+      )
       const needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
       const location = (payload?.location as string | null) || null
       return getActionCardEmailHtml({
@@ -233,6 +237,8 @@ function generateBriefEmailHtml(
         blacklistUrl,
         needsInput,
         location,
+        locationPartial,
+        isOnline,
       })
     }).join('')}
   </div>
@@ -405,10 +411,14 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[]): string {
       const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
       const payload = action.payload as Record<string, unknown> | null
       const payloadLocation = payload?.location as string | null
-      const hasUnfilledLocation = !payloadLocation && missingInfo.some(
-        f => (f.value === null || f.value === '') && f.label.includes('adresa')
-      )
+      const isOnline = !!payload?.is_online
+      const locationPartial = !!payload?.location_partial
       const hasHold = !!payload?.hold_event_id
+      const hasUnfilledLocation = !isOnline && (
+        !payloadLocation
+          ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
+          : locationPartial
+      )
       const needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
       const location = (payload?.location as string | null) || null
       return getActionCardEmailHtml({
@@ -425,6 +435,8 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[]): string {
         blacklistUrl,
         needsInput,
         location,
+        locationPartial,
+        isOnline,
       })
     }).join('')}
   </div>

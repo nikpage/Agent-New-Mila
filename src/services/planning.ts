@@ -163,11 +163,11 @@ export async function generateActionProposal(
 
         // Validate location: street addresses pass, business names get geocoded,
         // unresolvable locations prompt user for confirmation
-        let locationNeedsConfirmation = false
+        let locationPartial = false
         if (meetingLocation) {
           const validated = await validateMeetingLocation(meetingLocation)
           meetingLocation = validated.location
-          locationNeedsConfirmation = validated.needsConfirmation
+          locationPartial = validated.needsConfirmation
         }
 
         let preferredDate: Date | undefined
@@ -200,18 +200,20 @@ export async function generateActionProposal(
           const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
           const slotText = `${dateStr}, ${startStr} - ${endStr}`
 
-          const locationLine = meetingLocation
-            ? `\nMísto: ${meetingLocation}`
-            : ''
-          const ctaLine = meetingLocation
+          const ctaLine = meetingLocation && !locationPartial
             ? `\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
-            : `\n\nDoplňte místo schůzky přes UPRAVIT.`
-          proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${locationLine}${ctaLine}`
+            : `\n\nDoplňte místo schůzky přes UPRAVIT (nebo zvolte Online).`
+          proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${ctaLine}`
           proposal.missingInfo = []
 
           if (!meetingLocation) {
             proposal.missingInfo.push({
               label: 'Kde se má schůzka konat? (adresa)',
+              value: null,
+            })
+          } else if (locationPartial) {
+            proposal.missingInfo.push({
+              label: 'Upřesněte místo schůzky — nelze ověřit (adresa)',
               value: null,
             })
           }
@@ -229,6 +231,8 @@ export async function generateActionProposal(
             start: schedulingResult.holdEvent.start_time,
             end: schedulingResult.holdEvent.end_time,
             location: meetingLocation || null,
+            location_partial: locationPartial,
+            is_online: false,
             conflicts: schedulingResult.conflicts?.map(c => ({
               event_title: c.existingEvent.title,
               recommendation: c.recommendation,

@@ -35,6 +35,8 @@ export interface CreateEventParams {
   sendUpdates?: 'all' | 'externalOnly' | 'none'
   /** Private extended properties to tag on the GCal event */
   privateExtendedProperties?: Record<string, string>
+  /** Google Meet conference data — creates a Meet link when provided */
+  conferenceData?: calendar_v3.Schema$ConferenceData
 }
 
 /**
@@ -145,27 +147,34 @@ export async function createCalendarEvent(
 ): Promise<CalendarEvent> {
   const calendar = await getCalendarClient(userId)
 
+  const requestBody: calendar_v3.Schema$Event = {
+    summary: params.summary,
+    description: params.description,
+    location: params.location,
+    start: {
+      dateTime: params.startTime.toISOString(),
+    },
+    end: {
+      dateTime: params.endTime.toISOString(),
+    },
+    attendees: params.attendees?.map(email => ({ email })),
+    extendedProperties: {
+      private: {
+        [MILA_MANAGED_KEY]: 'true',
+        ...params.privateExtendedProperties,
+      },
+    },
+  }
+
+  if (params.conferenceData) {
+    requestBody.conferenceData = params.conferenceData
+  }
+
   const response = await calendar.events.insert({
     calendarId: 'primary',
     sendUpdates: params.sendUpdates || 'all',
-    requestBody: {
-      summary: params.summary,
-      description: params.description,
-      location: params.location,
-      start: {
-        dateTime: params.startTime.toISOString(),
-      },
-      end: {
-        dateTime: params.endTime.toISOString(),
-      },
-      attendees: params.attendees?.map(email => ({ email })),
-      extendedProperties: {
-        private: {
-          [MILA_MANAGED_KEY]: 'true',
-          ...params.privateExtendedProperties,
-        },
-      },
-    },
+    conferenceDataVersion: params.conferenceData ? 1 : undefined,
+    requestBody,
   })
 
   const parsed = parseCalendarEvent(response.data)
@@ -433,7 +442,8 @@ export async function confirmCalendarEvent(
     summary?: string
     location?: string
     description?: string
-  }
+  },
+  conferenceData?: calendar_v3.Schema$ConferenceData
 ): Promise<CalendarEvent> {
   const calendar = await getCalendarClient(userId)
 
@@ -446,10 +456,15 @@ export async function confirmCalendarEvent(
     requestBody.attendees = attendees.map(email => ({ email }))
   }
 
+  if (conferenceData) {
+    requestBody.conferenceData = conferenceData
+  }
+
   const response = await calendar.events.patch({
     calendarId: 'primary',
     eventId,
     sendUpdates: attendees ? 'all' : 'none',
+    conferenceDataVersion: conferenceData ? 1 : undefined,
     requestBody,
   })
 

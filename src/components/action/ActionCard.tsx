@@ -80,7 +80,7 @@ export interface ActionCardProps {
   participants?: Participant[]
   initialDetailOpen?: boolean
   onDoIt:        () => Promise<void>
-  onEdit:        (data: { notes: string; dynamicFields?: Record<string, string> }) => Promise<void>
+  onEdit:        (data: { notes: string; dynamicFields?: Record<string, string>; isOnline?: boolean }) => Promise<void>
   onIllDoIt:     () => Promise<void>
   onToDo?:       () => Promise<void>
   onBlacklist?:  () => Promise<void>
@@ -109,8 +109,12 @@ export function ActionCard({
   const hasUnfilledFields = missingInfoFields.length > 0 && missingInfoFields.some(f => f.value === null || f.value === '')
   const actionPayload = action.payload as Record<string, unknown> | null
   const payloadLocation = actionPayload?.location as string | null
-  const hasUnfilledLocation = !payloadLocation && missingInfoFields.some(
-    f => (f.value === null || f.value === '') && f.label.includes('adresa')
+  const locationPartial = !!actionPayload?.location_partial
+  const isOnline = !!actionPayload?.is_online
+  const hasUnfilledLocation = !isOnline && (
+    !payloadLocation
+      ? missingInfoFields.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
+      : locationPartial
   )
   const hasHold = !!actionPayload?.hold_event_id
   const doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold)
@@ -162,11 +166,28 @@ export function ActionCard({
       {/* ─── LOCATION (SCHEDULE only) ────────────────────────────────── */}
       {action.action_type === 'SCHEDULE' && (
         <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.sm}`, fontSize: theme.typography.sizes.sm }}>
-          <span style={{ color: theme.colors.textMuted }}>Místo: </span>
-          {(actionPayload?.location as string)
-            ? <span style={{ color: theme.colors.text }}>{actionPayload?.location as string}</span>
-            : <span style={{ color: theme.colors.accent }}>Chybí — doplňte přes UPRAVIT</span>
-          }
+          {isOnline ? (
+            <>
+              <span style={{ color: theme.colors.textMuted }}>Místo: </span>
+              <span style={{ color: theme.colors.success, fontWeight: theme.typography.weights.medium }}>Online (Google Meet)</span>
+            </>
+          ) : payloadLocation ? (
+            <>
+              <span style={{ color: theme.colors.textMuted }}>Místo: </span>
+              {locationPartial ? (
+                <span style={{ color: theme.colors.warning, fontWeight: theme.typography.weights.medium }}>
+                  {payloadLocation} — ⚠ upřesněte přes UPRAVIT
+                </span>
+              ) : (
+                <span style={{ color: theme.colors.text }}>{payloadLocation}</span>
+              )}
+            </>
+          ) : (
+            <>
+              <span style={{ color: theme.colors.textMuted }}>Místo: </span>
+              <span style={{ color: theme.colors.accent }}>Chybí — doplňte přes UPRAVIT</span>
+            </>
+          )}
         </div>
       )}
 

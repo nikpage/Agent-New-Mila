@@ -377,7 +377,8 @@ describe('Scheduling — Hold Events', () => {
       'user-1',
       'gcal-1',
       ['novak@test.com'],
-      expect.objectContaining({ summary: 'Meeting with Novák' })
+      expect.objectContaining({ summary: 'Meeting with Novák' }),
+      undefined
     )
   })
 

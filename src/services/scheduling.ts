@@ -262,13 +262,22 @@ export async function confirmSlot(
   cpEmail?: string,
   location?: string,
   newTitle?: string,
-  description?: string
+  description?: string,
+  isOnline?: boolean
 ): Promise<{ event: Event; travelBuffer?: Event }> {
   let confirmedEvent = await confirmEvent(confirmedEventId)
 
   if (newTitle) {
     confirmedEvent = await updateEvent(confirmedEventId, { title: newTitle })
   }
+
+  // Google Meet conference data for online meetings
+  const conferenceData = isOnline ? {
+    createRequest: {
+      requestId: `mila-${confirmedEventId}-${Date.now()}`,
+      conferenceSolutionKey: { type: 'hangoutsMeet' },
+    },
+  } : undefined
 
   // Confirm on Google Calendar + send invite to CP
   if (confirmedEvent.google_event_id) {
@@ -279,9 +288,10 @@ export async function confirmSlot(
         cpEmail ? [cpEmail] : undefined,
         {
           summary: newTitle || confirmedEvent.title || 'Meeting',
-          location: location || confirmedEvent.location || undefined,
+          location: isOnline ? undefined : (location || confirmedEvent.location || undefined),
           description: description || undefined,
-        }
+        },
+        conferenceData
       )
     } catch (error) {
       console.error('Failed to confirm gcal event:', error)
@@ -291,11 +301,12 @@ export async function confirmSlot(
       const gcalEvent = await createCalendarEvent(userId, {
         summary: confirmedEvent.title || 'Meeting',
         description: confirmedEvent.description || undefined,
-        location: location || confirmedEvent.location || undefined,
+        location: isOnline ? undefined : (location || confirmedEvent.location || undefined),
         startTime: new Date(confirmedEvent.start_time),
         endTime: new Date(confirmedEvent.end_time),
         attendees: [cpEmail],
         sendUpdates: 'all',
+        conferenceData,
       })
       confirmedEvent = await updateEvent(confirmedEventId, { google_event_id: gcalEvent.id })
     } catch (error) {

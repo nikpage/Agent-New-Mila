@@ -8,7 +8,7 @@ import type { ActionProposal } from '@/lib/supabase/types'
 
 export interface EditFormProps {
   action: ActionProposal
-  onSubmit: (data: { notes: string; dynamicFields: Record<string, string> }) => Promise<void>
+  onSubmit: (data: { notes: string; dynamicFields: Record<string, string>; isOnline?: boolean }) => Promise<void>
   onCancel: () => void
 }
 
@@ -21,6 +21,8 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
   // Detect SCHEDULE action with a hold event
   const payload = action.payload as Record<string, unknown> | null
   const payloadLocation = (payload?.location as string) || ''
+  const locationPartial = !!payload?.location_partial
+  const [isOnline, setIsOnline] = useState(!!payload?.is_online)
 
   // Pre-populate dynamic fields from payload (e.g. location field from payload.location)
   const [dynamicFields, setDynamicFields] = useState<Record<string, string>>(() => {
@@ -35,12 +37,13 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
   const holdStart = payload?.start as string | undefined
   const holdEnd = payload?.end as string | undefined
   const isScheduleWithHold = action.action_type === 'SCHEDULE' && holdStart && holdEnd
+  const isSchedule = action.action_type === 'SCHEDULE'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
     try {
-      await onSubmit({ notes, dynamicFields })
+      await onSubmit({ notes, dynamicFields, isOnline: isSchedule ? isOnline : undefined })
     } finally {
       setLoading(false)
     }
@@ -56,6 +59,10 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
     const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
     return `${dateStr}, ${startStr} - ${endStr}`
   }
+
+  // Location fields are address-related fields from missing_info
+  const locationFields = missingInfo.filter(f => f.label.includes('adresa'))
+  const nonLocationFields = missingInfo.filter(f => !f.label.includes('adresa'))
 
   return (
     <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
@@ -87,16 +94,75 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
             }}>
               {formatHoldSlot()}
             </p>
-            {typeof payload?.location === 'string' && payload.location && (
-              <p style={{
-                fontSize: theme.typography.sizes.sm,
-                color: theme.colors.textMuted,
-                marginTop: theme.spacing.sm,
-              }}>
-                Místo: {payload.location}
-              </p>
-            )}
           </div>
+        </div>
+      )}
+
+      {/* Online checkbox for SCHEDULE actions */}
+      {isSchedule && (
+        <label style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: theme.spacing.sm,
+          cursor: 'pointer',
+          fontSize: theme.typography.sizes.sm,
+          color: theme.colors.text,
+        }}>
+          <input
+            type="checkbox"
+            checked={isOnline}
+            onChange={e => setIsOnline(e.target.checked)}
+            style={{ width: '18px', height: '18px', accentColor: theme.colors.primary, cursor: 'pointer' }}
+          />
+          <span style={{ fontWeight: isOnline ? theme.typography.weights.medium : theme.typography.weights.normal }}>
+            Online schůzka (Google Meet)
+          </span>
+        </label>
+      )}
+
+      {/* Location fields — disabled when Online is checked */}
+      {isSchedule && locationFields.map((field, index) => (
+        <div key={`loc-${index}`}>
+          <Input
+            label={field.label}
+            value={isOnline ? '' : (dynamicFields[field.label] || '')}
+            onChange={e => setDynamicFields({ ...dynamicFields, [field.label]: e.target.value })}
+            disabled={isOnline}
+            style={isOnline ? { opacity: 0.4 } : locationPartial && !dynamicFields[field.label] ? {
+              borderColor: theme.colors.warning,
+              backgroundColor: theme.colors.warningBg,
+            } : undefined}
+          />
+          {locationPartial && !isOnline && !dynamicFields[field.label] && (
+            <p style={{
+              fontSize: theme.typography.sizes.xs,
+              color: theme.colors.warning,
+              marginTop: '4px',
+            }}>
+              ⚠ Mila nemohla ověřit toto místo. Upřesněte adresu.
+            </p>
+          )}
+        </div>
+      ))}
+
+      {/* Show inline location for SCHEDULE actions without an address field in missing_info */}
+      {isSchedule && locationFields.length === 0 && payloadLocation && !isOnline && (
+        <div style={{
+          fontSize: theme.typography.sizes.sm,
+          padding: theme.spacing.sm,
+          borderRadius: theme.borderRadius.md,
+          backgroundColor: locationPartial ? theme.colors.warningBg : theme.colors.secondary,
+          border: locationPartial ? `1px solid ${theme.colors.warning}` : 'none',
+        }}>
+          <span style={{ color: theme.colors.textMuted }}>Místo: </span>
+          <span style={{ color: locationPartial ? theme.colors.warning : theme.colors.text, fontWeight: locationPartial ? theme.typography.weights.medium : theme.typography.weights.normal }}>
+            {payloadLocation}
+          </span>
+          {locationPartial && (
+            <p style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.warning, marginTop: '4px', marginBottom: 0 }}>
+              ⚠ Mila nemohla ověřit toto místo. Upřesněte adresu.
+            </p>
+          )}
         </div>
       )}
 
@@ -109,10 +175,20 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
         placeholder="např. Nezapomeň zmínit, že bazén bude připraven pro jeho děti."
       />
 
-      {/* Dynamic fields from missing_info */}
-      {missingInfo.map((field, index) => (
+      {/* Non-location dynamic fields from missing_info */}
+      {nonLocationFields.map((field, index) => (
         <Input
           key={index}
+          label={field.label}
+          value={dynamicFields[field.label] || ''}
+          onChange={e => setDynamicFields({ ...dynamicFields, [field.label]: e.target.value })}
+        />
+      ))}
+
+      {/* Location fields for non-SCHEDULE actions (rendered normally) */}
+      {!isSchedule && locationFields.map((field, index) => (
+        <Input
+          key={`loc-ns-${index}`}
           label={field.label}
           value={dynamicFields[field.label] || ''}
           onChange={e => setDynamicFields({ ...dynamicFields, [field.label]: e.target.value })}

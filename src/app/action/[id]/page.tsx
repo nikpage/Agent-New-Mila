@@ -383,12 +383,18 @@ function DirectExecuteView({ actionId, token }: { actionId: string; token: strin
       {action.action_type === 'SCHEDULE' && (() => {
         const payload = action.payload as Record<string, unknown> | null
         const location = payload?.location as string | null
+        const locationPartial = !!payload?.location_partial
+        const isOnline = !!payload?.is_online
         return (
           <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.sm}`, fontSize: theme.typography.sizes.sm }}>
             <span style={{ color: theme.colors.textMuted }}>Místo: </span>
-            {location
-              ? <span style={{ color: theme.colors.text }}>{location}</span>
-              : <span style={{ color: theme.colors.accent }}>Chybí</span>
+            {isOnline
+              ? <span style={{ color: theme.colors.success, fontWeight: 500 }}>Online (Google Meet)</span>
+              : location
+                ? locationPartial
+                  ? <span style={{ color: theme.colors.warning, fontWeight: 500 }}>{location} — ⚠ upřesněte přes UPRAVIT</span>
+                  : <span style={{ color: theme.colors.text }}>{location}</span>
+                : <span style={{ color: theme.colors.accent }}>Chybí</span>
             }
           </div>
         )
@@ -454,11 +460,11 @@ function DetailView({ actionId, token, initialDetailOpen }: { actionId: string; 
     setSuccess({ show: true, message: 'Hotovo!', subMessage: 'Akce byla provedena.' })
   }
 
-  async function handleEdit(editData: { notes: string; dynamicFields?: Record<string, string> }) {
+  async function handleEdit(editData: { notes: string; dynamicFields?: Record<string, string>; isOnline?: boolean }) {
     const response = await fetch(`/api/action/${actionId}/draft`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, notes: editData.notes, dynamicFields: editData.dynamicFields }),
+      body: JSON.stringify({ token, notes: editData.notes, dynamicFields: editData.dynamicFields, isOnline: editData.isOnline }),
     })
     if (!response.ok) {
       const errorData = await response.json()

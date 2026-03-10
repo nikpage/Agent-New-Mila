@@ -162,16 +162,17 @@ export async function POST(
       if (holdEventId) {
         const holdStart = payload?.start as string | undefined
         const holdEnd = payload?.end as string | undefined
-        const loc = payload?.location as string | undefined
+        const isOnline = !!payload?.is_online
+        const loc = isOnline ? undefined : (payload?.location as string | undefined)
         const userNotes = (payload?.userNotes as string) || ''
 
         const tz = settings.timezone || 'Europe/Prague'
         const formatTime = (date: Date) => date.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
         const formatDate = (date: Date) => date.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
 
-        // Determine Title: Location OR "HOVOR - CP Name"
+        // Determine Title: Location OR "HOVOR - CP Name" for online
         let finalTitle = `HOVOR - ${cp.name || cp.primary_identifier}`
-        if (loc && loc.trim().length > 0) {
+        if (!isOnline && loc && loc.trim().length > 0) {
           finalTitle = loc
         }
 
@@ -197,7 +198,8 @@ export async function POST(
           cp.primary_identifier,
           loc,
           finalTitle,
-          agendaText
+          agendaText,
+          isOnline
         )
 
         await completeAction(actionId)

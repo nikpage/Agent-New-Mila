@@ -41,6 +41,8 @@ export interface ActionCardEmailParams {
   blacklistUrl: string
   needsInput?: boolean
   location?: string | null
+  locationPartial?: boolean
+  isOnline?: boolean
 }
 
 /**
@@ -78,7 +80,7 @@ function formatIntentHtml(text: string): string {
 }
 
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
-  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location } = params
+  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline } = params
 
   const typeLabel = TYPE_LABEL[actionType] || actionType
   const typeVariant = TYPE_VARIANT[actionType] || 'default'
@@ -120,9 +122,13 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
       <!-- LOCATION -->
       <div style="padding: 0 24px 12px 24px; font-size: 14px;">
         <span style="color: ${theme.colors.textMuted};">Místo: </span>
-        ${location
-          ? `<span style="color: ${theme.colors.text};">${location}</span>`
-          : `<span style="color: ${theme.colors.accent};">Chybí — doplňte přes UPRAVIT</span>`
+        ${isOnline
+          ? `<span style="color: ${theme.colors.success}; font-weight: 500;">Online (Google Meet)</span>`
+          : location
+            ? locationPartial
+              ? `<span style="color: ${theme.colors.warning}; font-weight: 500;">${location} — ⚠ upřesněte přes UPRAVIT</span>`
+              : `<span style="color: ${theme.colors.text};">${location}</span>`
+            : `<span style="color: ${theme.colors.accent};">Chybí — doplňte přes UPRAVIT</span>`
         }
       </div>
       ` : ''}
