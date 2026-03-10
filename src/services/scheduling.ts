@@ -529,8 +529,52 @@ export async function proposeMeeting(
   const settings = await getUserSettings(userId)
   const duration = durationMinutes || settings.default_meeting_duration
 
-  // Find candidate slots (more than needed so we can pick the best conflict-free one)
-  const slots = await findBestSlots(userId, duration, 10, preferredDate, location)
+  // When a specific time was stated (e.g., "notary at 9:00 AM"),
+  // treat it as a hard constraint — check that exact slot first.
+  // Spec: CP availability is #1 priority in scheduling optimization.
+  if (preferredDate) {
+    const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
+    const slotConflicts = await findConflicts(userId, preferredDate, preferredEnd)
+
+    if (slotConflicts.length === 0) {
+      // Exact requested time is free — book it directly
+      const slot: SlotProposal = { start: preferredDate, end: preferredEnd }
+      return blockSlotForProposal(userId, cpId, slot, duration, location)
+    }
+
+    // Stated time has a conflict — always book the hold (consistent process),
+    // then return conflict info so the user or planning layer can act on it.
+    const slot: SlotProposal = { start: preferredDate, end: preferredEnd }
+    const holdResult = await blockSlotForProposal(userId, cpId, slot, duration, location)
+
+    // Build conflict details for each conflicting event
+    const conflictInfos: ConflictInfo[] = slotConflicts.map(existing => {
+      const isImmovable = existing.weight == null || existing.weight >= 100
+      return {
+        existingEvent: existing,
+        existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
+        newScore: 0, // caller computes final priority score
+        recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
+      }
+    })
+
+    const hasImmovableConflict = conflictInfos.some(
+      c => c.recommendation === 'suggest_alternate'
+    )
+
+    return {
+      success: holdResult.success,
+      holdEvent: holdResult.holdEvent,
+      gcalEventId: holdResult.gcalEventId,
+      conflicts: conflictInfos,
+      error: hasImmovableConflict
+        ? `Requested time conflicts with immovable event: ${slotConflicts.map(c => c.title || 'existing event').join(', ')}`
+        : `Requested time conflicts with: ${slotConflicts.map(c => c.title || 'existing event').join(', ')}`,
+    }
+  }
+
+  // No specific time stated — find the best available slot
+  const slots = await findBestSlots(userId, duration, 10, undefined, location)
 
   if (slots.length === 0) {
     return {

@@ -216,7 +216,7 @@ export async function generateActionProposal(
           preferredDate
         )
 
-        if (schedulingResult.success && schedulingResult.holdEvent) {
+        if (schedulingResult.holdEvent) {
           const hold = schedulingResult.holdEvent
           const start = new Date(hold.start_time)
           const end = new Date(hold.end_time)
@@ -226,11 +226,35 @@ export async function generateActionProposal(
           const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
           const slotText = `${dateStr}, ${startStr} - ${endStr}`
 
-          const ctaLine = meetingLocation && !locationPartial
-            ? `\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
-            : `\n\nDoplňte místo schůzky přes UPRAVIT (nebo zvolte Online).`
-          proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${ctaLine}`
-          proposal.missingInfo = []
+          const hasConflicts = schedulingResult.conflicts && schedulingResult.conflicts.length > 0
+          const hasImmovableConflict = schedulingResult.conflicts?.some(
+            c => c.recommendation === 'suggest_alternate'
+          )
+
+          if (hasConflicts && hasImmovableConflict) {
+            // Immovable conflict (W=100 or W=null) at the stated time — user must decide
+            const conflictNames = schedulingResult.conflicts!.map(c =>
+              c.existingEvent.title || 'existující událost'
+            ).join(', ')
+            proposal.intent_cs = `Schůzka s ${cpName} je požadována na ${slotText}, ale koliduje s nepřesunutelnou událostí: ${conflictNames}.\n\nZablokovala jsem čas v kalendáři. Rozhodněte, co přesunout.`
+            proposal.missingInfo = []
+            // Boost urgency so instant notification fires (score > 79)
+            proposal.urgency = Math.max(proposal.urgency, 9)
+          } else if (hasConflicts) {
+            // Movable conflict (W < 100) at the stated time — suggest moving existing event
+            const conflictNote = schedulingResult.conflicts!.map(c =>
+              `${c.existingEvent.title}: navrhuji přesunout`
+            ).join('; ')
+            proposal.intent_cs = `Zablokovala jsem požadovaný termín pro schůzku s ${cpName} ve vašem kalendáři:\n${slotText}\n\nKonflikty: ${conflictNote}`
+            proposal.missingInfo = []
+          } else {
+            // No conflicts — clean booking
+            const ctaLine = meetingLocation && !locationPartial
+              ? `\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
+              : `\n\nDoplňte místo schůzky přes UPRAVIT (nebo zvolte Online).`
+            proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${ctaLine}`
+            proposal.missingInfo = []
+          }
 
           if (!meetingLocation) {
             proposal.missingInfo.push({
@@ -244,13 +268,6 @@ export async function generateActionProposal(
             })
           }
 
-          if (schedulingResult.conflicts && schedulingResult.conflicts.length > 0) {
-            const conflictNote = schedulingResult.conflicts.map(c =>
-              `${c.existingEvent.title}: ${c.recommendation === 'move_existing' ? 'navrhuji přesunout' : 'navrhuji alternativní čas'}`
-            ).join('; ')
-            proposal.intent_cs += `\n\nKonflikty: ${conflictNote}`
-          }
-
           schedulingPayload = {
             hold_event_id: schedulingResult.holdEvent.id,
             gcal_event_id: schedulingResult.gcalEventId,
@@ -260,6 +277,7 @@ export async function generateActionProposal(
             location_partial: locationPartial,
             is_online: false,
             conflicts: schedulingResult.conflicts?.map(c => ({
+              event_id: c.existingEvent.id,
               event_title: c.existingEvent.title,
               recommendation: c.recommendation,
             })),
