@@ -304,7 +304,8 @@ function DirectExecuteView({ actionId, token }: { actionId: string; token: strin
           throw new Error(err.error || 'Failed to load action')
         }
         const data = await actionRes.json() as ActionPageData
-        if (data.action.status !== 'pending' && data.action.status !== 'approved') {
+        // Completed SCHEDULE actions can still be edited (update the invite)
+        if (data.action.status !== 'pending' && data.action.status !== 'approved' && data.action.status !== 'completed') {
           throw new Error('Tato akce již byla provedena.')
         }
         setActionData(data)
@@ -361,6 +362,12 @@ function DirectExecuteView({ actionId, token }: { actionId: string; token: strin
   const intent = action.intent_cs || action.rationale_cs || action.rationale || ''
   const cpName = cp.name || cp.primary_identifier
   const typeLabel = action.action_type === 'SCHEDULE' ? 'Schůzka' : 'Úkol'
+  const isCompleted = action.status === 'completed'
+
+  // Completed SCHEDULE actions — show "sent" state with edit option
+  if (isCompleted && action.action_type === 'SCHEDULE') {
+    return <CompletedScheduleView actionId={actionId} token={token} actionData={actionData} />
+  }
 
   return (
     <Card style={{ width: '100%', maxWidth: '672px', margin: '0 auto' }}>
@@ -412,6 +419,178 @@ function DirectExecuteView({ actionId, token }: { actionId: string; token: strin
           loading={executing}
         >
           {action.action_type === 'SCHEDULE' ? 'Potvrdit a odeslat pozvánku' : 'Splněno'}
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+// ─── Completed Schedule View — invite already sent, user can edit via Mila ──
+
+function CompletedScheduleView({ actionId, token, actionData }: { actionId: string; token: string; actionData: ActionPageData }) {
+  const [editOpen, setEditOpen] = useState(false)
+  const [notes, setNotes] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [success, setSuccess] = useState<SuccessState>({ show: false, message: '' })
+  const [error, setError] = useState<string | null>(null)
+
+  const { action, cp, conversation } = actionData
+  const payload = action.payload as Record<string, unknown> | null
+  const location = payload?.location as string | null
+  const isOnline = !!payload?.is_online
+  const holdStart = payload?.start as string | undefined
+  const holdEnd = payload?.end as string | undefined
+  const cpName = cp.name || cp.primary_identifier
+
+  const formatSlot = () => {
+    if (!holdStart || !holdEnd) return null
+    const start = new Date(holdStart)
+    const end = new Date(holdEnd)
+    const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })
+    const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+    const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false })
+    return `${dateStr}, ${startStr} - ${endStr}`
+  }
+
+  async function handleUpdateInvite() {
+    setSaving(true)
+    try {
+      // Save edit notes, then re-execute to update the calendar event
+      const saveRes = await fetch(`/api/action/${actionId}/draft`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, notes }),
+      })
+      if (!saveRes.ok) {
+        const err = await saveRes.json()
+        throw new Error(err.error || 'Failed to save changes')
+      }
+
+      const execRes = await fetch(`/api/action/${actionId}/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, update: true }),
+      })
+      if (!execRes.ok) {
+        const err = await execRes.json()
+        throw new Error(err.error || 'Failed to update invite')
+      }
+
+      setSuccess({
+        show: true,
+        message: 'Pozvánka aktualizována!',
+        subMessage: `Aktualizovaná pozvánka odeslána pro ${cpName}.`,
+      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update')
+      setSaving(false)
+    }
+  }
+
+  if (success.show) {
+    return <SuccessOverlay message={success.message} subMessage={success.subMessage} />
+  }
+  if (error) return <ErrorDisplay message={error} />
+
+  const slot = formatSlot()
+
+  return (
+    <Card style={{ width: '100%', maxWidth: '672px', margin: '0 auto' }}>
+      <div style={{ padding: `${theme.spacing.lg} ${theme.spacing.lg} ${theme.spacing.sm}` }}>
+        <div style={{
+          display: 'inline-block',
+          padding: '4px 12px',
+          backgroundColor: theme.colors.successBg,
+          color: theme.colors.success,
+          borderRadius: theme.borderRadius.md,
+          fontSize: theme.typography.sizes.xs,
+          fontWeight: theme.typography.weights.medium,
+          marginBottom: theme.spacing.sm,
+        }}>
+          Pozvánka odeslána
+        </div>
+        <h2 style={{ fontSize: theme.typography.sizes.lg, fontWeight: theme.typography.weights.semibold, color: theme.colors.text }}>
+          {cpName}
+        </h2>
+        {conversation.topic && (
+          <p style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, marginTop: '2px' }}>{conversation.topic}</p>
+        )}
+      </div>
+
+      {/* Current invite details */}
+      <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}`, display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+        {slot && (
+          <div style={{ fontSize: theme.typography.sizes.sm }}>
+            <span style={{ color: theme.colors.textMuted }}>Termín: </span>
+            <span style={{ color: theme.colors.text }}>{slot}</span>
+          </div>
+        )}
+        <div style={{ fontSize: theme.typography.sizes.sm }}>
+          <span style={{ color: theme.colors.textMuted }}>Místo: </span>
+          {isOnline
+            ? <span style={{ color: theme.colors.success, fontWeight: 500 }}>Online (Google Meet)</span>
+            : location
+              ? <span style={{ color: theme.colors.text }}>{location}</span>
+              : <span style={{ color: theme.colors.textMuted }}>Neuvedeno</span>
+          }
+        </div>
+      </div>
+
+      {/* Edit section */}
+      {editOpen ? (
+        <div style={{
+          margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
+          padding: theme.spacing.md,
+          backgroundColor: theme.colors.secondary,
+          borderRadius: theme.borderRadius.md,
+          border: `1px solid ${theme.colors.border}`,
+        }}>
+          <p style={{
+            fontSize: theme.typography.sizes.xs,
+            fontWeight: theme.typography.weights.medium,
+            color: theme.colors.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            marginBottom: theme.spacing.sm,
+          }}>
+            Co chcete změnit?
+          </p>
+          <Textarea
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            rows={3}
+            placeholder={'např. "Přesuň na 14:00" nebo "Změň místo na Kavárna Slavia"'}
+          />
+          <div style={{ display: 'flex', gap: theme.spacing.sm, marginTop: theme.spacing.sm }}>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleUpdateInvite}
+              loading={saving}
+              disabled={!notes.trim()}
+            >
+              Aktualizovat pozvánku
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => { setEditOpen(false); setNotes('') }}
+            >
+              Zrušit
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      <div style={{
+        padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+        borderTop: `1px solid ${theme.colors.border}`,
+      }}>
+        <Button
+          variant="secondary"
+          onClick={() => setEditOpen(!editOpen)}
+        >
+          Upravit pozvánku
         </Button>
       </div>
     </Card>

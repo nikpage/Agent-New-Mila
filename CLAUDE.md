@@ -240,7 +240,7 @@ Four independent terms — each measures a different dimension, no cross-contami
 | `sellerMultiplier` | default 1 | Applied AFTER log. From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
 | `urgency` | 1-10 | AI-assessed, safe default 1 |
 | `daysIgnored` | 0+ | Days since last activity (squared: day 3 = 9, day 7 = 49) |
-| `weight` | 1-10 or 100 | How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable (court date, kids concert, airport pickup). No values between 10-100. |
+| `weight` | 1-10 or 100 | How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable (court date, kids concert, airport pickup). No values between 10-100. **NEVER null** — always has a value. Do not add null guards for weight. |
 
 Safe defaults: `urgency`, `sellerMultiplier` fallback to 1 if 0/null (prevents score collapse). `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue (falls back to kcLowValue × 10).
 
@@ -357,6 +357,7 @@ When a new meeting conflicts with existing events:
 - **New score > existing score** → `recommendation: 'move_existing'`
 - **New score ≤ existing score** → `recommendation: 'suggest_alternate'`
 - **User-created events default weight = 100** (treated as immovable)
+- **Weight is NEVER null** — every event has a weight value. Do not add null guards for weight
 - Conflict resolution handles rare conflicts with confirmed events — separate from batch optimization
 
 ### Calendar Invitations

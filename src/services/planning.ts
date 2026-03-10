@@ -176,6 +176,22 @@ export async function generateActionProposal(
             preferredDate = new Date(proposal.suggestedTime)
             if (isNaN(preferredDate.getTime())) {
               preferredDate = undefined
+            } else {
+              // Bounds check: if preferredDate is in the past, ignore it
+              const now = new Date()
+              if (preferredDate.getTime() < now.getTime() - 86400000) {
+                console.warn(`[planning] suggestedTime ${proposal.suggestedTime} is in the past, ignoring`)
+                preferredDate = undefined
+              }
+              // Safety net: if urgency is high (≥7) and suggestedTime is >14 days out,
+              // the AI likely hallucinated — ignore it and search from tomorrow
+              if (preferredDate && proposal.urgency >= 7) {
+                const daysOut = (preferredDate.getTime() - now.getTime()) / 86400000
+                if (daysOut > 14) {
+                  console.warn(`[planning] suggestedTime ${proposal.suggestedTime} is ${Math.round(daysOut)} days out but urgency=${proposal.urgency}, ignoring`)
+                  preferredDate = undefined
+                }
+              }
             }
           } catch {
             preferredDate = undefined

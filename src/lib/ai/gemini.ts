@@ -200,10 +200,19 @@ export async function proposeAction(
     ? 'HIGH-VALUE DEAL DETECTED — this conversation matches high-value signals. Prioritize accordingly and estimate dollar value carefully.'
     : ''
 
+  const now = new Date()
+  const tz = settings.timezone || 'Europe/Prague'
+  const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz })
+  const timeStr = now.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+  const isoDate = now.toISOString().split('T')[0]
+
   const prompt = `${systemContext}
 
 ${channelNote}
 ${highValueNote}
+
+TODAY'S DATE: ${todayStr} (${isoDate}), current time: ${timeStr}, timezone: ${tz}
+Use this to resolve relative dates: "tomorrow" = ${new Date(now.getTime() + 86400000).toISOString().split('T')[0]}, "next week" = week of ${new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0]}.
 
 You are Mila, a proactive executive assistant. Based on this conversation, determine what action to take.
 
