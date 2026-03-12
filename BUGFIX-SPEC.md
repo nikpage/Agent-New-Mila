@@ -69,32 +69,56 @@ A CP-stated meeting time (e.g. "9am tomorrow") can end up with the hold event at
 
 ---
 
-## BUG 3 — Batch optimizer is dead code
+## BUG 3 — Double-booked meetings / scheduling race condition
 
 ### Problem
-`optimizeScheduleActions()` exists in `scheduling.ts:676-802`, is exported, has 7 passing tests, but is NEVER called from production code. Meetings scheduled in the same planning batch (concurrency of 5) each call `proposeMeeting()` independently and don't see each other's holds. This caused an unrelated meeting to be scheduled at 10:05am — only 5 minutes after another meeting — violating the 15-minute `meeting_buffer_minutes`.
+Meetings are double-booked because `generateActionProposal()` in planning.ts calls `proposeMeeting()` during the planning step. Planning runs up to 5 conversations in parallel — each SCHEDULE action independently finds free slots and creates holds. Two parallel tasks see the same slot as free before either creates a hold. Result: two holds at 11:15, 5-minute gap, buffer violated.
+
+Meanwhile, `optimizeScheduleActions()` — the batch optimizer designed to handle all scheduling in one pass — exists, is tested, but is never called. Even after wiring it into `sendMorningBrief`, it can't fix holds already created during planning (it skips actions that have `hold_event_id`).
+
+### Root cause
+Planning should NOT create holds. Scheduling is a group-level batch operation that happens once, at brief time, via the optimizer. The `proposeMeeting()` call inside `generateActionProposal()` should never have been there.
 
 ### Fix
 
+**File: `src/services/planning.ts` — `generateActionProposal()`**
+
+1. **Remove the `proposeMeeting()` call** and all scheduling logic from `generateActionProposal()` (the entire `if (proposal.actionType === 'SCHEDULE')` block that calls `proposeMeeting`). Planning creates SCHEDULE actions with NO hold. Store the AI's scheduling context in the action payload instead:
+   - `suggestedTime` (raw string from AI — the CP-stated time)
+   - `suggestedLocation` (from AI or CP record)
+   - `cp_availability` (from AI — e.g. "Tuesday afternoon", "tomorrow 9am")
+   - `duration` (from settings or AI)
+   - Do NOT call `proposeMeeting`, `blockSlotForProposal`, or `generateSchedulingIntent` here.
+   - The `intent_cs` stays as the AI's raw intent — no scheduling details baked in yet.
+
 **File: `src/services/morning-brief.ts` — `sendMorningBrief()`**
 
-1. Import `optimizeScheduleActions` from `@/services/scheduling`
-2. Call `optimizeScheduleActions(userId)` BEFORE building the `briefActions` array (after line 48, before line 60)
-3. The optimizer's `OptimizeResult.holds` and `moveSuggestions` should inform the brief rendering
+2. **Call `optimizeScheduleActions(userId)`** BEFORE building the `briefActions` array. This is where ALL slot selection happens — one pass, priority-ordered, buffer-aware, no race condition.
+
+3. After the optimizer runs, it must **update each SCHEDULE action's payload** with the hold info (`hold_event_id`, `start`, `end`, `location`, `conflicts`) and **rewrite `intent_cs`** via `generateSchedulingIntent()` with the actual slot text. This way the action card always matches the hold.
 
 **File: `src/services/scheduling.ts` — `optimizeScheduleActions()`**
 
-4. **Skip already-scheduled actions:** Check if action's `payload.hold_event_id` exists. If it does, the action was already scheduled during planning — skip it in the optimizer. Don't create a second hold.
+4. The optimizer now handles ALL SCHEDULE actions (no `hold_event_id` filter needed — none will have holds).
 
-5. **Fix stale slot list:** Currently `findBestSlots()` is called once at the top (line 692). As holds are created in the loop, subsequent iterations don't know about them. Fix: either re-query after each hold, or maintain a local list of booked time ranges and filter against it.
+5. **Read `cp_availability` and `suggestedTime` from action payload** to respect CP-stated times as hard constraints. If CP said "9am", book at 9am and report the conflict — don't pick a different slot.
 
-6. **Fix buffer-blind dedup:** `usedSlotTimes` (line 695) is a Set of ISO start-time strings. It only prevents exact same-start collisions, NOT buffer violations. Replace with a list of booked time ranges `{ start: Date, end: Date }`. Before booking a new slot, check that it doesn't overlap with any booked range AND respects `meeting_buffer_minutes` on both sides.
+6. **Buffer enforcement** stays as implemented: `bookedRanges` with `meeting_buffer_minutes` on both sides.
+
+7. After creating each hold, **update the action record** in the DB with the hold info and rewritten `intent_cs`.
+
+### Design principle
+- **Planning** decides WHAT: "this conversation needs a meeting"
+- **Optimizer** decides WHEN: assigns slots in one batch pass at brief time
+- The action card text is written by the optimizer, not planning — so it always matches the actual hold
 
 ### Test impact
-- Existing 7 tests in `scheduling.test.ts` cover the optimizer logic
-- Add test: action with existing `hold_event_id` in payload is skipped by optimizer
+- Remove/update tests that expect `proposeMeeting` to be called from `generateActionProposal`
+- Add test: SCHEDULE action created by planning has NO `hold_event_id`
+- Add test: optimizer assigns slots to all SCHEDULE actions, no double-booking
 - Add test: two meetings in same batch respect `meeting_buffer_minutes` gap
-- Add integration-level test: `sendMorningBrief` calls `optimizeScheduleActions` before building brief
+- Add test: CP-stated time is respected — optimizer books at that time even on conflict
+- Existing 7 optimizer tests in `scheduling.test.ts` should still pass (may need adjustment for payload reading)
 
 ---
 
