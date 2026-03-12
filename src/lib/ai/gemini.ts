@@ -202,17 +202,15 @@ export async function proposeAction(
     ? 'HIGH-VALUE DEAL DETECTED — this conversation matches high-value signals. Prioritize accordingly and estimate dollar value carefully.'
     : ''
 
-<<<<<<< HEAD
   const now = new Date()
   const tz = settings.timezone || 'Europe/Prague'
   const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz })
   const timeStr = now.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
   const isoDate = now.toISOString().split('T')[0]
-=======
+
   const classificationNote = classificationPriority
     ? `EMAIL CLASSIFICATION PRIORITY: ${classificationPriority.toUpperCase()} — this was pre-classified as ${classificationPriority} priority during ingestion. Use this as a starting anchor for your urgency assessment.`
     : ''
->>>>>>> claude/fix-scheduling-system-IiqBC
 
   const prompt = `${systemContext}
 
