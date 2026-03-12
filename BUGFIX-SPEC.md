@@ -28,8 +28,8 @@ Use urgency alone for instant notification eligibility.
 
 **No other files affected.** The downstream email template, `markActionsInstantNotified`, and `queued_for_brief = true` behavior all stay the same.
 
-### Test impact
-- Update any test that references the old threshold value or parameter name
+### Test rules
+- The pinning test MUST `import` the actual constant from the source module and assert against a hardcoded value. Example: `import { DEFAULT_INSTANT_URGENCY_THRESHOLD } from './morning-brief'` then `expect(DEFAULT_INSTANT_URGENCY_THRESHOLD).toBe(9)`. NEVER test a local variable against itself — that pins nothing.
 - Add a test: urgency=9 action IS picked up; urgency=8 action is NOT
 
 ---
@@ -125,6 +125,31 @@ Tests that already use hardcoded values (weight=100 → 101, daysIgnored → 1/2
 
 ### IMPORTANT
 This must be done BEFORE changing the formula. Pin the current values first. Then when the formula changes, the pins will catch it and Nik approves the new values.
+
+---
+
+## GLOBAL TEST RULE — applies to ALL pinning tests in this project
+
+Every pinning test MUST import the real value from the source module and assert it against a hardcoded literal. No helper functions that mirror the implementation. No local variables that duplicate the value. The test must break if the source value changes.
+
+**Correct:**
+```typescript
+import { DEFAULT_INSTANT_URGENCY_THRESHOLD } from './morning-brief'
+expect(DEFAULT_INSTANT_URGENCY_THRESHOLD).toBe(9)
+```
+
+**Wrong:**
+```typescript
+const EXPECTED_THRESHOLD = 9
+expect(EXPECTED_THRESHOLD).toBe(9)  // tests nothing — always passes
+```
+
+This rule applies to all four pinning test files:
+- `src/lib/db/actions.test.ts`
+- `src/services/lead-tracking.test.ts`
+- `src/services/threading.test.ts`
+- `src/lib/supabase/defaults.test.ts`
+- `src/services/morning-brief.test.ts`
 
 ---
 
