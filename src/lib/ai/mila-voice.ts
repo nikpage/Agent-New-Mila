@@ -23,34 +23,43 @@ export async function generateSchedulingIntent(
   },
   cpName: string,
   urgency: number,
+  rationale: string,
+  dollarValue: number,
+  recentContext: string,
   settings: UserSettings
 ): Promise<{ intent_cs: string; missingInfo: { label: string; value: null }[] }> {
-  const prompt = `You are Mila, a proactive executive assistant. Rewrite this scheduling intent incorporating the scheduling details below. Keep the original context and add the slot/conflict/location info naturally.
+  const prompt = `You are Mila, a proactive executive assistant. Write an intent_cs for a SCHEDULE action card that will appear in the user's morning brief email.
 
 TONE: ${settings.ai_tone_user}
-Urgency is ${urgency}/10. Adjust your tone — 9-10 is house on fire, 1-3 is routine.
 
-ORIGINAL INTENT:
-${originalIntent}
+CRITICAL — URGENCY HANDLING:
+Urgency is ${urgency}/10.
+- 9-10: THIS IS A CRISIS. Lead with the deadline or consequence. Name what the user will lose if they don't act NOW. Be direct, sharp, no pleasantries.
+- 7-8: Significant pressure. Mention the time sensitivity and stakes clearly.
+- 4-6: Standard professional. Note the meeting details clearly.
+- 1-3: Routine. Brief and calm.
+
+BUSINESS CONTEXT:
+- Why this matters: ${rationale}
+- Deal value: ${dollarValue > 0 ? `${dollarValue.toLocaleString()} ${settings.typical_deal_size_currency}` : 'unknown'}
+- Recent conversation: ${recentContext}
 
 COUNTERPARTY: ${cpName}
 
-SCHEDULING DETAILS:
-- Has hold in calendar: ${scheduling.hasHold}
-- Slot: ${scheduling.slotText || 'No free slot found'}
-- Has conflicts: ${scheduling.hasConflicts}
-${scheduling.conflicts?.length ? `- Conflicts: ${scheduling.conflicts.map(c => `${c.name} (${c.recommendation})`).join(', ')}` : ''}
-- Location status: ${scheduling.locationStatus || 'unknown'}
-${scheduling.locationText ? `- Location: ${scheduling.locationText}` : ''}
+WHAT MILA HAS DONE:
+- Original plan: ${originalIntent}
+- Slot booked: ${scheduling.hasHold ? scheduling.slotText : 'NO FREE SLOT FOUND'}
+${scheduling.conflicts?.length ? `- Calendar conflicts: ${scheduling.conflicts.map(c => `${c.name} (${c.recommendation === 'move_existing' ? 'can be moved' : 'IMMOVABLE'})`).join(', ')}` : '- No conflicts'}
+- Location: ${scheduling.locationStatus === 'confirmed' ? scheduling.locationText : scheduling.locationStatus === 'partial' ? `${scheduling.locationText} (unverified)` : 'not specified'}
 
 RULES:
 - Output in CZECH. Plain text only. No markdown.
 - Address user as "vy" (you). Never "uživatel".
-- intent_cs: describe what Mila HAS DONE and what she WILL DO when user clicks UDĚLAT. Be specific.
-- missingInfo: array of questions for the user. Each item has "label" (full question in Czech) and "value": null.
-${scheduling.locationStatus === 'missing' ? '- Location is missing — include a question about meeting location in missingInfo.' : ''}
-${scheduling.locationStatus === 'partial' ? '- Location could not be verified — include a question to clarify the location in missingInfo.' : ''}
-${!scheduling.hasHold ? '- No free slot was found — include a question asking for preferred meeting time in missingInfo.' : ''}
+- intent_cs: Combine the business stakes with the scheduling details. A human assistant wouldn't just say "I blocked a slot" — she'd say "Novotný needs signature by 5pm or the deal falls through. I blocked 9:00 at the notary."
+- missingInfo: array of questions. Each has "label" (full question in Czech) and "value": null.
+${scheduling.locationStatus === 'missing' ? '- Location is missing — include a question about meeting location.' : ''}
+${scheduling.locationStatus === 'partial' ? '- Location unverified — include a question to clarify.' : ''}
+${!scheduling.hasHold ? '- No slot found — include a question asking for preferred time.' : ''}
 
 Respond with ONLY valid JSON:
 {
@@ -126,7 +135,7 @@ export async function generateBriefIntro(
   briefType: 'morning' | 'afternoon',
   actionCount: number,
   events: { title: string; time: string }[],
-  pendingActions: { type: string; cpName: string; urgency: number }[],
+  pendingActions: { type: string; cpName: string; urgency: number; intent: string; dollarValue: number }[],
   settings: UserSettings
 ): Promise<{ greeting: string; subject: string; headline: string }> {
   const eventsText = events.length > 0
@@ -135,7 +144,7 @@ export async function generateBriefIntro(
   const actionsText = pendingActions
     .sort((a, b) => b.urgency - a.urgency)
     .slice(0, 5)
-    .map(a => `${a.type} for ${a.cpName} (urgency: ${a.urgency})`)
+    .map(a => `${a.type} for ${a.cpName} (urgency: ${a.urgency}/10${a.dollarValue > 0 ? `, value: ${a.dollarValue.toLocaleString()}` : ''}): ${a.intent}`)
     .join('\n')
 
   const prompt = `You are Mila writing a ${briefType} brief email. Generate a greeting, email subject line, and a 2-3 sentence headline.
@@ -153,7 +162,7 @@ RULES:
 - Address user as "vy" (you). Never "uživatel".
 - greeting: a natural ${briefType === 'morning' ? 'morning' : 'afternoon'} greeting. Do NOT hardcode — let it be natural.
 - subject: concise email subject. Include action count naturally.
-- headline: 2-3 sentence summary of what matters today. Be warm but professional.
+- headline: 2-3 sentences. Lead with the MOST URGENT item — if there's an urgency 9-10 action, that dominates the headline, not the calendar. A human assistant wouldn't mention swimming when the house is on fire.
 
 Respond with ONLY valid JSON:
 {
@@ -174,7 +183,7 @@ Respond with ONLY valid JSON:
  */
 export async function generateUrgentIntro(
   actionCount: number,
-  topAction: { cpName: string; urgency: number; actionType: string },
+  topAction: { cpName: string; urgency: number; actionType: string; intent: string; dollarValue: number },
   settings: UserSettings
 ): Promise<{ subject: string; header: string; body: string }> {
   const prompt = `You are Mila sending an urgent notification email. Generate an email subject, header text, and a one-sentence body.
@@ -185,6 +194,8 @@ This is high-priority — urgency score exceeded threshold. Tone should reflect 
 DETAILS:
 - Number of urgent actions: ${actionCount}
 - Top action: ${topAction.actionType} for ${topAction.cpName} (urgency: ${topAction.urgency}/10)
+- What needs attention: ${topAction.intent}
+- Deal value: ${topAction.dollarValue > 0 ? `${topAction.dollarValue.toLocaleString()}` : 'unknown'}
 
 RULES:
 - Output in CZECH. Plain text only. No markdown.

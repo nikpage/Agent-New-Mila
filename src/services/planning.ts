@@ -249,6 +249,9 @@ export async function generateActionProposal(
             },
             cp.name || cp.primary_identifier,
             proposal.urgency,
+            proposal.rationale_cs,
+            proposal.dollarValue,
+            formattedMessages.slice(-2).map(m => m.text).join(' | '),
             settings
           )
 
@@ -289,6 +292,9 @@ export async function generateActionProposal(
             },
             cp.name || cp.primary_identifier,
             proposal.urgency,
+            proposal.rationale_cs,
+            proposal.dollarValue,
+            formattedMessages.slice(-2).map(m => m.text).join(' | '),
             settings
           )
           proposal.intent_cs = voiceResult.intent_cs
@@ -307,6 +313,9 @@ export async function generateActionProposal(
           },
           cp.name || cp.primary_identifier,
           proposal.urgency,
+          proposal.rationale_cs,
+          proposal.dollarValue,
+          formattedMessages.slice(-2).map(m => m.text).join(' | '),
           settings
         )
         proposal.intent_cs = voiceResult.intent_cs

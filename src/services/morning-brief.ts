@@ -109,6 +109,8 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
           type: b.action.action_type,
           cpName: b.cpName,
           urgency: b.action.urgency,
+          intent: b.action.intent_cs || b.action.rationale_cs || b.action.rationale || '',
+          dollarValue: b.action.dollar_value || 0,
         })),
         await getUserSettings(userId)
       )
@@ -376,7 +378,7 @@ async function sendInstantNotificationForUser(
       const topAction = briefActions[0]
       const intro = await generateUrgentIntro(
         briefActions.length,
-        { cpName: topAction.cpName, urgency: topAction.action.urgency, actionType: topAction.action.action_type },
+        { cpName: topAction.cpName, urgency: topAction.action.urgency, actionType: topAction.action.action_type, intent: topAction.action.intent_cs || topAction.action.rationale_cs || '', dollarValue: topAction.action.dollar_value || 0 },
         settings
       )
       urgentSubject = intro.subject
