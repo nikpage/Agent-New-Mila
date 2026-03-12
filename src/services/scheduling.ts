@@ -688,14 +688,36 @@ export async function optimizeScheduleActions(
 
   if (actions.length === 0) return result
 
+  // Skip actions that already have a hold from planning — don't create duplicates
+  const unscheduledActions = actions.filter(a => {
+    const payload = a.payload as Record<string, unknown> | null
+    return !payload?.hold_event_id
+  })
+
+  if (unscheduledActions.length === 0) return result
+
+  const bufferMinutes = settings.meeting_buffer_minutes ?? 15
+
   // Get all free slots for the next 14 days (enough to schedule all meetings)
   const allSlots = await findBestSlots(userId, settings.default_meeting_duration, 50)
 
-  // Track which slots we've consumed (each hold blocks a slot)
-  const usedSlotTimes = new Set<string>()
+  // Track booked time ranges (respects buffer on both sides)
+  const bookedRanges: { start: Date; end: Date }[] = []
+
+  function isSlotAvailable(slot: SlotProposal): boolean {
+    for (const booked of bookedRanges) {
+      const bufferMs = bufferMinutes * 60 * 1000
+      // Slot must not overlap with booked range + buffer on both sides
+      if (slot.start.getTime() < booked.end.getTime() + bufferMs &&
+          slot.end.getTime() > booked.start.getTime() - bufferMs) {
+        return false
+      }
+    }
+    return true
+  }
 
   // Sort actions by priority so highest-priority meetings get first pick
-  const sortedActions = [...actions].sort(
+  const sortedActions = [...unscheduledActions].sort(
     (a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0)
   )
 
@@ -705,9 +727,7 @@ export async function optimizeScheduleActions(
     const meetingLocation = (payload?.location as string) || null
 
     // Filter available slots (not yet consumed by earlier meetings in this batch)
-    const availableSlots = allSlots.filter(
-      s => !usedSlotTimes.has(s.start.toISOString())
-    )
+    const availableSlots = allSlots.filter(s => isSlotAvailable(s))
 
     if (availableSlots.length === 0) {
       result.unscheduled++
@@ -729,7 +749,7 @@ export async function optimizeScheduleActions(
     // Priority 3: Travel optimization — pick slot closest to other meetings' locations
     if (meetingLocation && candidateSlots.length > 1) {
       candidateSlots = await rankSlotsByTravel(
-        userId, candidateSlots, meetingLocation, usedSlotTimes, settings
+        userId, candidateSlots, meetingLocation, bookedRanges, settings
       )
     }
 
@@ -750,7 +770,7 @@ export async function optimizeScheduleActions(
         if (holdResult.success && holdResult.holdEvent) {
           result.optimized++
           result.holds.push(holdResult.holdEvent)
-          usedSlotTimes.add(slot.start.toISOString())
+          bookedRanges.push({ start: slot.start, end: slot.end })
           scheduled = true
           break
         }
@@ -778,7 +798,7 @@ export async function optimizeScheduleActions(
           if (holdResult.success && holdResult.holdEvent) {
             result.optimized++
             result.holds.push(holdResult.holdEvent)
-            usedSlotTimes.add(slot.start.toISOString())
+            bookedRanges.push({ start: slot.start, end: slot.end })
             for (const conflict of conflicts) {
               result.moveSuggestions.push({
                 existingEventId: conflict.id,
@@ -854,7 +874,7 @@ async function rankSlotsByTravel(
   userId: string,
   slots: SlotProposal[],
   meetingLocation: string,
-  usedSlotTimes: Set<string>,
+  _bookedRanges: { start: Date; end: Date }[],
   settings: UserSettings
 ): Promise<SlotProposal[]> {
   // Score each slot by travel time from the previous event

@@ -221,6 +221,17 @@ export async function generateActionProposal(
           const hold = schedulingResult.holdEvent
           const start = new Date(hold.start_time)
           const end = new Date(hold.end_time)
+
+          // BUG 2 FIX: Verify hold matches preferredDate — CP-stated time is a hard constraint
+          if (preferredDate) {
+            const holdStart = start.getTime()
+            const preferred = preferredDate.getTime()
+            if (Math.abs(holdStart - preferred) > 60_000) {
+              // Hold is at a different time than CP stated — this is a code bug
+              console.error(`[planning] HOLD TIME MISMATCH: preferredDate=${preferredDate.toISOString()} but hold.start_time=${hold.start_time}. CP-stated time must be respected.`)
+            }
+          }
+
           const tz = 'Europe/Prague'
           const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
           const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
@@ -257,6 +268,12 @@ export async function generateActionProposal(
 
           proposal.intent_cs = voiceResult.intent_cs
           proposal.missingInfo = voiceResult.missingInfo
+
+          // BUG 2 FIX: Verify intent contains the hold time — if AI dropped it, force-include
+          if (!proposal.intent_cs.includes(startStr)) {
+            console.warn(`[planning] Intent missing hold time ${startStr}, appending slot text`)
+            proposal.intent_cs = proposal.intent_cs + '\n\nTermín: ' + slotText
+          }
 
           // Keep the urgency boost for immovable conflicts
           const hasImmovableConflict = schedulingResult.conflicts?.some(

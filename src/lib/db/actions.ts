@@ -254,12 +254,16 @@ export async function markActionsNotified(actionIds: string[]): Promise<void> {
 }
 
 /**
- * Get high-priority actions that haven't been instant-notified yet.
- * Returns actions across all users where priority_score > threshold,
+ * Get high-urgency actions that haven't been instant-notified yet.
+ * Returns actions across all users where urgency >= threshold,
  * status is pending, and last_notified_at is NULL (never sent).
+ *
+ * Uses urgency (AI-assessed immediate pressure) instead of priority_score
+ * because priority_score includes daysIgnored² which makes it unreachable
+ * on day 0 — exactly when urgent items need instant notification.
  */
 export async function getHighPriorityUnnotifiedActions(
-  threshold: number = 79
+  urgencyThreshold: number = 9
 ): Promise<ActionProposal[]> {
   const supabase = getSupabaseAdmin()
   const { data, error } = await supabase
@@ -268,7 +272,7 @@ export async function getHighPriorityUnnotifiedActions(
     .eq('status', 'pending')
     .eq('queued_for_brief', true)
     .is('last_notified_at', null)
-    .gt('priority_score', threshold)
+    .gte('urgency', urgencyThreshold)
     .in('action_type', ['REPLY', 'SCHEDULE', 'TODO'])
     .order('priority_score', { ascending: false })
 

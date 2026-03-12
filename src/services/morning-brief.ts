@@ -10,6 +10,7 @@ import { getConversationById } from '@/lib/db/conversations'
 import { getEventsForToday } from '@/lib/db/events'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefIntro, generateUrgentIntro } from '@/lib/ai/mila-voice'
+import { optimizeScheduleActions } from '@/services/scheduling'
 import { generateActionToken, generateTriggerToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template';
 import { theme } from '@/config/theme'
@@ -43,6 +44,17 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     if (!user || !user.email_enabled || user.email_unsubscribed) {
       console.log(`[Brief] User ${userId}: skipped — ${!user ? 'not found' : user.email_unsubscribed ? 'unsubscribed' : 'email disabled'}`)
       return false
+    }
+
+    // Run batch schedule optimizer BEFORE loading actions —
+    // re-optimizes holds, respects buffers, deduplicates across meetings
+    try {
+      const optimizeResult = await optimizeScheduleActions(userId)
+      if (optimizeResult.optimized > 0 || optimizeResult.moveSuggestions.length > 0) {
+        console.log(`[Brief] User ${user.email || userId}: optimizer — ${optimizeResult.optimized} optimized, ${optimizeResult.unscheduled} unscheduled, ${optimizeResult.moveSuggestions.length} move suggestions`)
+      }
+    } catch (optimizeError) {
+      console.error(`[Brief] User ${user.email || userId}: optimizer failed, continuing with existing holds:`, optimizeError)
     }
 
     const actions = await getPendingActionsForBrief(userId)
@@ -272,17 +284,19 @@ function generateBriefEmailText(greeting: string, headline: string, actions: Bri
 // ─── Instant High-Priority Notifications ────────────────────────────────────
 
 const INSTANT_NOTIFY_CONCURRENCY = 10
-const DEFAULT_INSTANT_THRESHOLD = 79
+const DEFAULT_INSTANT_URGENCY_THRESHOLD = 9
 
 /**
- * Poll for high-priority actions and send instant notification emails.
+ * Poll for high-urgency actions and send instant notification emails.
+ * Uses urgency (AI-assessed immediate pressure, 1-10) instead of
+ * priority_score, because priority_score is unreachable on day 0.
  * Sets last_notified_at but keeps queued_for_brief=true so the action
  * still appears in the next morning/afternoon brief if user hasn't acted.
  */
 export async function sendInstantNotifications(
-  threshold: number = DEFAULT_INSTANT_THRESHOLD
+  urgencyThreshold: number = DEFAULT_INSTANT_URGENCY_THRESHOLD
 ): Promise<{ sent: number; failed: number }> {
-  const actions = await getHighPriorityUnnotifiedActions(threshold)
+  const actions = await getHighPriorityUnnotifiedActions(urgencyThreshold)
 
   if (actions.length === 0) {
     return { sent: 0, failed: 0 }

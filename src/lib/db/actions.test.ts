@@ -1,48 +1,28 @@
 import { describe, it, expect } from 'vitest'
 import { calculatePriorityScore } from './actions'
 
-/**
- * Log-scale normalization helper (mirrors the implementation)
- * dollarValue → log compress, no clamping
- * lowValue → 2, highValue → 13
- * sellerMultiplier applied AFTER log
- */
-function expectedLogNorm(dollarValue: number, low = 500_000, high = 5_000_000): number {
-  if (dollarValue <= 0) return 0
-  const logLow = Math.log(low)
-  const logHigh = Math.log(high)
-  const logVal = Math.log(dollarValue)
-  return 2 + ((logVal - logLow) / (logHigh - logLow)) * 11
-}
-
 describe('calculatePriorityScore', () => {
   it('calculates basic score with all inputs (log-scale)', () => {
     // dollarValue=1_000_000, urgency=5, daysIgnored=2
-    // normVal = log_compress(1M) * 1 (default sellerMultiplier) ≈ 5.31
-    // score = 5.31 + 5 + 2² + 0 = 5.31 + 5 + 4 = 14.31 → 14
-    const norm = expectedLogNorm(1_000_000)
-    const expected = Math.round(norm + 5 + Math.pow(2, 2) + 0)
+    // normVal = log_compress(1M) ≈ 5.31, score = 5.31 + 5 + 4 + 0 → 14
     const score = calculatePriorityScore({
       dollarValue: 1_000_000,
       urgency: 5,
       daysIgnored: 2,
     })
-    expect(score).toBe(expected)
+    expect(score).toBe(14)
   })
 
   it('applies sellerMultiplier AFTER log normalization', () => {
-    // 3M with 1.5x multiplier: normVal = log_compress(3M) * 1.5
-    // This should NOT equal a raw 4.5M deal (that was the old pre-log behavior)
+    // 3M with 1.5x multiplier: log_compress(3M) ≈ 10.56, × 1.5 = 15.84
+    // score = 15.84 + 5 + 0 + 0 → 21
     const withMultiplier = calculatePriorityScore({
       dollarValue: 3_000_000,
       urgency: 5,
       daysIgnored: 0,
       sellerMultiplier: 1.5,
     })
-    // log_compress(3M) ≈ 10.56, × 1.5 = 15.84
-    // score = 15.84 + 5 + 0 + 0 ≈ 21
-    const normVal = expectedLogNorm(3_000_000) * 1.5
-    expect(withMultiplier).toBe(Math.round(normVal + 5))
+    expect(withMultiplier).toBe(21)
   })
 
   it('includes weight in final score', () => {
@@ -57,14 +37,13 @@ describe('calculatePriorityScore', () => {
   })
 
   it('replaces zero urgency with 1 to prevent score collapse', () => {
+    // urgency 0 → 1: log_compress(1M) ≈ 5.31 + 1 → 6
     const score = calculatePriorityScore({
       dollarValue: 1_000_000,
       urgency: 0,
       daysIgnored: 0,
     })
-    // urgency 0 → 1: norm + 1 + 0 + 0
-    const norm = expectedLogNorm(1_000_000)
-    expect(score).toBe(Math.round(norm + 1))
+    expect(score).toBe(6)
   })
 
   it('replaces zero sellerMultiplier with 1', () => {
@@ -127,8 +106,8 @@ describe('calculatePriorityScore', () => {
       urgency: 1,
       daysIgnored: 0,
     })
-    // normVal ≈ 2, score = 2 + 1 + 0 + 0 = 3
-    expect(score).toBe(Math.round(2 + 1))
+    // normVal = 2, score = 2 + 1 + 0 + 0 = 3
+    expect(score).toBe(3)
   })
 
   it('high anchor value maps to normalized ~13', () => {
@@ -138,7 +117,7 @@ describe('calculatePriorityScore', () => {
       daysIgnored: 0,
     })
     // normVal = 13, score = 13 + 1 + 0 + 0 = 14
-    expect(score).toBe(Math.round(13 + 1))
+    expect(score).toBe(14)
   })
 
   it('values above high anchor extend beyond 13 with no cap', () => {
@@ -152,13 +131,9 @@ describe('calculatePriorityScore', () => {
       urgency: 1,
       daysIgnored: 0,
     })
-    // Big deal scores > 13 (the high anchor)
-    const norm50M = expectedLogNorm(50_000_000)
-    expect(norm50M).toBeGreaterThan(13)
-    expect(bigDeal).toBe(Math.round(norm50M + 1))
-    // Huge deal scores even higher — no cap
-    const normHuge = expectedLogNorm(500_000_000_000)
-    expect(hugeDeal).toBe(Math.round(normHuge + 1))
+    // 50M → score 25, 500B → score 69
+    expect(bigDeal).toBe(25)
+    expect(hugeDeal).toBe(69)
     expect(hugeDeal).toBeGreaterThan(bigDeal)
   })
 
@@ -168,10 +143,8 @@ describe('calculatePriorityScore', () => {
       urgency: 1,
       daysIgnored: 0,
     })
-    const normTiny = expectedLogNorm(10_000)
-    // 10K is far below the 500K low anchor — normalizedValue goes negative
-    expect(normTiny).toBeLessThan(0)
-    expect(tinyDeal).toBe(Math.round(normTiny + 1))
+    // 10K is far below 500K low anchor → normVal negative → score -16
+    expect(tinyDeal).toBe(-16)
   })
 
   it('dollarValue=0 produces zero value component', () => {

@@ -41,10 +41,10 @@ describe('Morning Brief — Constants Pinning', () => {
 
 describe('Instant Notification — Constants Pinning', () => {
 
-  it('instant notify threshold should be 79', () => {
-    // DEFAULT_INSTANT_THRESHOLD in morning-brief.ts
-    const EXPECTED_THRESHOLD = 79
-    expect(EXPECTED_THRESHOLD).toBe(79)
+  it('instant notify urgency threshold should be 9', () => {
+    // DEFAULT_INSTANT_URGENCY_THRESHOLD in morning-brief.ts
+    const EXPECTED_THRESHOLD = 9
+    expect(EXPECTED_THRESHOLD).toBe(9)
   })
 
   it('instant notify concurrency should be 10', () => {
