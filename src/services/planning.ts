@@ -1,4 +1,5 @@
-import { proposeAction, generateFinalDraft } from '@/lib/ai/gemini'
+import { proposeAction } from '@/lib/ai/gemini'
+import { generateSchedulingIntent, generateFinalDraft } from '@/lib/ai/mila-voice'
 import {
   createAction,
   calculatePriorityScore,
@@ -226,46 +227,40 @@ export async function generateActionProposal(
           const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
           const slotText = `${dateStr}, ${startStr} - ${endStr}`
 
-          const hasConflicts = schedulingResult.conflicts && schedulingResult.conflicts.length > 0
+          const conflicts = schedulingResult.conflicts?.map(c => ({
+            name: c.existingEvent.title || 'existing event',
+            recommendation: c.recommendation,
+          }))
+
+          let locationStatus: 'confirmed' | 'partial' | 'missing' | null = null
+          if (!meetingLocation) locationStatus = 'missing'
+          else if (locationPartial) locationStatus = 'partial'
+          else locationStatus = 'confirmed'
+
+          const voiceResult = await generateSchedulingIntent(
+            proposal.intent_cs,
+            {
+              slotText,
+              hasConflicts: !!(conflicts && conflicts.length > 0),
+              conflicts,
+              hasHold: true,
+              locationStatus,
+              locationText: meetingLocation,
+            },
+            cp.name || cp.primary_identifier,
+            proposal.urgency,
+            settings
+          )
+
+          proposal.intent_cs = voiceResult.intent_cs
+          proposal.missingInfo = voiceResult.missingInfo
+
+          // Keep the urgency boost for immovable conflicts
           const hasImmovableConflict = schedulingResult.conflicts?.some(
             c => c.recommendation === 'suggest_alternate'
           )
-
-          if (hasConflicts && hasImmovableConflict) {
-            // Immovable conflict (W=100 or W=null) at the stated time — user must decide
-            const conflictNames = schedulingResult.conflicts!.map(c =>
-              c.existingEvent.title || 'existující událost'
-            ).join(', ')
-            proposal.intent_cs = `Schůzka s ${cpName} je požadována na ${slotText}, ale koliduje s nepřesunutelnou událostí: ${conflictNames}.\n\nZablokovala jsem čas v kalendáři. Rozhodněte, co přesunout.`
-            proposal.missingInfo = []
-            // Boost urgency so instant notification fires (score > 79)
+          if (hasImmovableConflict) {
             proposal.urgency = Math.max(proposal.urgency, 9)
-          } else if (hasConflicts) {
-            // Movable conflict (W < 100) at the stated time — suggest moving existing event
-            const conflictNote = schedulingResult.conflicts!.map(c =>
-              `${c.existingEvent.title}: navrhuji přesunout`
-            ).join('; ')
-            proposal.intent_cs = `Zablokovala jsem požadovaný termín pro schůzku s ${cpName} ve vašem kalendáři:\n${slotText}\n\nKonflikty: ${conflictNote}`
-            proposal.missingInfo = []
-          } else {
-            // No conflicts — clean booking
-            const ctaLine = meetingLocation && !locationPartial
-              ? `\n\nKlikněte na UDĚLAT a já odešlu ${cpName} pozvánku.`
-              : `\n\nDoplňte místo schůzky přes UPRAVIT (nebo zvolte Online).`
-            proposal.intent_cs = `Navrhla jsem optimální termín pro schůzku s ${cpName} a zablokovala ho ve vašem kalendáři:\n${slotText}${ctaLine}`
-            proposal.missingInfo = []
-          }
-
-          if (!meetingLocation) {
-            proposal.missingInfo.push({
-              label: 'Kde se má schůzka konat? (adresa)',
-              value: null,
-            })
-          } else if (locationPartial) {
-            proposal.missingInfo.push({
-              label: 'Upřesněte místo schůzky — nelze ověřit (adresa)',
-              value: null,
-            })
           }
 
           schedulingPayload = {
@@ -283,17 +278,39 @@ export async function generateActionProposal(
             })),
           }
         } else {
-          proposal.missingInfo.push({
-            label: schedulingResult.error || 'V nejbližších 14 dnech nejsou volné termíny v pracovní době. Napište preferovaný čas.',
-            value: null,
-          })
+          // No hold — no free slots found
+          const voiceResult = await generateSchedulingIntent(
+            proposal.intent_cs,
+            {
+              slotText: '',
+              hasConflicts: false,
+              hasHold: false,
+              locationStatus: null,
+            },
+            cp.name || cp.primary_identifier,
+            proposal.urgency,
+            settings
+          )
+          proposal.intent_cs = voiceResult.intent_cs
+          proposal.missingInfo = voiceResult.missingInfo
         }
       } catch (calendarError) {
         console.error('Failed to run scheduling service:', calendarError)
-        proposal.missingInfo.push({
-          label: 'Kdy byste chtěl/a se sejít? (Napište preferovaný čas)',
-          value: null,
-        })
+        // Calendar service failed — let AI handle it
+        const voiceResult = await generateSchedulingIntent(
+          proposal.intent_cs,
+          {
+            slotText: '',
+            hasConflicts: false,
+            hasHold: false,
+            locationStatus: null,
+          },
+          cp.name || cp.primary_identifier,
+          proposal.urgency,
+          settings
+        )
+        proposal.intent_cs = voiceResult.intent_cs
+        proposal.missingInfo = voiceResult.missingInfo
       }
     }
 

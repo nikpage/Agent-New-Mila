@@ -83,7 +83,8 @@ src/
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
 │   ├── supabase/               # Client + types (types.ts = 804 lines)
 │   ├── ai/
-│   │   ├── gemini.ts           # AI functions (preFilter, classify, enrichMessage, proposeAction, generateFinalDraft, etc.)
+│   │   ├── gemini.ts           # AI functions (preFilter, classify, enrichMessage, proposeAction, etc.)
+│   │   ├── mila-voice.ts       # Centralized Mila text generation — ALL user-facing + CP-facing text
 │   │   ├── runner.ts           # runAITask() with 3-model fallback + 429 retry
 │   │   └── providers/          # gemini.ts (multi-key rotation), anthropic.ts, types.ts, index.ts
 │   ├── qstash/
@@ -261,7 +262,7 @@ Safe defaults: `urgency`, `sellerMultiplier` fallback to 1 if 0/null (prevents s
 | `threading` | extractTopic, shouldJoinConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` |
 | `analysis` | analyzeConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` |
 | `planning` | proposeAction (type, rationale, intent) | `gemini-2.5-flash` → `claude-sonnet-4-6` |
-| `drafting` | generateFinalDraft, generateBriefHeadline | `gemini-2.5-flash` → `claude-sonnet-4-6` |
+| `drafting` | All mila-voice.ts functions (generateFinalDraft, generateBriefIntro, generateSchedulingIntent, generateLeadFollowUpIntent, generateUrgentIntro) | `gemini-2.5-flash` → `claude-sonnet-4-6` |
 
 **Rate limit handling:** On 429/RESOURCE_EXHAUSTED errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
 
@@ -368,6 +369,34 @@ When a new meeting conflicts with existing events:
 - Personal events (matching `isPersonalEvent(title, settings)`) **block time** but **do NOT generate action proposals**
 - Detection in `calendar-ingestion.ts`
 
+## Mila Voice — Centralized Text Generation
+
+**Module:** `src/lib/ai/mila-voice.ts` — single source of truth for ALL text Mila produces, both user-facing and CP-facing.
+
+### Mila → User (uses `settings.ai_tone_user`)
+| Function | Replaces | Purpose |
+|----------|----------|---------|
+| `generateSchedulingIntent()` | Hardcoded overwrites in planning.ts | Rewrites AI's intent_cs with scheduling details (slot, conflicts, location) baked in. Tone scales with urgency |
+| `generateLeadFollowUpIntent()` | Hardcoded templates in lead-tracking.ts | Generates intent_cs + rationale_cs for cooling/cold/dead leads |
+| `generateBriefIntro()` | Hardcoded greeting/subject in morning-brief.ts | Returns `{ greeting, subject, headline }` for morning/afternoon briefs |
+| `generateUrgentIntro()` | Hardcoded urgent strings in morning-brief.ts | Returns `{ subject, header, body }` for instant high-priority notifications |
+
+### Mila → CP (uses `settings.ai_tone_cp`)
+| Function | Replaces | Purpose |
+|----------|----------|---------|
+| `generateFinalDraft()` | Was in gemini.ts | CP-facing email/WhatsApp draft, on-demand at execution time |
+
+### Urgency-aware tone
+All user-facing functions receive urgency level. The AI adjusts tone accordingly:
+- Urgency 9-10: direct, bold, conveys time pressure
+- Urgency 4-8: standard professional
+- Urgency 1-3: calm, routine
+
+### Tone settings (in UserSettings)
+- `ai_tone_user` — how Mila talks TO the user (default: "professional and concise")
+- `ai_tone_cp` — how Mila talks TO counterparties (default: "polite and formal")
+- Both injected into prompts via `mila-voice.ts`. When user-configurable tone UI lands, it plugs in here.
+
 ## Draft Generation
 
 **Timing:** On-demand only — drafts are generated at execution time, NOT during proposal creation.
@@ -376,7 +405,7 @@ When a new meeting conflicts with existing events:
 
 Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`, `weight`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `weight`, `is_high_value`) is stored in `payload.action_metadata`. Note: `pain_factor` column exists in DB but is no longer used — removed from formula.
 
-`generateFinalDraft()` in `src/lib/ai/gemini.ts` takes conversation context + intent + user notes + channel → returns `{ subject, body }`.
+`generateFinalDraft()` in `src/lib/ai/mila-voice.ts` takes conversation context + intent + user notes + channel → returns `{ subject, body }`.
 
 ## Bulk Ingestion & Backfill Report
 

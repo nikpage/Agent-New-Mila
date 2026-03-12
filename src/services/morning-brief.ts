@@ -4,12 +4,12 @@
  */
 
 import { getPendingActionsForBrief, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified } from '@/lib/db/actions'
-import { getUserById, getUsersDueBrief } from '@/lib/db/users'
+import { getUserById, getUsersDueBrief, getUserSettings } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
 import { getEventsForToday } from '@/lib/db/events'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
-import { generateBriefHeadline } from '@/lib/ai/gemini'
+import { generateBriefIntro, generateUrgentIntro } from '@/lib/ai/mila-voice'
 import { generateActionToken, generateTriggerToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template';
 import { theme } from '@/config/theme'
@@ -90,9 +90,13 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       })
     }
 
+    let greeting: string
     let headline: string
+    let briefSubject: string
     try {
-      headline = await generateBriefHeadline(
+      const intro = await generateBriefIntro(
+        briefType,
+        briefActions.length,
         events.map(e => ({
           title: e.title || 'Event',
           time: new Date(e.start_time).toLocaleTimeString('en-US', {
@@ -105,14 +109,18 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
           type: b.action.action_type,
           cpName: b.cpName,
           urgency: b.action.urgency,
-        }))
+        })),
+        await getUserSettings(userId)
       )
-    } catch (headlineError) {
-      console.error(`[MorningBrief] Headline generation failed for user ${userId}, using fallback:`, headlineError)
-      headline = `Máte ${briefActions.length} akčních návrhů ke zpracování.`
+      greeting = intro.greeting
+      headline = intro.headline
+      briefSubject = intro.subject
+    } catch (introError) {
+      console.error(`[MorningBrief] Brief intro generation failed for user ${userId}, using fallback:`, introError)
+      greeting = briefType === 'morning' ? 'Hezké ráno' : 'Hezké odpoledne'
+      headline = `Mate ${briefActions.length} akcnich navrhu ke zpracovani.`
+      briefSubject = `Mila: ${briefActions.length} akci`
     }
-
-    const greeting = briefType === 'morning' ? 'Dobré ráno' : 'Dobré odpoledne'
 
     const htmlContent = generateBriefEmailHtml(userId, greeting, headline, briefActions, events.map(e => ({
       title: e.title || 'Event',
@@ -127,13 +135,9 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     const textContent = generateBriefEmailText(greeting, headline, briefActions)
     const userEmail = await getUserEmail(userId)
 
-
-    const subjectCount = briefActions.length
-    const subjectText = subjectCount === 1 ? 'navrhovaná akce' : subjectCount <= 4 ? 'navrhované akce' : 'navrhovaných akcí'
-
     await sendEmail(userId, {
       to: userEmail,
-      subject: `Mila: ${subjectCount} ${subjectText}`,
+      subject: briefSubject,
       body: textContent,
       htmlBody: htmlContent,
     })
@@ -218,7 +222,7 @@ function generateBriefEmailHtml(
       const hasHold = !!payload?.hold_event_id
       const hasUnfilledLocation = !isOnline && (
         !payloadLocation
-          ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
+          ? !payloadLocation
           : locationPartial
       )
       const needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
@@ -364,18 +368,33 @@ async function sendInstantNotificationForUser(
 
     if (briefActions.length === 0) return false
 
-    const htmlContent = generateInstantNotifyEmailHtml(briefActions)
-    const textContent = generateInstantNotifyEmailText(briefActions)
-    const userEmail = await getUserEmail(userId)
+    const settings = await getUserSettings(userId)
+    let urgentSubject: string
+    let urgentHeader: string
+    let urgentBody: string
+    try {
+      const topAction = briefActions[0]
+      const intro = await generateUrgentIntro(
+        briefActions.length,
+        { cpName: topAction.cpName, urgency: topAction.action.urgency, actionType: topAction.action.action_type },
+        settings
+      )
+      urgentSubject = intro.subject
+      urgentHeader = intro.header
+      urgentBody = intro.body
+    } catch {
+      urgentSubject = `Mila — ${briefActions.length}`
+      urgentHeader = 'Mila'
+      urgentBody = ''
+    }
 
-    const count = briefActions.length
-    const subject = count === 1
-      ? `⚡ Mila: urgentní akce`
-      : `⚡ Mila: ${count} urgentní akce`
+    const htmlContent = generateInstantNotifyEmailHtml(briefActions, urgentHeader, urgentBody)
+    const textContent = generateInstantNotifyEmailText(briefActions, urgentHeader)
+    const userEmail = await getUserEmail(userId)
 
     await sendEmail(userId, {
       to: userEmail,
-      subject,
+      subject: urgentSubject,
       body: textContent,
       htmlBody: htmlContent,
     })
@@ -394,7 +413,7 @@ async function sendInstantNotificationForUser(
  * HTML email for instant high-priority notifications.
  * Same action cards as morning brief, with an urgent header.
  */
-function generateInstantNotifyEmailHtml(actions: BriefAction[]): string {
+function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, body: string): string {
   return `
 <!DOCTYPE html>
 <html>
@@ -403,8 +422,8 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[]): string {
 </head>
 <body style="margin: 0; padding: 0; background-color: ${theme.colors.background}; font-family: 'Inter', system-ui, sans-serif; color: ${theme.colors.text};">
   <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
-    <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">⚡ Urgentní akce</h1>
-    <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">Máte ${actions.length === 1 ? 'novou vysoce prioritní akci' : `${actions.length} nové vysoce prioritní akce`} k okamžitému zpracování.</p>
+    <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">${header}</h1>
+    <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${body}</p>
 
     ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl }) => {
       const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
@@ -416,7 +435,7 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[]): string {
       const hasHold = !!payload?.hold_event_id
       const hasUnfilledLocation = !isOnline && (
         !payloadLocation
-          ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
+          ? !payloadLocation
           : locationPartial
       )
       const needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
@@ -447,8 +466,8 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[]): string {
 /**
  * Plain text fallback for instant notification email.
  */
-function generateInstantNotifyEmailText(actions: BriefAction[]): string {
-  let text = `⚡ URGENTNÍ AKCE\n\n`
+function generateInstantNotifyEmailText(actions: BriefAction[], header: string): string {
+  let text = `${header}\n\n`
   for (const { action, cpName, cpRole, topic, actionUrl } of actions) {
     const intent = action.intent_cs || action.rationale_cs || action.rationale
     text += `${cpName}${cpRole ? ` · ${cpRole}` : ''}\n`

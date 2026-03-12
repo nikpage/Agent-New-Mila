@@ -265,6 +265,23 @@ Every AI prompt receives the user's business context via `getAISystemPrompt(sett
 
 The planning stage (`proposeAction`) also asks the AI to classify `dealType` (sale/purchase/rental/lease/consultation/other) which is written to `conversation_threads.deal_type`.
 
+### Mila Voice — Centralized Text Generation
+
+All text Mila produces — both user-facing and CP-facing — is generated through `src/lib/ai/mila-voice.ts`. This is the single source of truth for Mila's voice and tone.
+
+**Mila → User** (tone: `settings.ai_tone_user`):
+- Scheduling intent (slot details, conflicts, location woven into AI's original intent_cs)
+- Lead follow-up intent/rationale (cooling/cold/dead — AI-generated, not templates)
+- Brief intro (greeting, subject line, headline — AI-generated per brief)
+- Urgent notification intro (subject, header, body — AI-generated per notification)
+
+**Mila → CP** (tone: `settings.ai_tone_cp`):
+- Final draft (email subject + body, or WhatsApp message — on-demand at execution time)
+
+**Urgency-aware tone:** All user-facing functions receive urgency level. Urgency 9-10 produces direct, bold text conveying time pressure. Urgency 1-3 is calm and routine. The AI adjusts naturally — no hardcoded tone switching.
+
+**No hardcoded Czech in services:** planning.ts, morning-brief.ts, and lead-tracking.ts call mila-voice.ts for all user-visible text. They pass structured data (slot times, conflict info, lead status, action counts) and get back natural language in Mila's voice.
+
 ## Tech Stack
 
 | Component | Technology |
@@ -338,6 +355,7 @@ PostgreSQL via Supabase with pgvector extension for embeddings.
 
 ## What's Not Built Yet
 
+- **User-configurable tone UI** — `ai_tone_user` and `ai_tone_cp` exist in UserSettings but there's no UI to change them. mila-voice.ts is wired to use them; just needs a settings page
 - **Multi-language support** — currently Czech only (hardcoded in prompts, configurable via `ai_language` in user settings)
 - **WhatsApp group monitoring** — Baileys daemon skips group messages
 - **OAuth token encryption cleanup** — dual-write is active (plaintext + encrypted); plaintext column can be dropped once all users have refreshed tokens at least once

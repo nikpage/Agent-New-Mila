@@ -49,8 +49,14 @@ vi.mock('@/lib/ai/gemini', () => ({
     missingInfo: [], dollarValue: 0, urgency: 1,
     weight: 1, dealType: null,
   }),
+}))
+
+vi.mock('@/lib/ai/mila-voice', () => ({
   generateFinalDraft: vi.fn().mockResolvedValue({ subject: 'Test', body: 'Test' }),
-  generateBriefHeadline: vi.fn().mockResolvedValue('Test headline'),
+  generateBriefIntro: vi.fn().mockResolvedValue({ greeting: 'Test', subject: 'Test', headline: 'Test headline' }),
+  generateUrgentIntro: vi.fn().mockResolvedValue({ subject: 'Test', header: 'Test', body: 'Test' }),
+  generateLeadFollowUpIntent: vi.fn().mockResolvedValue({ intentCs: 'Test', rationaleCs: 'Test' }),
+  generateSchedulingIntent: vi.fn().mockResolvedValue({ intent_cs: 'Test', missingInfo: [] }),
 }))
 
 vi.mock('@/lib/ai/runner', () => ({

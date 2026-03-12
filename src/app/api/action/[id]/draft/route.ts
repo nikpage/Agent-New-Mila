@@ -4,7 +4,7 @@ import { getConversationById } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
 import { getUserSettings } from '@/lib/db/users'
 import { validateActionToken } from '@/lib/auth/tokens'
-import { generateFinalDraft } from '@/lib/ai/gemini'
+import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { geocodeAddress } from '@/lib/google/maps'
 
 /**

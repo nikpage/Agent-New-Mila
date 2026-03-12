@@ -299,63 +299,6 @@ Rules:
 }
 
 /**
- * Generate the Final Draft (Just-In-Time)
- * Stage: drafting (gemini-2.5-flash → claude-sonnet)
- */
-export async function generateFinalDraft(
-  conversationContext: any,
-  intent: string,
-  settings: UserSettings,
-  userNotes?: string,
-  missingInfo?: any[],
-  cpName?: string,
-  channel: 'email' | 'whatsapp' = 'email'
-): Promise<{ subject: string; body: string }> {
-  console.log(`[AI:generateFinalDraft] Running stage 'drafting' for ${cpName || 'unknown CP'}`)
-  const systemContext = getAISystemPrompt(settings)
-  const isWhatsApp = channel === 'whatsapp'
-  const toneInstruction = isWhatsApp
-    ? 'Write a short WhatsApp message. No subject line needed — set subject to empty string. Keep it conversational but professional.'
-    : `Write a professional email in CZECH.\nSign off with:\n${settings.ai_email_signature}`
-
-  const prompt = `${systemContext}
-
-You are an executive assistant writing a ${isWhatsApp ? 'WhatsApp message' : 'email'} on behalf of your boss.
-Language: CZECH.
-
-CONTEXT:
-${JSON.stringify(conversationContext, null, 2)}
-
-THE PLAN (INTENT):
-${intent}
-
-${userNotes ? `USER NOTES (Override the plan if needed):
-${userNotes}` : ''}
-
-${missingInfo && missingInfo.length > 0 ? `SPECIFIC DATA PROVIDED BY USER:
-${JSON.stringify(missingInfo)}` : ''}
-
-RECIPIENT: ${cpName || 'The Counterparty'}
-
-${toneInstruction}
-- Use the specific data provided in the missingInfo section to answer the counterparty's questions.
-- If the plan implies scheduling, propose the specific times mentioned.
-
-Respond with ONLY valid JSON:
-{
-  "subject": "Email subject line${isWhatsApp ? ' (empty string for WhatsApp)' : ''}",
-  "body": "${isWhatsApp ? 'WhatsApp message text' : 'Email body text'} (ready to send)"
-}`
-
-  const text = await runAITask('drafting', prompt)
-
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error('Failed to parse draft reply')
-
-  return JSON.parse(jsonMatch[0])
-}
-
-/**
  * Extract the topic of a conversation.
  * Stage: threading (gemini-2.5-flash → claude-sonnet)
  */
@@ -380,23 +323,6 @@ export async function shouldJoinConversation(
   const text = await runAITask('threading', prompt)
   const answer = text.toLowerCase().trim()
   return answer === 'yes' || answer.includes('yes')
-}
-
-/**
- * Generate a morning brief headline.
- * Stage: drafting (gemini-2.5-flash → claude-sonnet)
- */
-export async function generateBriefHeadline(
-  todayEvents: { title: string; time: string }[],
-  pendingActions: { type: string; cpName: string; urgency: number }[],
-  tomorrowHighlights?: string[]
-): Promise<string> {
-  console.log(`[AI:generateBriefHeadline] Running stage 'drafting'`)
-  const eventsText = todayEvents.length > 0 ? todayEvents.map(e => `${e.time}: ${e.title}`).join('\n') : 'No meetings scheduled'
-  const actionsText = pendingActions.sort((a, b) => b.urgency - a.urgency).slice(0, 5).map(a => `${a.type} for ${a.cpName} (urgency: ${a.urgency})`).join('\n')
-  const prompt = `Write a brief, personal executive assistant-style morning briefing headline (2-3 sentences) in CZECH. Address the user directly as "vy" (you). NEVER use "uživatel" (the user). No markdown, no ** bold **, no # headers. Plain text only.\n\nTODAY'S SCHEDULE:\n${eventsText}\n\nPENDING ACTIONS:\n${actionsText}\n\n${tomorrowHighlights ? `TOMORROW: ${tomorrowHighlights.join(', ')}` : ''}\n\nWrite as if you're a thoughtful executive assistant giving a quick morning status. Be warm but professional. Focus on what matters most today.`
-  const text = await runAITask('drafting', prompt)
-  return text.trim()
 }
 
 /**

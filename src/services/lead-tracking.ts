@@ -19,6 +19,7 @@ import { getLatestMessageFromCP } from '@/lib/db/messages'
 import { getUserSettings } from '@/lib/db/users'
 import { containsHighValueSignals } from '@/config/client'
 import { selectOfferMultiplier } from './planning'
+import { generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
 import type { ActionProposal, ConversationThread, UserSettings } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -202,7 +203,15 @@ async function processConversationForLeadTracking(
   const cpName = cp.name || cp.primary_identifier
 
   // Build the follow-up intent
-  const intent = buildFollowUpIntent(status, cpName, daysSinceActivity, channel, followUpCount, conversation)
+  const intent = await generateLeadFollowUpIntent(
+    status,
+    cpName,
+    daysSinceActivity,
+    topic,
+    channel,
+    followUpCount,
+    settings
+  )
 
   // Create the follow-up action
   const action = await createAction({
@@ -245,39 +254,5 @@ async function processConversationForLeadTracking(
   if (action) {
     result.followUpsCreated++
     console.log(`[LeadTracking]   follow-up #${followUpCount + 1} created for ${cpName} (priority: ${boostedPriority})`)
-  }
-}
-
-/**
- * Build human-readable follow-up intent and rationale in Czech.
- */
-function buildFollowUpIntent(
-  status: LeadStatus,
-  cpName: string,
-  daysSinceActivity: number,
-  channel: string,
-  followUpNumber: number,
-  conversation: ConversationThread
-): { intentCs: string; rationaleCs: string } {
-  const topic = conversation.topic || 'konverzace'
-
-  if (status === 'dead') {
-    return {
-      intentCs: `${cpName} neodpověděl/a už ${daysSinceActivity} dní (téma: ${topic}). Toto je poslední pokus o kontakt. Připravím zdvořilou zprávu přes ${channel} s dotazem, zda je stále zájem, nebo zda mám záležitost uzavřít.`,
-      rationaleCs: `Lead je neaktivní ${daysSinceActivity} dní. Bez follow-upu hrozí ztráta obchodu. Toto je follow-up č. ${followUpNumber + 1}.`,
-    }
-  }
-
-  if (status === 'cold') {
-    return {
-      intentCs: `${cpName} neodpověděl/a ${daysSinceActivity} dní na téma "${topic}". Připravím follow-up přes ${channel} — připomenu se a nabídnu další kroky.`,
-      rationaleCs: `Lead chladne — ${daysSinceActivity} dní bez aktivity. Follow-up č. ${followUpNumber + 1} zabrání ztrátě leadu.`,
-    }
-  }
-
-  // cooling
-  return {
-    intentCs: `Konverzace s ${cpName} o "${topic}" ztrácí tempo (${daysSinceActivity} dny). Připravím krátký check-in přes ${channel}.`,
-    rationaleCs: `Mírné zpomalení komunikace (${daysSinceActivity} dní). Včasný check-in udrží lead aktivní.`,
   }
 }

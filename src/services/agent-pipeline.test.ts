@@ -34,8 +34,20 @@ vi.mock('@/lib/ai/gemini', () => ({
   extractTopic: vi.fn(),
   analyzeConversation: vi.fn(),
   shouldJoinConversation: vi.fn(),
-  generateBriefHeadline: vi.fn(),
+}))
+
+vi.mock('@/lib/ai/mila-voice', () => ({
+  generateBriefIntro: vi.fn(),
+  generateUrgentIntro: vi.fn(),
   generateFinalDraft: vi.fn(),
+  generateLeadFollowUpIntent: vi.fn().mockResolvedValue({
+    intentCs: 'Připravím follow-up.',
+    rationaleCs: 'Lead je neaktivní.',
+  }),
+  generateSchedulingIntent: vi.fn().mockResolvedValue({
+    intent_cs: 'Mocked scheduling intent',
+    missingInfo: [],
+  }),
 }))
 
 vi.mock('@/lib/ai/runner', () => ({

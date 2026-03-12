@@ -163,9 +163,14 @@ vi.mock('@/lib/google/calendar', () => ({
   deleteCalendarEvent: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/ai/gemini', () => ({
+vi.mock('@/lib/ai/gemini', () => ({}))
+
+vi.mock('@/lib/ai/mila-voice', () => ({
   generateFinalDraft: vi.fn().mockResolvedValue({ subject: 'Test', body: 'Test body' }),
-  generateBriefHeadline: vi.fn().mockResolvedValue('Test headline'),
+  generateBriefIntro: vi.fn().mockResolvedValue({ greeting: 'Test', subject: 'Test', headline: 'Test headline' }),
+  generateUrgentIntro: vi.fn().mockResolvedValue({ subject: 'Test', header: 'Test', body: 'Test' }),
+  generateLeadFollowUpIntent: vi.fn().mockResolvedValue({ intentCs: 'Test', rationaleCs: 'Test' }),
+  generateSchedulingIntent: vi.fn().mockResolvedValue({ intent_cs: 'Test', missingInfo: [] }),
 }))
 
 vi.mock('@/lib/whatsapp/sender', () => ({

@@ -42,8 +42,14 @@ vi.mock('@/lib/ai/gemini', () => ({
   extractTopic: vi.fn(),
   analyzeConversation: vi.fn(),
   shouldJoinConversation: vi.fn(),
-  generateBriefHeadline: vi.fn(),
+}))
+
+vi.mock('@/lib/ai/mila-voice', () => ({
+  generateBriefIntro: vi.fn(),
+  generateUrgentIntro: vi.fn(),
   generateFinalDraft: vi.fn(),
+  generateLeadFollowUpIntent: vi.fn(),
+  generateSchedulingIntent: vi.fn(),
 }))
 
 vi.mock('@/lib/ai/runner', () => ({
@@ -97,7 +103,8 @@ vi.mock('@/lib/google/maps', () => ({
 
 // ─── Static imports (vi.mock hoisted above these) ──────────────────────────
 
-import { proposeAction, generateBriefHeadline, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
+import { proposeAction, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
+import { generateBriefIntro, generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
 import { sendEmail, fetchUnreadEmails, fetchEmailsPaginated, getUserEmail } from '@/lib/google/gmail'
 import { generateActionToken, validateActionToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template'
@@ -122,7 +129,15 @@ beforeEach(() => {
     weight: 40,
     dealType: 'sale',
   } as never)
-  vi.mocked(generateBriefHeadline).mockResolvedValue('Máte akční návrhy ke zpracování.')
+  vi.mocked(generateBriefIntro).mockResolvedValue({
+    greeting: 'Dobré ráno',
+    subject: 'Mila: akční návrhy',
+    headline: 'Máte akční návrhy ke zpracování.',
+  })
+  vi.mocked(generateLeadFollowUpIntent).mockResolvedValue({
+    intentCs: 'Připravím follow-up.',
+    rationaleCs: 'Lead je neaktivní.',
+  })
   vi.mocked(classifyEmail).mockResolvedValue({
     isActionable: true,
     category: 'inquiry',
