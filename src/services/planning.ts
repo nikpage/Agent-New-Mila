@@ -3,6 +3,7 @@ import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import {
   createAction,
   calculatePriorityScore,
+  hasPendingAction,
 } from '@/lib/db/actions'
 import { getConversationById, getRecentMessages, updateConversation } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
@@ -68,6 +69,11 @@ export function selectOfferMultiplier(
 export async function generateActionProposal(
   conversation: ConversationThread
 ): Promise<ActionProposal[]> {
+  // Skip if conversation already has pending actions (prevents duplicates across runs)
+  if (await hasPendingAction(conversation.id)) {
+    return []
+  }
+
   const summary = conversation.summary_json as unknown as ConversationSummary
 
   const recentMessages = await getRecentMessages(conversation.id, 10)
