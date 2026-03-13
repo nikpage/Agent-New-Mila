@@ -92,13 +92,15 @@ vi.mock('@/lib/db/counterparties', () => ({
   getCPById: (...args: unknown[]) => mockGetCPById(...args),
 }))
 
-// Use real calculatePriorityScore + mock getPendingScheduleActions
+// Use real calculatePriorityScore + mock getPendingScheduleActions + updateAction
 const mockGetPendingScheduleActions = vi.fn()
+const mockUpdateAction = vi.fn().mockResolvedValue({})
 vi.mock('@/lib/db/actions', async () => {
   const { calculatePriorityScore: realCalc } = await vi.importActual<typeof import('@/lib/db/actions')>('@/lib/db/actions')
   return {
     calculatePriorityScore: realCalc,
     getPendingScheduleActions: (...args: unknown[]) => mockGetPendingScheduleActions(...args),
+    updateAction: (...args: unknown[]) => mockUpdateAction(...args),
   }
 })
 
@@ -107,6 +109,11 @@ const mockCalculateDepartureTime = vi.fn().mockResolvedValue(null)
 vi.mock('@/lib/google/maps', () => ({
   getTravelTime: (...args: unknown[]) => mockGetTravelTime(...args),
   calculateDepartureTime: (...args: unknown[]) => mockCalculateDepartureTime(...args),
+}))
+
+vi.mock('@/lib/ai/mila-voice', () => ({
+  generateSchedulingIntent: vi.fn().mockResolvedValue({ intent_cs: 'Test scheduling intent', missingInfo: [] }),
+  generateFinalDraft: vi.fn().mockResolvedValue({ subject: 'Test', body: 'Test' }),
 }))
 
 vi.mock('@/lib/holidays', () => ({
@@ -122,6 +129,14 @@ beforeEach(() => {
   uuidCounter = 0
   mockGetCPById.mockResolvedValue({ id: 'cp-1', name: 'Test CP', primary_identifier: 'test@cp.com', role: 'buyer' })
   mockFindConflicts.mockResolvedValue([])
+  // Default hold event with enough fields for updateActionWithHold
+  mockCreateHoldEvent.mockImplementation(async (opts: Record<string, unknown>) => ({
+    id: 'hold-1',
+    status: 'tentative',
+    start_time: (opts.startTime as Date)?.toISOString() || '2026-03-10T09:00:00.000Z',
+    end_time: (opts.endTime as Date)?.toISOString() || '2026-03-10T09:30:00.000Z',
+    cp_name: opts.cpName || 'Test CP',
+  }))
 })
 
 // ── Default Settings Pinning ────────────────────────────────────────────────
@@ -345,7 +360,7 @@ describe('Scheduling — Hold Events', () => {
 
     mockGetCPById.mockResolvedValue({ id: 'cp-1', name: 'Jan Novák', primary_identifier: 'jan@test.com' })
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const slot = { start: new Date('2026-03-10T09:00:00'), end: new Date('2026-03-10T09:30:00') }
     await blockSlotForProposal('user-1', 'cp-1', slot, 30)
@@ -492,7 +507,7 @@ describe('Scheduling — proposeMeeting', () => {
     ])
     mockFindConflicts.mockResolvedValue([])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await proposeMeeting('user-1', 'cp-1')
 
@@ -541,7 +556,7 @@ describe('Scheduling — proposeMeeting', () => {
       { start: new Date('2026-03-10T15:00:00'), end: new Date('2026-03-10T15:30:00') },
     ])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await proposeMeeting('user-1', 'cp-1')
 
@@ -667,7 +682,7 @@ describe('Scheduling — Batch Optimization', () => {
     ])
     mockFindConflicts.mockResolvedValue([])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await optimizeScheduleActions('user-1')
 
@@ -691,7 +706,7 @@ describe('Scheduling — Batch Optimization', () => {
     ])
     mockFindConflicts.mockResolvedValue([])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await optimizeScheduleActions('user-1')
 
@@ -733,7 +748,7 @@ describe('Scheduling — Optimization Priority Order', () => {
     ])
     mockFindConflicts.mockResolvedValue([])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await optimizeScheduleActions('user-1')
 
@@ -759,7 +774,7 @@ describe('Scheduling — Optimization Priority Order', () => {
     ])
     mockFindConflicts.mockResolvedValue([])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await optimizeScheduleActions('user-1')
 
@@ -793,7 +808,7 @@ describe('Scheduling — Optimization Priority Order', () => {
       return { durationSeconds: 1800, durationText: '30 min', distanceMeters: 12000, distanceText: '12 km' }
     })
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await optimizeScheduleActions('user-1')
 
@@ -830,7 +845,7 @@ describe('Scheduling — Optimization Priority Order', () => {
       end_time: '2026-03-10T10:30:00Z',
     }])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await optimizeScheduleActions('user-1')
 
@@ -886,7 +901,7 @@ describe('Scheduling — Multi-CP', () => {
     ])
     mockFindConflicts.mockResolvedValue([])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await proposeMeetingMultipleCPs('user-1', ['cp-1', 'cp-2'])
 
@@ -1011,7 +1026,7 @@ describe('Scheduling — Preferred Time Constraint', () => {
     ])
     mockFindConflicts.mockResolvedValue([])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await proposeMeeting('user-1', 'cp-1', 30)
 

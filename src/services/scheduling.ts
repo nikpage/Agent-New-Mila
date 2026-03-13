@@ -41,9 +41,10 @@ import {
 import { getUserSettings } from '@/lib/db/users'
 import { getUserById } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
-import { calculatePriorityScore, getPendingScheduleActions } from '@/lib/db/actions'
+import { calculatePriorityScore, getPendingScheduleActions, updateAction } from '@/lib/db/actions'
 import { getTravelTime, calculateDepartureTime } from '@/lib/google/maps'
 import { isWorkingDay, getNextWorkingDay } from '@/lib/holidays'
+import { generateSchedulingIntent } from '@/lib/ai/mila-voice'
 import type { UserSettings, Event, ActionProposal } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -688,14 +689,6 @@ export async function optimizeScheduleActions(
 
   if (actions.length === 0) return result
 
-  // Skip actions that already have a hold from planning — don't create duplicates
-  const unscheduledActions = actions.filter(a => {
-    const payload = a.payload as Record<string, unknown> | null
-    return !payload?.hold_event_id
-  })
-
-  if (unscheduledActions.length === 0) return result
-
   const bufferMinutes = settings.meeting_buffer_minutes ?? 15
 
   // Get all free slots for the next 14 days (enough to schedule all meetings)
@@ -717,16 +710,69 @@ export async function optimizeScheduleActions(
   }
 
   // Sort actions by priority so highest-priority meetings get first pick
-  const sortedActions = [...unscheduledActions].sort(
+  const sortedActions = [...actions].sort(
     (a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0)
   )
 
   for (const action of sortedActions) {
     const payload = action.payload as Record<string, unknown> | null
     const cpAvailability = (payload?.cp_availability as string) || null
-    const meetingLocation = (payload?.location as string) || null
+    const suggestedTime = (payload?.suggestedTime as string) || null
+    const meetingLocation = (payload?.suggestedLocation as string) || (payload?.location as string) || null
+    const duration = (payload?.duration as number) || settings.default_meeting_duration
 
-    // Filter available slots (not yet consumed by earlier meetings in this batch)
+    // If CP stated a specific time, parse it as a preferred date
+    let preferredDate: Date | undefined
+    if (suggestedTime) {
+      try {
+        const parsed = new Date(suggestedTime)
+        if (!isNaN(parsed.getTime()) && parsed.getTime() > Date.now() - 86400000) {
+          preferredDate = parsed
+        }
+      } catch {
+        // Invalid date — ignore
+      }
+    }
+
+    // If we have a preferred date, try that exact slot first (CP-stated = hard constraint)
+    if (preferredDate) {
+      const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
+      const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
+
+      if (isSlotAvailable(preferredSlot)) {
+        const conflicts = await findConflicts(userId, preferredDate, preferredEnd)
+
+        if (conflicts.length === 0) {
+          const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+          if (holdResult.success && holdResult.holdEvent) {
+            await updateActionWithHold(action, holdResult, meetingLocation, settings)
+            result.optimized++
+            result.holds.push(holdResult.holdEvent)
+            bookedRanges.push({ start: preferredDate, end: preferredEnd })
+            continue
+          }
+        }
+
+        // CP-stated time has a conflict — book anyway and report conflict
+        const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+        if (holdResult.success && holdResult.holdEvent) {
+          await updateActionWithHold(action, holdResult, meetingLocation, settings)
+          result.optimized++
+          result.holds.push(holdResult.holdEvent)
+          bookedRanges.push({ start: preferredDate, end: preferredEnd })
+          for (const conflict of conflicts) {
+            result.moveSuggestions.push({
+              existingEventId: conflict.id,
+              existingWeight: conflict.weight,
+              reason: `CP stated specific time: ${suggestedTime}`,
+            })
+          }
+          continue
+        }
+      }
+    }
+
+    // No preferred date or preferred slot unavailable — find best available slot
     const availableSlots = allSlots.filter(s => isSlotAvailable(s))
 
     if (availableSlots.length === 0) {
@@ -764,10 +810,11 @@ export async function optimizeScheduleActions(
           userId,
           action.cp_id,
           slot,
-          settings.default_meeting_duration,
+          duration,
           meetingLocation || undefined
         )
         if (holdResult.success && holdResult.holdEvent) {
+          await updateActionWithHold(action, holdResult, meetingLocation, settings)
           result.optimized++
           result.holds.push(holdResult.holdEvent)
           bookedRanges.push({ start: slot.start, end: slot.end })
@@ -792,10 +839,11 @@ export async function optimizeScheduleActions(
             userId,
             action.cp_id,
             slot,
-            settings.default_meeting_duration,
+            duration,
             meetingLocation || undefined
           )
           if (holdResult.success && holdResult.holdEvent) {
+            await updateActionWithHold(action, holdResult, meetingLocation, settings)
             result.optimized++
             result.holds.push(holdResult.holdEvent)
             bookedRanges.push({ start: slot.start, end: slot.end })
@@ -819,6 +867,92 @@ export async function optimizeScheduleActions(
   }
 
   return result
+}
+
+/**
+ * After creating a hold, update the action record with hold info and rewrite intent_cs.
+ * This ensures the action card always matches the actual hold event.
+ */
+async function updateActionWithHold(
+  action: ActionProposal,
+  holdResult: SchedulingResult,
+  meetingLocation: string | null,
+  settings: UserSettings
+): Promise<void> {
+  if (!holdResult.holdEvent) return
+
+  const hold = holdResult.holdEvent
+  const start = new Date(hold.start_time)
+  const end = new Date(hold.end_time)
+  const payload = (action.payload as Record<string, unknown>) || {}
+
+  const tz = 'Europe/Prague'
+  const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
+  const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+  const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+  const slotText = `${dateStr}, ${startStr} - ${endStr}`
+
+  const locationPartial = !!payload.location_partial
+  let locationStatus: 'confirmed' | 'partial' | 'missing' | null = null
+  if (!meetingLocation) locationStatus = 'missing'
+  else if (locationPartial) locationStatus = 'partial'
+  else locationStatus = 'confirmed'
+
+  const conflicts = holdResult.conflicts?.map(c => ({
+    name: c.existingEvent.title || 'existing event',
+    recommendation: c.recommendation,
+  }))
+
+  // Rewrite intent_cs via mila-voice so the action card matches the hold
+  let intentCs = action.intent_cs || ''
+  try {
+    const voiceResult = await generateSchedulingIntent(
+      action.intent_cs || action.rationale_cs || '',
+      {
+        slotText,
+        hasConflicts: !!(conflicts && conflicts.length > 0),
+        conflicts,
+        hasHold: true,
+        locationStatus,
+        locationText: meetingLocation || undefined,
+      },
+      hold.title?.replace(/^HOLD: Meeting with /, '') || '',
+      action.urgency,
+      action.rationale_cs || '',
+      action.dollar_value || 0,
+      '',
+      settings
+    )
+    intentCs = voiceResult.intent_cs
+
+    // Safety net: if AI dropped the hold time, force-include
+    if (!intentCs.includes(startStr)) {
+      intentCs = intentCs + '\n\nTermín: ' + slotText
+    }
+  } catch (voiceError) {
+    console.error('[optimizer] generateSchedulingIntent failed, keeping original intent:', voiceError)
+    // Append slot text to original intent as fallback
+    intentCs = (action.intent_cs || '') + '\n\nTermín: ' + slotText
+  }
+
+  // Update the action record in DB
+  await updateAction(action.id, {
+    intent_cs: intentCs,
+    payload: {
+      ...payload,
+      hold_event_id: hold.id,
+      gcal_event_id: holdResult.gcalEventId || null,
+      start: hold.start_time,
+      end: hold.end_time,
+      location: meetingLocation || null,
+      is_online: false,
+      conflicts: holdResult.conflicts?.map(c => ({
+        event_id: c.existingEvent.id,
+        event_title: c.existingEvent.title,
+        recommendation: c.recommendation,
+      })),
+    },
+  })
 }
 
 /**

@@ -1,5 +1,5 @@
 import { proposeAction } from '@/lib/ai/gemini'
-import { generateSchedulingIntent, generateFinalDraft } from '@/lib/ai/mila-voice'
+import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import {
   createAction,
   calculatePriorityScore,
@@ -9,7 +9,6 @@ import { getConversationById, getRecentMessages, updateConversation } from '@/li
 import { getCPById } from '@/lib/db/counterparties'
 import { getLatestMessageFromCP } from '@/lib/db/messages'
 import { getUserSettings } from '@/lib/db/users'
-import { proposeMeeting } from './scheduling'
 import { geocodeAddress } from '@/lib/google/maps'
 import { containsHighValueSignals } from '@/config/client'
 import {
@@ -154,189 +153,38 @@ export async function generateActionProposal(
       settings
     )
 
-    // Proactive Calendar: If SCHEDULE action, use full scheduling service
+    // SCHEDULE actions: store AI's scheduling context for the batch optimizer.
+    // Planning decides WHAT (this conversation needs a meeting).
+    // The optimizer decides WHEN (assigns slots in one batch pass at brief time).
+    // No holds created here — prevents race conditions from parallel planning.
     let schedulingPayload: Record<string, unknown> = {}
     if (proposal.actionType === 'SCHEDULE') {
-      try {
-        const cpName = cp.name || cp.primary_identifier
-
-        let meetingLocation: string | undefined
-        if (proposal.suggestedLocation) {
-          meetingLocation = proposal.suggestedLocation
-        } else if (cp.locations) {
-          const locations = cp.locations as unknown
-          if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
-            meetingLocation = locations[0]
-          } else if (typeof locations === 'string') {
-            meetingLocation = locations
-          }
+      let meetingLocation: string | undefined
+      if (proposal.suggestedLocation) {
+        meetingLocation = proposal.suggestedLocation
+      } else if (cp.locations) {
+        const locations = cp.locations as unknown
+        if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
+          meetingLocation = locations[0]
+        } else if (typeof locations === 'string') {
+          meetingLocation = locations
         }
+      }
 
-        // Validate location: street addresses pass, business names get geocoded,
-        // unresolvable locations prompt user for confirmation
-        let locationPartial = false
-        if (meetingLocation) {
-          const validated = await validateMeetingLocation(meetingLocation)
-          meetingLocation = validated.location
-          locationPartial = validated.needsConfirmation
-        }
+      // Validate location via geocode if we have one
+      let locationPartial = false
+      if (meetingLocation) {
+        const validated = await validateMeetingLocation(meetingLocation)
+        meetingLocation = validated.location
+        locationPartial = validated.needsConfirmation
+      }
 
-        let preferredDate: Date | undefined
-        if (proposal.suggestedTime) {
-          try {
-            preferredDate = new Date(proposal.suggestedTime)
-            if (isNaN(preferredDate.getTime())) {
-              preferredDate = undefined
-            } else {
-              // Bounds check: if preferredDate is in the past, ignore it
-              const now = new Date()
-              if (preferredDate.getTime() < now.getTime() - 86400000) {
-                console.warn(`[planning] suggestedTime ${proposal.suggestedTime} is in the past, ignoring`)
-                preferredDate = undefined
-              }
-              // Safety net: if urgency is high (≥7) and suggestedTime is >14 days out,
-              // the AI likely hallucinated — ignore it and search from tomorrow
-              if (preferredDate && proposal.urgency >= 7) {
-                const daysOut = (preferredDate.getTime() - now.getTime()) / 86400000
-                if (daysOut > 14) {
-                  console.warn(`[planning] suggestedTime ${proposal.suggestedTime} is ${Math.round(daysOut)} days out but urgency=${proposal.urgency}, ignoring`)
-                  preferredDate = undefined
-                }
-              }
-            }
-          } catch {
-            preferredDate = undefined
-          }
-        }
-
-        const schedulingResult = await proposeMeeting(
-          conversation.user_id,
-          cp.id,
-          settings.default_meeting_duration,
-          meetingLocation,
-          preferredDate
-        )
-
-        if (schedulingResult.holdEvent) {
-          const hold = schedulingResult.holdEvent
-          const start = new Date(hold.start_time)
-          const end = new Date(hold.end_time)
-
-          // BUG 2 FIX: Verify hold matches preferredDate — CP-stated time is a hard constraint
-          if (preferredDate) {
-            const holdStart = start.getTime()
-            const preferred = preferredDate.getTime()
-            if (Math.abs(holdStart - preferred) > 60_000) {
-              // Hold is at a different time than CP stated — this is a code bug
-              console.error(`[planning] HOLD TIME MISMATCH: preferredDate=${preferredDate.toISOString()} but hold.start_time=${hold.start_time}. CP-stated time must be respected.`)
-            }
-          }
-
-          const tz = 'Europe/Prague'
-          const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
-          const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
-          const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
-          const slotText = `${dateStr}, ${startStr} - ${endStr}`
-
-          const conflicts = schedulingResult.conflicts?.map(c => ({
-            name: c.existingEvent.title || 'existing event',
-            recommendation: c.recommendation,
-          }))
-
-          let locationStatus: 'confirmed' | 'partial' | 'missing' | null = null
-          if (!meetingLocation) locationStatus = 'missing'
-          else if (locationPartial) locationStatus = 'partial'
-          else locationStatus = 'confirmed'
-
-          const voiceResult = await generateSchedulingIntent(
-            proposal.intent_cs,
-            {
-              slotText,
-              hasConflicts: !!(conflicts && conflicts.length > 0),
-              conflicts,
-              hasHold: true,
-              locationStatus,
-              locationText: meetingLocation,
-            },
-            cp.name || cp.primary_identifier,
-            proposal.urgency,
-            proposal.rationale_cs,
-            proposal.dollarValue,
-            formattedMessages.slice(-2).map(m => m.text).join(' | '),
-            settings
-          )
-
-          proposal.intent_cs = voiceResult.intent_cs
-          proposal.missingInfo = voiceResult.missingInfo
-
-          // BUG 2 FIX: Verify intent contains the hold time — if AI dropped it, force-include
-          if (!proposal.intent_cs.includes(startStr)) {
-            console.warn(`[planning] Intent missing hold time ${startStr}, appending slot text`)
-            proposal.intent_cs = proposal.intent_cs + '\n\nTermín: ' + slotText
-          }
-
-          // Keep the urgency boost for immovable conflicts
-          const hasImmovableConflict = schedulingResult.conflicts?.some(
-            c => c.recommendation === 'suggest_alternate'
-          )
-          if (hasImmovableConflict) {
-            proposal.urgency = Math.max(proposal.urgency, 9)
-          }
-
-          schedulingPayload = {
-            hold_event_id: schedulingResult.holdEvent.id,
-            gcal_event_id: schedulingResult.gcalEventId,
-            start: schedulingResult.holdEvent.start_time,
-            end: schedulingResult.holdEvent.end_time,
-            location: meetingLocation || null,
-            location_partial: locationPartial,
-            is_online: false,
-            conflicts: schedulingResult.conflicts?.map(c => ({
-              event_id: c.existingEvent.id,
-              event_title: c.existingEvent.title,
-              recommendation: c.recommendation,
-            })),
-          }
-        } else {
-          // No hold — no free slots found
-          const voiceResult = await generateSchedulingIntent(
-            proposal.intent_cs,
-            {
-              slotText: '',
-              hasConflicts: false,
-              hasHold: false,
-              locationStatus: null,
-            },
-            cp.name || cp.primary_identifier,
-            proposal.urgency,
-            proposal.rationale_cs,
-            proposal.dollarValue,
-            formattedMessages.slice(-2).map(m => m.text).join(' | '),
-            settings
-          )
-          proposal.intent_cs = voiceResult.intent_cs
-          proposal.missingInfo = voiceResult.missingInfo
-        }
-      } catch (calendarError) {
-        console.error('Failed to run scheduling service:', calendarError)
-        // Calendar service failed — let AI handle it
-        const voiceResult = await generateSchedulingIntent(
-          proposal.intent_cs,
-          {
-            slotText: '',
-            hasConflicts: false,
-            hasHold: false,
-            locationStatus: null,
-          },
-          cp.name || cp.primary_identifier,
-          proposal.urgency,
-          proposal.rationale_cs,
-          proposal.dollarValue,
-          formattedMessages.slice(-2).map(m => m.text).join(' | '),
-          settings
-        )
-        proposal.intent_cs = voiceResult.intent_cs
-        proposal.missingInfo = voiceResult.missingInfo
+      schedulingPayload = {
+        suggestedTime: proposal.suggestedTime || null,
+        suggestedLocation: meetingLocation || null,
+        location_partial: locationPartial,
+        cp_availability: (proposal as Record<string, unknown>).cpAvailability as string || null,
+        duration: settings.default_meeting_duration,
       }
     }
 
