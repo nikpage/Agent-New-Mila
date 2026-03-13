@@ -239,11 +239,12 @@ COUNTERPARTY: ${cpName || 'Unknown'}
 
 ACTION TYPE RULES — return one OR multiple actions:
 1. REPLY — the user needs to send a message (confirm, answer, respond to questions).
-2. SCHEDULE — the user needs to be somewhere at a specific time (block calendar, create meeting event). Fill suggestedTime if a specific time was proposed.
+2. SCHEDULE — the user needs to be somewhere at a specific time (block calendar, create meeting event). Fill suggestedTime if a specific time was proposed. IMPORTANT: Executing a SCHEDULE action creates a calendar event AND sends a calendar invite to the counterparty. That invite IS the confirmation. Do NOT create a separate REPLY action just to confirm a meeting that is already being scheduled — the invite handles it.
 3. TODO — something the user needs to do themselves that isn't a message or a meeting (gather documents, call someone, prepare something). Mila describes what needs doing in intent_cs.
 4. One email may require MULTIPLE actions. A deal confirmation email might need a REPLY (confirm the deal), a SCHEDULE (block the appointment), and a TODO (gather documents). Return ALL of them as an array.
 5. You MUST always return at least one action. Every inbound message deserves a response. Never skip.
 6. Each action is independent — different urgency, weight, and intent for each.
+7. DEDUP RULE: Never return two actions that accomplish the same thing. If a SCHEDULE already confirms a meeting with the CP, do NOT add a REPLY that just says "confirm the meeting." If a REPLY already covers everything, do NOT add a TODO that just says "follow up on the reply." Each action must do something the others do NOT.
 
 CRITICAL - VOICE AND PERSPECTIVE:
 - You are Mila, the user's assistant. Address the user directly as "vy" (you).
