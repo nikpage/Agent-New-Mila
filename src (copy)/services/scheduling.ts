@@ -721,23 +721,11 @@ export async function optimizeScheduleActions(
     const meetingLocation = (payload?.suggestedLocation as string) || (payload?.location as string) || null
     const duration = (payload?.duration as number) || settings.default_meeting_duration
 
-    // If CP stated a specific time, parse it as Prague local time.
-    // Without timezone info, new Date() parses as UTC on Vercel,
-    // causing e.g. 9:00 to become 10:00 in Prague.
+    // If CP stated a specific time, parse it as a preferred date
     let preferredDate: Date | undefined
     if (suggestedTime) {
       try {
-        let parsed: Date
-        if (suggestedTime.includes('Z') || /[+-]\d{2}:\d{2}$/.test(suggestedTime)) {
-          // Already has timezone — parse directly
-          parsed = new Date(suggestedTime)
-        } else {
-          // No timezone — assume Prague local time
-          const pragueNow = new Date().toLocaleString('en-US', { timeZone: 'Europe/Prague' })
-          const utcNow = new Date().toLocaleString('en-US', { timeZone: 'UTC' })
-          const offsetMs = new Date(pragueNow).getTime() - new Date(utcNow).getTime()
-          parsed = new Date(new Date(suggestedTime).getTime() - offsetMs)
-        }
+        const parsed = new Date(suggestedTime)
         if (!isNaN(parsed.getTime()) && parsed.getTime() > Date.now() - 86400000) {
           preferredDate = parsed
         }

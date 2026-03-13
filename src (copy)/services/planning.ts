@@ -145,15 +145,7 @@ export async function generateActionProposal(
 
     const createdActions: ActionProposal[] = []
 
-    // Dedup: max one of each actionType per conversation per run
-    const seenTypes = new Set<string>()
-    const dedupedProposals = proposals.filter(p => {
-      if (seenTypes.has(p.actionType)) return false
-      seenTypes.add(p.actionType)
-      return true
-    })
-
-    for (const proposal of dedupedProposals) {
+    for (const proposal of proposals) {
       // Validate and write deal_type onto conversation thread if AI classified it
       const dealType = validateDealType(proposal.dealType)
       if (dealType) {
