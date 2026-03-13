@@ -3,7 +3,6 @@ import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import {
   createAction,
   calculatePriorityScore,
-  hasPendingAction,
 } from '@/lib/db/actions'
 import { getConversationById, getRecentMessages, updateConversation } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
@@ -68,7 +67,7 @@ export function selectOfferMultiplier(
 
 export async function generateActionProposal(
   conversation: ConversationThread
-): Promise<ActionProposal | null> {
+): Promise<ActionProposal[]> {
   const summary = conversation.summary_json as unknown as ConversationSummary
 
   const recentMessages = await getRecentMessages(conversation.id, 10)
@@ -80,13 +79,10 @@ export async function generateActionProposal(
     .filter(m => m.cp_id)
     .pop()
 
-  if (!latestWithCP?.cp_id) return null
-
-  // Skip if conversation already has pending actions
-  if (await hasPendingAction(conversation.id)) return null
+  if (!latestWithCP?.cp_id) return []
 
   const cp = await getCPById(latestWithCP.cp_id)
-  if (!cp || cp.is_blacklisted) return null
+  if (!cp || cp.is_blacklisted) return []
 
   // Detect channel from most recent message
   const lastMessage = recentMessages[recentMessages.length - 1]
@@ -127,14 +123,8 @@ export async function generateActionProposal(
     // Get user settings for AI context
     const settings = await getUserSettings(conversation.user_id)
 
-    // Get AI recommendation — one action per conversation
-    const proposal = await proposeAction(summary, formattedMessages, cp.name, settings, channel, classificationPriority)
-
-    // Validate and write deal_type onto conversation thread if AI classified it
-    const dealType = validateDealType(proposal.dealType)
-    if (dealType) {
-      await updateConversation(conversation.id, { deal_type: dealType })
-    }
+    // Get AI recommendations — one or more actions per conversation
+    const proposals = await proposeAction(summary, formattedMessages, cp.name, settings, channel, classificationPriority)
 
     const latestInbound = await getLatestMessageFromCP(conversation.user_id, cp.id)
     const lastContactDate = latestInbound?.timestamp
@@ -153,90 +143,109 @@ export async function generateActionProposal(
       settings
     )
 
-    // SCHEDULE actions: store AI's scheduling context for the batch optimizer.
-    // Planning decides WHAT (this conversation needs a meeting).
-    // The optimizer decides WHEN (assigns slots in one batch pass at brief time).
-    // No holds created here — prevents race conditions from parallel planning.
-    let schedulingPayload: Record<string, unknown> = {}
-    if (proposal.actionType === 'SCHEDULE') {
-      let meetingLocation: string | undefined
-      if (proposal.suggestedLocation) {
-        meetingLocation = proposal.suggestedLocation
-      } else if (cp.locations) {
-        const locations = cp.locations as unknown
-        if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
-          meetingLocation = locations[0]
-        } else if (typeof locations === 'string') {
-          meetingLocation = locations
+    const createdActions: ActionProposal[] = []
+
+    for (const proposal of proposals) {
+      // Validate and write deal_type onto conversation thread if AI classified it
+      const dealType = validateDealType(proposal.dealType)
+      if (dealType) {
+        await updateConversation(conversation.id, { deal_type: dealType })
+      }
+
+      // SCHEDULE actions: store AI's scheduling context for the batch optimizer.
+      // Planning decides WHAT (this conversation needs a meeting).
+      // The optimizer decides WHEN (assigns slots in one batch pass at brief time).
+      // No holds created here — prevents race conditions from parallel planning.
+      let schedulingPayload: Record<string, unknown> = {}
+      if (proposal.actionType === 'SCHEDULE') {
+        let meetingLocation: string | undefined
+        if (proposal.suggestedLocation) {
+          meetingLocation = proposal.suggestedLocation
+        } else if (cp.locations) {
+          const locations = cp.locations as unknown
+          if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
+            meetingLocation = locations[0]
+          } else if (typeof locations === 'string') {
+            meetingLocation = locations
+          }
+        }
+
+        // Validate location via geocode if we have one
+        let locationPartial = false
+        if (meetingLocation) {
+          const validated = await validateMeetingLocation(meetingLocation)
+          meetingLocation = validated.location
+          locationPartial = validated.needsConfirmation
+        }
+
+        schedulingPayload = {
+          suggestedTime: proposal.suggestedTime || null,
+          suggestedLocation: meetingLocation || null,
+          location_partial: locationPartial,
+          cp_availability: (proposal as Record<string, unknown>).cpAvailability as string || null,
+          duration: settings.default_meeting_duration,
         }
       }
 
-      // Validate location via geocode if we have one
-      let locationPartial = false
-      if (meetingLocation) {
-        const validated = await validateMeetingLocation(meetingLocation)
-        meetingLocation = validated.location
-        locationPartial = validated.needsConfirmation
+      const weight = proposal.weight || 0
+      const priorityScore = calculatePriorityScore({
+        dollarValue: proposal.dollarValue,
+        urgency: proposal.urgency,
+        daysIgnored,
+        sellerMultiplier: offerMultiplier,
+        kcLowValue: settings.kc_low_value,
+        kcHighValue: settings.kc_high_value,
+        weight,
+      })
+
+      // Repair 3: log urgent actions for visibility
+      if (proposal.urgency >= 9) {
+        console.log(`[Planning] URGENT action created: urgency=${proposal.urgency}, type=${proposal.actionType}, cp=${cp.name || cp.primary_identifier}`)
       }
 
-      schedulingPayload = {
-        suggestedTime: proposal.suggestedTime || null,
-        suggestedLocation: meetingLocation || null,
-        location_partial: locationPartial,
-        cp_availability: (proposal as Record<string, unknown>).cpAvailability as string || null,
-        duration: settings.default_meeting_duration,
-      }
+      const action = await createAction({
+        id: uuidv4(),
+        user_id: conversation.user_id,
+        conversation_id: conversation.id,
+        cp_id: cp.id,
+        action_type: proposal.actionType,
+        intent_cs: proposal.intent_cs,
+        rationale_cs: proposal.rationale_cs,
+        missing_info: proposal.missingInfo,
+        rationale: proposal.rationale_cs,
+        priority_score: priorityScore,
+        dollar_value: proposal.dollarValue,
+        offer_multiplier: offerMultiplier,
+        urgency: proposal.urgency,
+        weight,
+        draft_subject: null,
+        draft_body_text: null,
+        payload: {
+          intent_cs: proposal.intent_cs,
+          execution_plan: proposal.rationale_cs,
+          required_inputs: proposal.missingInfo,
+          channel,
+          action_metadata: {
+            action_type: proposal.actionType,
+            urgency: proposal.urgency,
+            dollar_value: proposal.dollarValue,
+            offer_multiplier: offerMultiplier,
+            weight,
+            deal_type: dealType,
+            is_high_value: isHighValue,
+          },
+          ...schedulingPayload,
+        },
+        queued_for_brief: true,
+      })
+
+      createdActions.push(action)
     }
 
-    const weight = proposal.weight || 0
-    const priorityScore = calculatePriorityScore({
-      dollarValue: proposal.dollarValue,
-      urgency: proposal.urgency,
-      daysIgnored,
-      sellerMultiplier: offerMultiplier,
-      kcLowValue: settings.kc_low_value,
-      kcHighValue: settings.kc_high_value,
-      weight,
-    })
-
-    return await createAction({
-      id: uuidv4(),
-      user_id: conversation.user_id,
-      conversation_id: conversation.id,
-      cp_id: cp.id,
-      action_type: proposal.actionType,
-      intent_cs: proposal.intent_cs,
-      rationale_cs: proposal.rationale_cs,
-      missing_info: proposal.missingInfo,
-      rationale: proposal.rationale_cs,
-      priority_score: priorityScore,
-      dollar_value: proposal.dollarValue,
-      offer_multiplier: offerMultiplier,
-      urgency: proposal.urgency,
-      weight,
-      draft_subject: null,
-      draft_body_text: null,
-      payload: {
-        intent_cs: proposal.intent_cs,
-        execution_plan: proposal.rationale_cs,
-        required_inputs: proposal.missingInfo,
-        channel,
-        action_metadata: {
-          action_type: proposal.actionType,
-          urgency: proposal.urgency,
-          dollar_value: proposal.dollarValue,
-          offer_multiplier: offerMultiplier,
-          weight,
-          deal_type: dealType,
-          is_high_value: isHighValue,
-        },
-        ...schedulingPayload,
-      },
-      queued_for_brief: true,
-    })
+    return createdActions
   } catch (error) {
     console.error('Failed to generate action proposal:', error)
-    return null
+    return []
   }
 }
 
@@ -265,7 +274,7 @@ export async function generateActionsForConversations(
 
     for (const result of results) {
       if (result.status === 'fulfilled' && result.value) {
-        actions.push(result.value)
+        actions.push(...result.value)
       } else if (result.status === 'rejected') {
         console.error('[Planning] Parallel action generation failed:', result.reason)
       }

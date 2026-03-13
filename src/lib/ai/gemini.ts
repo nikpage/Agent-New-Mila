@@ -183,7 +183,7 @@ export async function proposeAction(
   settings: UserSettings,
   channel: 'email' | 'whatsapp' = 'email',
   classificationPriority: 'high' | 'medium' | 'low' | null = null
-): Promise<ProposedAction> {
+): Promise<ProposedAction[]> {
   console.log(`[AI:proposeAction] Running stage 'planning' for ${cpName || 'unknown CP'}`)
   const recentText = recentMessages
     .slice(-3)
@@ -237,15 +237,13 @@ ${recentText}
 
 COUNTERPARTY: ${cpName || 'Unknown'}
 
-CRITICAL - ACTION TYPE RULES (pick ONE per conversation):
-1. SCHEDULE — use whenever the conversation involves ANY of: meeting, schůzka, prohlídka, viewing, visit, setkání, oběd, lunch, návštěva, proposed time, confirmation of time, "sejít se", "potkat se", "zajít", appointment, termín, "přijít se podívat", "kdy se můžeme sejít", "přijedu", "uvidíme se". SCHEDULE takes priority over REPLY if any scheduling is involved.
-2. If the user (outbound message) proposed or suggested a meeting → use SCHEDULE.
-3. If the counterparty proposed a specific time → use SCHEDULE and fill suggestedTime.
-4. If the conversation implies any need for a physical meeting, even indirectly → use SCHEDULE.
-5. REPLY — pure email/message response with NO scheduling component whatsoever.
-6. TODO — something the user needs to do themselves (call lawyer, write proposal, plan photoshoot, prepare documents). Mila doesn't draft anything — she just describes what needs doing in intent_cs.
-7. You MUST always return one of REPLY, SCHEDULE, or TODO. Every inbound message deserves a response. Never skip.
-8. If the conversation needs both a reply AND scheduling, use SCHEDULE. Include the reply content (answering CP's questions) in the intent_cs alongside the scheduling plan.
+ACTION TYPE RULES — return one OR multiple actions:
+1. REPLY — the user needs to send a message (confirm, answer, respond to questions).
+2. SCHEDULE — the user needs to be somewhere at a specific time (block calendar, create meeting event). Fill suggestedTime if a specific time was proposed.
+3. TODO — something the user needs to do themselves that isn't a message or a meeting (gather documents, call someone, prepare something). Mila describes what needs doing in intent_cs.
+4. One email may require MULTIPLE actions. A deal confirmation email might need a REPLY (confirm the deal), a SCHEDULE (block the appointment), and a TODO (gather documents). Return ALL of them as an array.
+5. You MUST always return at least one action. Every inbound message deserves a response. Never skip.
+6. Each action is independent — different urgency, weight, and intent for each.
 
 CRITICAL - VOICE AND PERSPECTIVE:
 - You are Mila, the user's assistant. Address the user directly as "vy" (you).
@@ -269,33 +267,42 @@ BAD examples (NEVER write like this):
 - "Navrhuji se zeptat na více podrobností" (vague, no concrete action)
 - "Navrhuji odpovědět na dotazy" (no specifics)
 
-Respond with ONLY valid JSON — a single object:
-{
+Respond with ONLY valid JSON — an array of one or more action objects:
+[{
   "actionType": "REPLY" | "SCHEDULE" | "TODO",
   "rationale_cs": "One sentence in CZECH explaining WHY this action is needed now.",
   "intent_cs": "PROACTIVE description in CZECH: what Mila HAS DONE + what she WILL DO on UDĚLAT. Include specific data points from conversation. For TODO: describe what the user needs to do themselves. Return null if WAIT/ARCHIVE.",
   "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
-  "urgency": 1-10 (calibration: 1-3 = routine, no time pressure; 4-6 = should respond within days, mild sensitivity; 7-8 = explicit deadline, significant value at risk, CP waiting; 9 = tomorrow AT LATEST; 10 = less than 1 hour),
+  "urgency": 1-10 where: 10 = deadline within hours (e.g. "confirm by 5pm today"), 9 = deadline tomorrow, 7 = deadline this week significant value at risk, 5 = should respond within days no hard deadline, 3 = routine can wait, 1 = informational only,
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
   "suggestedLocation": "Physical meeting location if mentioned or clearly implied. null if not specified.",
   "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). null if no specific time mentioned."
-}
+}]
 
 Rules:
 - DO NOT write the email draft.
-- For SCHEDULE: intent_cs should describe the full plan — answering CP's questions AND scheduling the meeting. missingInfo should be empty (scheduling handles it).
-- For REPLY: intent_cs should describe the email content Mila will prepare. missingInfo should contain questions CP asked.
-- For TODO: intent_cs should describe what the user needs to do. No draft needed.
-- missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in Czech. Do NOT shorten to keywords. Examples: "Je tam sklep nebo komora?" not "Sklep/Komora".`
+- For SCHEDULE: intent_cs describes what Mila will schedule. missingInfo should be empty (scheduling handles it).
+- For REPLY: intent_cs describes the email content Mila will prepare. missingInfo should contain questions CP asked.
+- For TODO: intent_cs describes what the user needs to do. No draft needed.
+- missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in Czech. Do NOT shorten to keywords. Examples: "Je tam sklep nebo komora?" not "Sklep/Komora".
+- Each action in the array is independent — urgency, weight, dollarValue can differ per action.`
 
   const text = await runAITask('planning', prompt)
 
+  // Parse array or single object (backward safe)
+  const arrayMatch = text.match(/\[[\s\S]*\]/)
+  if (arrayMatch) {
+    const parsed = JSON.parse(arrayMatch[0])
+    return Array.isArray(parsed) ? parsed : [parsed]
+  }
+
+  // Fallback: single object (old model behavior)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error('Failed to parse action proposal')
 
-  return JSON.parse(jsonMatch[0])
+  return [JSON.parse(jsonMatch[0])]
 }
 
 /**

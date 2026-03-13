@@ -152,7 +152,7 @@ export async function createTestAction(overrides: Record<string, unknown> = {}) 
       intent_cs: 'Nabídnout prohlídku bytu na Vinohradech',
       priority_score: 75,
       urgency: 7,
-      pain_factor: 3,
+
       dollar_value: 8500000,
       weight: 40,
       offer_multiplier: 1.0,

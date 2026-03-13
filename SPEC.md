@@ -33,7 +33,7 @@ Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
   Step 2.5: Sync calendar events from Google Calendar, detect invitations
 Step 3: Get all unprocessed messages (email + WhatsApp)
 Step 4: Thread messages into conversations (Gmail thread ID → embedding similarity → AI tiebreak)
-Step 5: For each updated conversation → AI proposes an action (batched ×5)
+Step 5: For each updated conversation → AI proposes one or more actions (e.g. REPLY + SCHEDULE + TODO from one email) (batched ×5)
 Step 6: Lead tracking — scan ALL conversations for cooling/cold/dead leads (batched ×10)
 ```
 
@@ -79,7 +79,7 @@ Every morning at 8 AM (configurable), Mila sends an email to the user with:
 
 ### Instant High-Priority Notifications
 
-Actions with `priority_score > 79` trigger an immediate email notification — the same action card format as briefs, sent within 5 minutes of action creation. Polled every 5 minutes via QStash (`/api/cron/instant-notify`).
+Actions with `urgency >= 9` trigger an immediate email notification — the same action card format as briefs, sent within 5 minutes of action creation. Polled every 5 minutes via QStash (`/api/cron/instant-notify`).
 
 - If the user acts on the instant notification, the action is resolved before the next brief
 - If the user ignores it, the action still appears in the next morning/afternoon brief as a reminder

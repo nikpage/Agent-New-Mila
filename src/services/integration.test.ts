@@ -119,7 +119,7 @@ beforeEach(() => {
   }
 
   // Default AI mock returns
-  vi.mocked(proposeAction).mockResolvedValue({
+  vi.mocked(proposeAction).mockResolvedValue([{
     actionType: 'REPLY',
     rationale_cs: 'Odpovědět na poptávku bytu',
     intent_cs: 'Nabídnout prohlídku bytu na Vinohradech',
@@ -128,7 +128,7 @@ beforeEach(() => {
     urgency: 7,
     weight: 40,
     dealType: 'sale',
-  } as never)
+  }] as never)
   vi.mocked(generateBriefIntro).mockResolvedValue({
     greeting: 'Dobré ráno',
     subject: 'Mila: akční návrhy',
@@ -173,12 +173,13 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id, direction: 'outbound', timestamp: new Date(now - 2000).toISOString(), occurred_at: new Date(now - 2000).toISOString() })
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id, direction: 'inbound', timestamp: new Date(now - 1000).toISOString(), occurred_at: new Date(now - 1000).toISOString() })
 
-    const action = await generateActionProposal(conv)
+    const actions = await generateActionProposal(conv)
 
     // Action created in real DB
-    expect(action).not.toBeNull()
-    expect(action!.action_type).toBe('REPLY')
-    expect(action!.queued_for_brief).toBe(true)
+    expect(actions).toHaveLength(1)
+    const action = actions[0]
+    expect(action.action_type).toBe('REPLY')
+    expect(action.queued_for_brief).toBe(true)
 
     // REAL priority score (not mocked 42!)
     // Formula: normVal + U + daysIgnored² + W
@@ -189,15 +190,15 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     const logVal = Math.log(8_500_000)
     const norm = 2 + ((logVal - logLow) / (logHigh - logLow)) * 11
     const expectedScore = Math.round(norm * 1.0 + 7 + Math.pow(0, 2) + 40)
-    expect(action!.priority_score).toBe(expectedScore)
-    expect(Number.isInteger(action!.priority_score)).toBe(true)
+    expect(action.priority_score).toBe(expectedScore)
+    expect(Number.isInteger(action.priority_score)).toBe(true)
 
     // Deal type written to conversation in real DB
     const updatedConv = await getTestConversation(conv.id)
     expect(updatedConv?.deal_type).toBe('sale')
 
     // Payload has correct channel and metadata
-    const payload = action!.payload as Record<string, unknown>
+    const payload = action.payload as Record<string, unknown>
     expect(payload.channel).toBe('email')
     const metadata = payload.action_metadata as Record<string, unknown>
     expect(metadata.deal_type).toBe('sale')
@@ -206,19 +207,19 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
 
     // Action persisted in real DB
     const dbActions = await getTestActions()
-    expect(dbActions.some(a => a.id === action!.id)).toBe(true)
+    expect(dbActions.some(a => a.id === action.id)).toBe(true)
   })
 
-  it('returns null when CP is blacklisted (security check)', async () => {
+  it('returns empty array when CP is blacklisted (security check)', async () => {
     const { generateActionProposal } = await import('./planning')
 
     const cp = await createTestCP({ is_blacklisted: true })
     const conv = await createTestConversation()
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id })
 
-    const action = await generateActionProposal(conv)
+    const actions = await generateActionProposal(conv)
 
-    expect(action).toBeNull()
+    expect(actions).toHaveLength(0)
     expect(proposeAction).not.toHaveBeenCalled()
 
     // No action created in DB
@@ -233,18 +234,18 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     const conv = await createTestConversation()
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id })
 
-    vi.mocked(proposeAction).mockResolvedValue({
+    vi.mocked(proposeAction).mockResolvedValue([{
       actionType: 'REPLY', rationale_cs: 'Test', intent_cs: 'Test',
       missingInfo: [], dollarValue: 1000, urgency: 5,
       weight: 7,
       dealType: null,
-    } as never)
+    }] as never)
 
-    const action = await generateActionProposal(conv)
+    const actions = await generateActionProposal(conv)
 
-    expect(action).not.toBeNull()
-    expect(action!.weight).toBe(7)
-    const metadata = (action!.payload as Record<string, unknown>).action_metadata as Record<string, unknown>
+    expect(actions).toHaveLength(1)
+    expect(actions[0].weight).toBe(7)
+    const metadata = (actions[0].payload as Record<string, unknown>).action_metadata as Record<string, unknown>
     expect(metadata.weight).toBe(7)
   })
 })

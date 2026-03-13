@@ -44,11 +44,11 @@ vi.mock('@/lib/ai/gemini', () => ({
     risks: [], confidence: 0.8, confidenceReason: 'Test', dealType: null,
   }),
   shouldJoinConversation: vi.fn().mockResolvedValue(false),
-  proposeAction: vi.fn().mockResolvedValue({
+  proposeAction: vi.fn().mockResolvedValue([{
     actionType: 'WAIT', rationale_cs: 'Test', intent_cs: null,
     missingInfo: [], dollarValue: 0, urgency: 1,
     weight: 1, dealType: null,
-  }),
+  }]),
 }))
 
 vi.mock('@/lib/ai/mila-voice', () => ({

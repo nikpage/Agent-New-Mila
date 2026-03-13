@@ -122,11 +122,11 @@ beforeEach(() => {
     currentState: 'Active', nextSteps: ['Reply'], keyPoints: ['Key'],
     risks: [], confidence: 0.8, confidenceReason: 'Test', dealType: 'sale',
   } as never)
-  vi.mocked(proposeAction).mockResolvedValue({
+  vi.mocked(proposeAction).mockResolvedValue([{
     actionType: 'REPLY', rationale_cs: 'Test', intent_cs: 'Test intent',
     missingInfo: [], dollarValue: 1000000, urgency: 5,
     weight: 30, dealType: 'sale',
-  } as never)
+  }] as never)
 })
 
 // ═════════════════════════════════════════════════════════════════════════════

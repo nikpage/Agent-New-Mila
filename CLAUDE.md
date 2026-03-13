@@ -128,7 +128,7 @@ Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
   Step 2.5: Sync Google Calendar events, detect invitations, filter personal events
 Step 3: Get all unprocessed messages (email + WhatsApp)
 Step 4: Thread messages into conversations (uses enriched_text for embedding similarity)
-Step 5: Generate action proposals for updated conversations (channel-aware, adaptive context, batched ×5)
+Step 5: Generate action proposals for updated conversations — one conversation may produce multiple actions (e.g. REPLY + SCHEDULE + TODO). Channel-aware, adaptive context, batched ×5
 Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10)
 ```
 
@@ -403,7 +403,7 @@ All user-facing functions receive urgency level. The AI adjusts tone accordingly
 **Language:** Czech (configured in `src/config/client.ts` → `ai.language`)
 **Channel-aware tone:** Implemented — email gets formal tone + signature; WhatsApp gets short, conversational messages.
 
-Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`, `weight`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `weight`, `is_high_value`) is stored in `payload.action_metadata`. Note: `pain_factor` column exists in DB but is no longer used — removed from formula.
+Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`, `weight`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `weight`, `is_high_value`) is stored in `payload.action_metadata`.
 
 `generateFinalDraft()` in `src/lib/ai/mila-voice.ts` takes conversation context + intent + user notes + channel → returns `{ subject, body }`.
 
@@ -483,15 +483,15 @@ QSTASH_TOKEN         # Upstash QStash token for brief scheduling + bulk ingest w
 - 5-minute function timeout (`maxDuration: 300`) handles ~100 users per invocation
 
 ### Instant High-Priority Notifications
-Actions with `priority_score > 79` get an immediate email notification (same action card template as briefs).
+Actions with `urgency >= 9` get an immediate email notification (same action card template as briefs).
 
 - **Polling:** Global QStash schedule (`*/5 * * * *`) hits `/api/cron/instant-notify` every 5 minutes
-- **Query:** `getHighPriorityUnnotifiedActions(threshold)` — finds `priority_score > threshold`, `status = 'pending'`, `last_notified_at IS NULL`, `queued_for_brief = true`
+- **Query:** `getHighPriorityUnnotifiedActions(urgencyThreshold)` — finds `urgency >= threshold`, `status = 'pending'`, `last_notified_at IS NULL`, `queued_for_brief = true`
 - **Send:** `sendInstantNotifications()` groups actions by user, sends email with `⚡ Urgentní akce` subject, batches users at concurrency 10
 - **Re-inclusion in brief:** `markActionsInstantNotified()` sets `last_notified_at` but keeps `queued_for_brief = true` — if the user doesn't act, the action still appears in the next morning/afternoon brief
 - **No double-send:** `last_notified_at IS NULL` filter prevents re-sending on subsequent polls
 - **Schedule management:** `createInstantNotifySchedule()` / `deleteInstantNotifySchedule()` in `src/lib/qstash/client.ts`
-- **Threshold:** Default 79, passed as parameter to `sendInstantNotifications()`
+- **Threshold:** `DEFAULT_INSTANT_URGENCY_THRESHOLD = 9` in `morning-brief.ts`
 
 
 ## Error Monitoring (Sentry)
