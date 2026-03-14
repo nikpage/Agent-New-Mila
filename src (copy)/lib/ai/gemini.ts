@@ -345,7 +345,10 @@ export async function classifyEmail(
   if (!jsonMatch) return { isActionable: false, category: 'other' }
   try {
     const parsed = JSON.parse(jsonMatch[0])
-    return { isActionable: parsed.isActionable, category: parsed.category }
+    return {
+      isActionable: parsed.isActionable === true,
+      category: parsed.category || 'other',
+    }
   } catch {
     return { isActionable: false, category: 'other' }
   }
