@@ -55,7 +55,7 @@ Every API route rejects unauthenticated/bad requests. Catches: removed auth chec
 | File | Tests | What it pins |
 |------|-------|-------------|
 | `src/lib/supabase/defaults.test.ts` | 48 | Every single field in `DEFAULT_USER_SETTINGS` — exact values. Also pins field count (58) to catch added/removed fields. |
-| `src/services/lead-tracking.test.ts` | 12 | Lead thresholds (2/5/14 days), boost multipliers (1.5x/2.5x/3.75x), urgency/pain mappings, threshold ordering |
+| `src/services/lead-tracking.test.ts` | 12 | Lead thresholds (2/5/14 days), boost multipliers (1.5x/2.5x/3.75x), urgency mappings, threshold ordering |
 | `src/services/scheduling.test.ts` | 9 | Meeting duration, buffer, working hours, working days, timezone, travel mode defaults |
 | `src/services/morning-brief.test.ts` | 6 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10), instant notify threshold (79), instant notify concurrency (10) |
 

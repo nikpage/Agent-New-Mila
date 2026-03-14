@@ -302,7 +302,7 @@ export interface Database {
           priority_score: number
           dollar_value: number
           urgency: number
-          pain_factor: number
+
           weight: number | null
           offer_multiplier: number | null
           queued_for_brief: boolean | null
@@ -326,7 +326,7 @@ export interface Database {
           priority_score?: number
           dollar_value?: number
           urgency?: number
-          pain_factor?: number
+
           weight?: number | null
           offer_multiplier?: number | null
           queued_for_brief?: boolean | null
@@ -350,7 +350,7 @@ export interface Database {
           priority_score?: number
           dollar_value?: number
           urgency?: number
-          pain_factor?: number
+
           weight?: number | null
           offer_multiplier?: number | null
           queued_for_brief?: boolean | null

@@ -115,7 +115,7 @@ beforeEach(() => {
 
   // Default AI mocks
   vi.mocked(filterEmail).mockResolvedValue({ relevant: true } as never)
-  vi.mocked(classifyEmail).mockResolvedValue({ isActionable: true, category: 'inquiry', priority: 'high' } as never)
+  vi.mocked(classifyEmail).mockResolvedValue({ isActionable: true, category: 'inquiry' } as never)
   vi.mocked(enrichMessage).mockResolvedValue('Enriched: key facts extracted')
   vi.mocked(extractTopic).mockResolvedValue('New conversation topic')
   vi.mocked(analyzeConversation).mockResolvedValue({

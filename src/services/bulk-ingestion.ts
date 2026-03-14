@@ -577,7 +577,7 @@ export async function phase4Classify(
         const classification = await classifyEmail('', bodyText, '')
         await updateMessage(msg.id, {
           tag_primary: classification.category,
-          tag_secondary: classification.priority,
+          tag_secondary: null,
         })
         result.classified++
       })
