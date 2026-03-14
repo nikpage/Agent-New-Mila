@@ -137,15 +137,9 @@ The code uses `urgency >= 9`. The QStash schedule function exists (`createInstan
 
 ---
 
-## CLEANUP — Remove pain_factor references
+## CLEANUP — pain_factor references (DONE)
 
-`pain_factor` appears in:
-- `src/lib/supabase/types.ts` lines 302, 326, 350 (DB type definitions)
-- `src/__tests__/helpers/test-db.ts` line 155
-- `docs/SCHEMA.md` line 40
-- `CLAUDE.md` line 406
-
-The DB column can stay (dropping columns is a migration risk for zero benefit). But all code references should treat it as dead — never read, never write, never test. Remove from test helpers. Remove from docs.
+All `pain_factor` references removed from code and docs. DB column remains (dropping columns is a migration risk for zero benefit).
 
 ---
 
@@ -155,8 +149,6 @@ The DB column can stay (dropping columns is a migration risk for zero benefit). 
 |------|--------|
 | `src/lib/ai/gemini.ts` | 1 (multi-action prompt), 2 (classification), 3 (urgency scale) |
 | `src/services/planning.ts` | 1 (multi-action return, remove hasPendingAction), 3 (urgent logging) |
-| `src/__tests__/helpers/test-db.ts` | Cleanup (remove pain_factor) |
-| `docs/SCHEMA.md` | Cleanup (note pain_factor as dead) |
 | `CLAUDE.md` | Update after all repairs (multi-action, urgency scale, formula) |
 | `SPEC.md` | Update after all repairs |
 

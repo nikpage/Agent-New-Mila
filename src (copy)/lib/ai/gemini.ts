@@ -181,8 +181,7 @@ export async function proposeAction(
   recentMessages: { direction: string; text: string }[],
   cpName: string | null,
   settings: UserSettings,
-  channel: 'email' | 'whatsapp' = 'email',
-  classificationPriority: 'high' | 'medium' | 'low' | null = null
+  channel: 'email' | 'whatsapp' = 'email'
 ): Promise<ProposedAction[]> {
   console.log(`[AI:proposeAction] Running stage 'planning' for ${cpName || 'unknown CP'}`)
   const recentText = recentMessages
@@ -208,15 +207,10 @@ export async function proposeAction(
   const timeStr = now.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
   const isoDate = now.toISOString().split('T')[0]
 
-  const classificationNote = classificationPriority
-    ? `EMAIL CLASSIFICATION PRIORITY: ${classificationPriority.toUpperCase()} — this was pre-classified as ${classificationPriority} priority during ingestion. Use this as a starting anchor for your urgency assessment.`
-    : ''
-
   const prompt = `${systemContext}
 
 ${channelNote}
 ${highValueNote}
-${classificationNote}
 
 TODAY'S DATE: ${todayStr} (${isoDate}), current time: ${timeStr}, timezone: ${tz}
 Use this to resolve relative dates: "tomorrow" = ${new Date(now.getTime() + 86400000).toISOString().split('T')[0]}, "next week" = week of ${new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0]}.
@@ -333,7 +327,7 @@ export async function shouldJoinConversation(
 }
 
 /**
- * Classify an email into category + priority.
+ * Classify an email into category.
  * Stage: classify (gemini-2.5-flash-lite → claude-haiku)
  */
 export async function classifyEmail(
@@ -343,16 +337,16 @@ export async function classifyEmail(
 ): Promise<{
   isActionable: boolean
   category: 'meeting_request' | 'question' | 'update' | 'confirmation' | 'newsletter' | 'spam' | 'other'
-  priority: 'high' | 'medium' | 'low'
 }> {
   console.log(`[AI:classifyEmail] Running stage 'classify'`)
-  const prompt = `Classify this email.\n\nFROM: ${from}\nSUBJECT: ${subject}\nBODY: ${body.slice(0, 1000)}\n\nRespond with ONLY valid JSON:\n{\n  "isActionable": true/false (does this require user action?),\n  "category": "meeting_request" | "question" | "update" | "confirmation" | "newsletter" | "spam" | "other",\n  "priority": "high" | "medium" | "low"\n}\n\nNewsletters, automated emails, and spam are NOT actionable.`
+  const prompt = `Classify this email.\n\nFROM: ${from}\nSUBJECT: ${subject}\nBODY: ${body.slice(0, 1000)}\n\nRespond with ONLY valid JSON:\n{\n  "isActionable": true/false (does this require user action?),\n  "category": "meeting_request" | "question" | "update" | "confirmation" | "newsletter" | "spam" | "other"\n}\n\nNewsletters, automated emails, and spam are NOT actionable.`
   const text = await runAITask('classify', prompt)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) return { isActionable: false, category: 'other', priority: 'low' }
+  if (!jsonMatch) return { isActionable: false, category: 'other' }
   try {
-    return JSON.parse(jsonMatch[0])
+    const parsed = JSON.parse(jsonMatch[0])
+    return { isActionable: parsed.isActionable, category: parsed.category }
   } catch {
-    return { isActionable: false, category: 'other', priority: 'low' }
+    return { isActionable: false, category: 'other' }
   }
 }

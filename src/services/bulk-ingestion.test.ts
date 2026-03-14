@@ -35,7 +35,6 @@ vi.mock('@/lib/ai/gemini', () => ({
   classifyEmail: vi.fn().mockResolvedValue({
     isActionable: true,
     category: 'question',
-    priority: 'medium',
   }),
   enrichMessage: vi.fn().mockResolvedValue('Enriched: key facts extracted'),
   extractTopic: vi.fn().mockResolvedValue('Test topic'),
@@ -128,7 +127,7 @@ describe.skipIf(!HAS_DB)('Bulk Ingestion — 5-phase pipeline (real DB)', () => 
     // Track when Phase 4 classify happens
     vi.mocked(classifyEmail).mockImplementation(async () => {
       callOrder.push('phase4_classify')
-      return { isActionable: true, category: 'question', priority: 'medium' }
+      return { isActionable: true, category: 'question' }
     })
 
     // Pre-create a bulk_import message with enriched_text set
@@ -165,7 +164,6 @@ describe.skipIf(!HAS_DB)('Bulk Ingestion — 5-phase pipeline (real DB)', () => 
     vi.mocked(classifyEmail).mockResolvedValue({
       isActionable: true,
       category: 'meeting_request',
-      priority: 'high',
     })
 
     const msg = await createTestMessage({
@@ -225,7 +223,6 @@ describe.skipIf(!HAS_DB)('Bulk Ingestion — 5-phase pipeline (real DB)', () => 
     vi.mocked(classifyEmail).mockResolvedValue({
       isActionable: true,
       category: 'update',
-      priority: 'low',
     })
 
     await createTestMessage({

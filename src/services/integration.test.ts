@@ -141,7 +141,6 @@ beforeEach(() => {
   vi.mocked(classifyEmail).mockResolvedValue({
     isActionable: true,
     category: 'inquiry',
-    priority: 'high',
   } as never)
   vi.mocked(enrichMessage).mockResolvedValue(
     'Zájemce: Jan Novák. Nemovitost: byt Vinohrady 3+kk. Cena: 8.5M CZK.'
@@ -553,7 +552,7 @@ describe.skipIf(!HAS_DB)('Integration: Ingestion → Threading flow (real DB)', 
 
     // Second ingestion with same email
     vi.clearAllMocks()
-    vi.mocked(classifyEmail).mockResolvedValue({ isActionable: true, category: 'inquiry', priority: 'high' } as never)
+    vi.mocked(classifyEmail).mockResolvedValue({ isActionable: true, category: 'inquiry' } as never)
     vi.mocked(enrichMessage).mockResolvedValue('Enriched')
     vi.mocked(getUserEmail).mockResolvedValue(TEST_USER_EMAIL)
     vi.mocked(fetchUnreadEmails).mockResolvedValue([{

@@ -116,7 +116,6 @@ export interface IngestedMessage {
   cpId: string
   isActionable: boolean
   category: string
-  priority: string
 }
 
 /**
@@ -289,7 +288,7 @@ async function processOneInboundEmail(
     raw_text: email.body,
     cleaned_text: cleanMessageText(email.body, 'email').slice(0, 5000),
     tag_primary: classification.category,
-    tag_secondary: classification.priority,
+    tag_secondary: null,
     timestamp: email.date.toISOString(),
     occurred_at: email.date.toISOString(),
   })
@@ -313,7 +312,6 @@ async function processOneInboundEmail(
     cpId: cp.id,
     isActionable: classification.isActionable,
     category: classification.category,
-    priority: classification.priority,
   }
 }
 
