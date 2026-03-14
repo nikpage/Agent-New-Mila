@@ -11,7 +11,7 @@ import { getEventsForToday } from '@/lib/db/events'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefIntro, generateUrgentIntro } from '@/lib/ai/mila-voice'
 import { optimizeScheduleActions } from '@/services/scheduling'
-import { generateActionToken, generateTriggerToken } from '@/lib/auth/tokens'
+import { generateActionToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template';
 import { theme } from '@/config/theme'
 import type { ActionProposal, ConversationSummary } from '@/lib/supabase/types'
@@ -212,8 +212,6 @@ function generateBriefEmailHtml(
   actions: BriefAction[],
   events: { title: string; time: string; location?: string }[]
 ): string {
-  const triggerSig = generateTriggerToken(userId)
-  const triggerUrl = `${APP_BASE_URL}/api/trigger/ingest?uid=${userId}&sig=${triggerSig}`
   return `
 <!DOCTYPE html>
 <html>
@@ -221,7 +219,6 @@ function generateBriefEmailHtml(
   <meta charset="utf-8">
 </head>
 <body style="margin: 0; padding: 0; background-color: ${theme.colors.background}; font-family: 'Inter', system-ui, sans-serif; color: ${theme.colors.text};">
-  <img src="${triggerUrl}" width="1" height="1" style="display:none" alt="" />
   <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
     <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">${greeting}</h1>
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
