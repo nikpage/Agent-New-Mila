@@ -457,31 +457,16 @@ describe('Layer 1: Route Protection', () => {
   })
 
   // -------------------------------------------------------------------------
-  // Trigger route — special: always returns pixel, but validates internally
+  // Trigger route — deprecated, returns GIF only (no agent run)
   // -------------------------------------------------------------------------
 
-  describe('Trigger route (pixel)', () => {
+  describe('Trigger route (deprecated)', () => {
 
-    it('GET /api/trigger/ingest — returns pixel even without auth (by design)', async () => {
+    it('GET /api/trigger/ingest — returns GIF without running agent', async () => {
       const { GET } = await import('@/app/api/trigger/ingest/route')
-      const req = makeRequest('GET', '/api/trigger/ingest')
-      const res = await GET(req)
-      // Always returns 200 with GIF — security is that it doesn't run the agent
+      const res = await GET()
       expect(res.status).toBe(200)
       expect(res.headers.get('content-type')).toBe('image/gif')
-    })
-
-    it('GET /api/trigger/ingest — returns pixel with bad sig (does NOT run agent)', async () => {
-      const { GET } = await import('@/app/api/trigger/ingest/route')
-      const runAgentForUser = (await import('@/services/agent')).runAgentForUser as ReturnType<typeof vi.fn>
-      runAgentForUser.mockClear()
-
-      const req = makeRequest('GET', '/api/trigger/ingest?uid=test-user&sig=bad-sig')
-      const res = await GET(req)
-      expect(res.status).toBe(200)
-      expect(res.headers.get('content-type')).toBe('image/gif')
-      // Agent should NOT have been called with invalid sig
-      expect(runAgentForUser).not.toHaveBeenCalled()
     })
   })
 
