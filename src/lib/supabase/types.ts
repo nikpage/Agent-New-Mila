@@ -226,6 +226,7 @@ export interface Database {
           message_count: number | null
           messages_since_rebuild: number | null
           embedding: number[] | null
+          snooze_until: string | null
           created_at: string | null
           last_updated: string | null
         }
@@ -243,6 +244,7 @@ export interface Database {
           message_count?: number | null
           messages_since_rebuild?: number | null
           embedding?: number[] | null
+          snooze_until?: string | null
           created_at?: string | null
           last_updated?: string | null
         }
@@ -260,6 +262,7 @@ export interface Database {
           message_count?: number | null
           messages_since_rebuild?: number | null
           embedding?: number[] | null
+          snooze_until?: string | null
           created_at?: string | null
           last_updated?: string | null
         }
@@ -610,7 +613,7 @@ export type TodoInsert = Database['public']['Tables']['todos']['Insert']
 export type EventInsert = Database['public']['Tables']['events']['Insert']
 
 // Action types
-export type ActionType = 'REPLY' | 'SCHEDULE' | 'TODO' | 'WAIT' | 'ARCHIVE'
+export type ActionType = 'REPLY' | 'SCHEDULE' | 'TODO' | 'SNOOZE' | 'WAIT' | 'ARCHIVE'
 export type ActionStatus = 'pending' | 'approved' | 'needs_revision' | 'completed' | 'dismissed'
 
 // Deal types — stored on conversation_threads.deal_type
@@ -701,7 +704,7 @@ export interface UserSettings {
   business_calendar_id: string
   personal_calendar_id: string | null
   personal_event_keywords: string[]
-  default_event_weight: number         // default 5 — weight assigned to non-Mila calendar events until user overrides via ToDo
+  default_event_weight: number         // default 7 — weight assigned to non-Mila calendar events until user overrides via ToDo
 
   // QStash schedule IDs (managed automatically)
   qstash_morning_schedule_id: string | null
@@ -792,7 +795,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
     'vacation', 'holiday', 'narozeniny', 'birthday', 'výročí',
     'anniversary', 'škola', 'school', 'kroužek',
   ],
-  default_event_weight: 5,
+  default_event_weight: 7,
 
   // QStash schedule IDs
   qstash_morning_schedule_id: null,

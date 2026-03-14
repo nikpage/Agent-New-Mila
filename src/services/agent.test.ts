@@ -54,6 +54,11 @@ vi.mock('@/lib/db/conversations', () => ({
   getConversationsForUser: vi.fn().mockResolvedValue([]),
 }))
 
+vi.mock('@/lib/db/locks', () => ({
+  tryAcquireUserLock: vi.fn().mockResolvedValue(true),
+  releaseUserLock: vi.fn().mockResolvedValue(undefined),
+}))
+
 vi.mock('@/lib/supabase/client', () => ({
   getSupabaseAdmin: vi.fn().mockReturnValue({
     from: () => ({ update: () => ({ in: () => ({ data: null, error: null }) }) }),
@@ -65,9 +70,12 @@ import { ingestEmailsForUser, ingestOutboundEmails } from './ingestion'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { trackLeadsForUser } from './lead-tracking'
 import { getUserById } from '@/lib/db/users'
+import { tryAcquireUserLock, releaseUserLock } from '@/lib/db/locks'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(tryAcquireUserLock).mockResolvedValue(true)
+  vi.mocked(releaseUserLock).mockResolvedValue(undefined)
   vi.mocked(getUserById).mockResolvedValue({
     id: 'user-1',
     email: 'test@test.com',
@@ -75,73 +83,45 @@ beforeEach(() => {
   } as unknown as ReturnType<typeof getUserById> extends Promise<infer T> ? T : never)
 })
 
-// Use unique user IDs per test to avoid in-memory guard conflicts
-let testCounter = 0
-function uniqueUserId() { return `user-test-${++testCounter}` }
-
 describe('runAgentForUser', () => {
   it('returns success on a clean run', async () => {
-    const result = await runAgentForUser(uniqueUserId())
+    const result = await runAgentForUser('user-1')
 
     expect(result.success).toBe(true)
     expect(result.errors).toEqual([])
   })
 
-  it('skips concurrent run for same user (in-memory guard)', async () => {
-    const uid = uniqueUserId()
-    let resolveIngestion!: () => void
+  it('skips concurrent run for same user (DB lock)', async () => {
+    // Second call fails to acquire lock
+    vi.mocked(tryAcquireUserLock).mockResolvedValueOnce(true).mockResolvedValueOnce(false)
 
-    // Make ingestion block until we release it — use mockImplementationOnce so it doesn't leak
-    vi.mocked(ingestEmailsForUser).mockImplementationOnce(
-      () => new Promise(resolve => { resolveIngestion = () => resolve([] as never) })
-    )
+    const first = await runAgentForUser('user-1')
+    const second = await runAgentForUser('user-1')
 
-    const first = runAgentForUser(uid)
-    // Yield so first call reaches past runningUsers.set() and into await getUserById
-    await new Promise(r => setTimeout(r, 10))
-
-    const second = await runAgentForUser(uid)
-
+    expect(first.success).toBe(true)
     expect(second.success).toBe(true)
     expect(second.errors).toContain('Skipped — concurrent run already in progress')
-
-    // Let first finish
-    resolveIngestion()
-    await first
   })
 
-  it('releases in-memory guard after completion', async () => {
-    const uid = uniqueUserId()
-    await runAgentForUser(uid)
+  it('releases DB lock after completion', async () => {
+    await runAgentForUser('user-1')
 
-    // Second call should NOT be skipped
-    const result = await runAgentForUser(uid)
-
-    expect(result.success).toBe(true)
-    expect(result.errors).toEqual([])
+    expect(releaseUserLock).toHaveBeenCalledWith('user-1')
   })
 
-  it('releases in-memory guard even on failure', async () => {
-    const uid = uniqueUserId()
+  it('releases DB lock even on failure', async () => {
     vi.mocked(getUserById).mockRejectedValueOnce(new Error('DB exploded'))
 
-    const failResult = await runAgentForUser(uid)
+    const failResult = await runAgentForUser('user-1')
     expect(failResult.success).toBe(false)
 
-    // Guard should be released — next run proceeds
-    vi.mocked(getUserById).mockResolvedValueOnce({
-      id: uid,
-      email: 'test@test.com',
-      google_oauth_tokens: { access_token: 'token' },
-    } as unknown as ReturnType<typeof getUserById> extends Promise<infer T> ? T : never)
-    const okResult = await runAgentForUser(uid)
-    expect(okResult.success).toBe(true)
+    expect(releaseUserLock).toHaveBeenCalledWith('user-1')
   })
 
   it('returns error when user not found', async () => {
     vi.mocked(getUserById).mockResolvedValueOnce(null as never)
 
-    const result = await runAgentForUser(uniqueUserId())
+    const result = await runAgentForUser('user-1')
 
     expect(result.success).toBe(false)
     expect(result.errors).toContain('User not found')
@@ -154,7 +134,7 @@ describe('runAgentForUser', () => {
       google_oauth_tokens: null,
     } as never)
 
-    const result = await runAgentForUser(uniqueUserId())
+    const result = await runAgentForUser('user-1')
 
     expect(result.success).toBe(false)
     expect(result.errors).toContain('User has no Google credentials')
@@ -165,7 +145,7 @@ describe('runAgentForUser', () => {
       vi.mocked(ingestEmailsForUser).mockRejectedValue(new Error('Gmail API down'))
       vi.mocked(ingestOutboundEmails).mockResolvedValue(3)
 
-      const result = await runAgentForUser(uniqueUserId())
+      const result = await runAgentForUser('user-1')
 
       expect(result.success).toBe(true)
       expect(result.emailsIngested).toBe(3) // outbound still counted
@@ -176,7 +156,7 @@ describe('runAgentForUser', () => {
       vi.mocked(ingestOutboundEmails).mockRejectedValue(new Error('Token expired'))
       vi.mocked(ingestEmailsForUser).mockResolvedValue([{ id: '1' }] as never)
 
-      const result = await runAgentForUser(uniqueUserId())
+      const result = await runAgentForUser('user-1')
 
       expect(result.success).toBe(true)
       expect(result.emailsIngested).toBe(1) // inbound counted
@@ -186,7 +166,7 @@ describe('runAgentForUser', () => {
     it('continues when calendar sync fails', async () => {
       vi.mocked(ingestCalendarEvents).mockRejectedValue(new Error('Calendar scope missing'))
 
-      const result = await runAgentForUser(uniqueUserId())
+      const result = await runAgentForUser('user-1')
 
       expect(result.success).toBe(true)
       expect(result.errors.some(e => e.includes('Calendar ingestion'))).toBe(true)
@@ -197,7 +177,7 @@ describe('runAgentForUser', () => {
       vi.mocked(ingestOutboundEmails).mockRejectedValue(new Error('fail 2'))
       vi.mocked(ingestCalendarEvents).mockRejectedValue(new Error('fail 3'))
 
-      const result = await runAgentForUser(uniqueUserId())
+      const result = await runAgentForUser('user-1')
 
       expect(result.success).toBe(true)
       expect(result.errors).toHaveLength(3)
@@ -206,7 +186,7 @@ describe('runAgentForUser', () => {
     it('continues when lead tracking fails', async () => {
       vi.mocked(trackLeadsForUser).mockRejectedValue(new Error('lead tracking crash'))
 
-      const result = await runAgentForUser(uniqueUserId())
+      const result = await runAgentForUser('user-1')
 
       expect(result.success).toBe(true)
       expect(result.errors.some(e => e.includes('Lead tracking'))).toBe(true)

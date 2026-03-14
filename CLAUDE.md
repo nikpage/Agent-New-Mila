@@ -14,7 +14,6 @@
 - **Local**: `http://localhost:3000`
 - **Prod**: `https://mila.specialagents.pro/`
 
-
 ### Test commands (always local first, then prod)
 ```bash
 # Local
@@ -25,14 +24,14 @@ curl "https://mila.specialagents.pro/api/cron/morning-brief?userId=ee23bcb7-ee2c
 ```
 
 ## Project Overview
-**Mila** is an AI-powered executive assistant that ingests emails, WhatsApp messages, and calendar events, uses Gemini AI to propose actions (reply, schedule, follow up, delegate), tracks leads, and presents everything for user approval via morning brief emails.
+Mila is an AI-powered executive assistant that ingests emails, WhatsApp messages, and calendar events, uses Gemini AI to propose actions (reply, schedule, follow up, delegate, snooze), tracks leads, and presents everything for user approval via morning brief emails.
 
 - **Stack**: Next.js 14 (App Router) / TypeScript 5.7 (strict) / Supabase / Tailwind CSS 3
-- **AI**: Google Gemini (primary) via `@google/generative-ai` + Anthropic Claude (fallback) via `@anthropic-ai/sdk`
+- **AI**: Google Gemini (primary) via @google/generative-ai + Anthropic Claude (fallback) via @anthropic-ai/sdk
 - **Deployment**: Vercel (briefs scheduled via Upstash QStash)
 - **Monitoring**: Sentry error tracking (client + server + edge)
 - **Path alias**: `@/*` → `src/*`
-- **Full product spec**: See `SPEC.md`
+- **Full product spec**: See SPEC.md
 
 ## Commands
 ```bash
@@ -44,22 +43,22 @@ npm run dev          # Dev server (uses 8GB heap)
 npm run test:watch   # Vitest in watch mode (re-runs on file change)
 npm run test:coverage # Vitest with v8 coverage report
 ```
-**After making changes, run `npm test && npm run build`** to verify nothing is broken.
+
+After making changes, run `npm test && npm run build` to verify nothing is broken.
 
 ## Architecture Map
-
 ```
 src/
 ├── app/                        # Next.js App Router (pages + API routes)
-│   ├── api/agent/run/          # Main agent orchestration endpoint
+│   ├── api/agent/run/          # Main agent orchestration endpoint (polled every 5 mins via QStash)
 │   ├── api/action/[id]/        # Action CRUD + execute/draft/todo/blacklist
 │   ├── api/auth/               # OAuth connect + callback
 │   ├── api/cron/morning-brief/ # Brief endpoint (called by QStash per-user schedules)
-│   ├── api/gdpr/delete/        # GDPR Art. 17 — cascade-delete all user data
+│   ├── api/gdpr/delete/        # GDPR Art. 17 — soft-delete user data
 │   ├── api/gdpr/export/        # GDPR Art. 15 — export all user data as JSON
 │   ├── api/ingest/             # Manual email/calendar ingestion
 │   ├── api/ingest/bulk/        # Bulk historical ingestion orchestrator (QStash on Vercel, NDJSON locally)
-│   ├── api/ingest/bulk/worker/ # QStash worker — processes Phase 1–4 in chained batches of 50
+│   ├── api/ingest/bulk/worker/ # QStash worker — processes Phase 1–4 in chained batches of 5
 │   ├── api/backfill/action/    # Backfill report action handler (allow/blacklist/add/setrole)
 │   ├── api/health/             # Health check
 │   ├── api/whatsapp/status/    # WhatsApp daemon status proxy
@@ -85,7 +84,7 @@ src/
 │   ├── ai/
 │   │   ├── gemini.ts           # AI functions (preFilter, classify, enrichMessage, proposeAction, etc.)
 │   │   ├── mila-voice.ts       # Centralized Mila text generation — ALL user-facing + CP-facing text
-│   │   ├── runner.ts           # runAITask() with 3-model fallback + 429 retry
+│   │   ├── runner.ts           # runAITask() with 2-model fallback + 429 retry
 │   │   └── providers/          # gemini.ts (multi-key rotation), anthropic.ts, types.ts, index.ts
 │   ├── qstash/
 │   │   └── client.ts           # QStash per-user brief scheduling (morning + afternoon)
@@ -118,39 +117,38 @@ src/
 ```
 
 ## Agent Pipeline (src/services/agent.ts)
-
 ```
 Step 1: Verify user exists + has Google credentials (early return if fail)
-Step 0: purgeUserAsCp — data hygiene (runs after user is verified)
-Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
-  Step 2: Ingest inbound emails from Gmail (clean → enrich → embed enriched text)
-  Step 2.1: Ingest outbound emails from Gmail (clean → enrich → embed enriched text)
-  Step 2.5: Sync Google Calendar events, detect invitations, filter personal events
-Step 3: Get all unprocessed messages (email + WhatsApp)
-Step 4: Thread messages into conversations (uses enriched_text for embedding similarity)
-Step 5: Generate action proposals for updated conversations — one conversation may produce multiple actions (e.g. REPLY + SCHEDULE + TODO). Channel-aware, adaptive context, batched ×5
-Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10)
+Step 2: purgeUserAsCp — remove any CP records matching user's own identity (user can't be their own counterparty)
+Steps 3 + 3.1 + 3.5 run IN PARALLEL (Promise.allSettled):
+  Step 3: Ingest inbound emails from Gmail (clean → enrich → embed enriched text)
+  Step 3.1: Ingest outbound emails from Gmail (clean → enrich → embed enriched text)
+  Step 3.5: Sync Google Calendar events, detect invitations, filter personal events
+Step 4: Get all unprocessed messages (email + WhatsApp)
+Step 5: Thread messages into conversations (uses enriched_text for embedding similarity)
+Step 6: Generate action proposals for updated conversations — one conversation may produce multiple actions (e.g. REPLY + SCHEDULE + TODO). Channel-aware, adaptive context, batched ×5. Can propose SNOOZE if waiting on third party.
+Step 7: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10). Ignores conversations where current_date < snooze_until.
 ```
 
-Result type includes: `emailsIngested`, `whatsappMessagesProcessed`, `calendarEventsSynced`, `calendarInvitationsDetected`, `messagesProcessed`, `conversationsUpdated`, `actionsGenerated`, `followUpsGenerated`, `coolingLeads`, `coldLeads`.
+Result type includes: emailsIngested, whatsappMessagesProcessed, calendarEventsSynced, calendarInvitationsDetected, messagesProcessed, conversationsUpdated, actionsGenerated, followUpsGenerated, coolingLeads, coldLeads.
 
 ## Performance Rules (CRITICAL)
 
 ### Do NOT bulk-read directories
 Never read all files in a directory sequentially. This bloats context and causes hangs.
 
-**Worst offenders (do NOT read all files in these):**
+Worst offenders (do NOT read all files in these):
 - `src/lib/db/` — 11 files, ~2500 lines. Use the index below to pick the right file.
 - `src/services/` — 11 files, ~4500 lines. Read only the service relevant to the task.
 - `src/lib/google/` — 5 files, ~1400 lines. Read only the API you need.
 
 ### Do NOT follow imports into large type files
-- `src/lib/supabase/types.ts` (804 lines) — Only read if you need specific type definitions. Use Grep to find the type you need instead.
+`src/lib/supabase/types.ts` (804 lines) — Only read if you need specific type definitions. Use Grep to find the type you need instead.
 
 ### Strategy for understanding code
-1. **Start with Grep** to find the function/type you need
-2. **Read only the specific file** containing it
-3. **Never read more than 2-3 files** from the same directory in one session
+1. Start with Grep to find the function/type you need
+2. Read only the specific file containing it
+3. Never read more than 2-3 files from the same directory in one session
 4. If you need broader context, use the Explore agent — it manages its own context
 
 ## src/lib/db/ Quick Reference
@@ -158,21 +156,21 @@ Instead of reading these files, use this index:
 
 | File | Contents |
 |------|----------|
-| `users.ts` | `getUserById`, `getUserByEmail`, `upsertUser`, `getUserSettings`, `updateUserSettings`, `getUsersWithEmailEnabled`, `getUsersDueBrief`, `updateUserGoogleTokens`, `getUserGoogleTokens` |
-| `counterparties.ts` | `normalizeGmailAddress`, `isSameGmailAddress`, `purgeUserAsCp`, `getCPById`, `getCPByIdentifier`, `getCPsForUser`, `upsertCP`, `findOrCreateCP`, `updateCP`, `blacklistCP`, `getCPState`, `updateCPState` |
-| `conversations.ts` | `getConversationById`, `getConversationsForUser`, `createConversation`, `updateConversation`, `updateConversationSummary`, `incrementMessageCount`, `getMessagesForConversation`, `getRecentMessages`, `addParticipant`, `getParticipants`, `findConversationByExternalThread` |
-| `messages.ts` | `getMessageById`, `getMessageByExternalId`, `messageExists`, `createMessage`, `createMessages`, `updateMessage`, `getMessagesInRange`, `getUnprocessedMessages`, `assignMessageToConversation`, `getLatestMessageFromCP`, `countMessagesInConversation` |
-| `actions.ts` | `getActionById`, `getActionsForUser`, `getPendingActionsForBrief`, `createAction`, `updateAction`, `updateActionStatus`, `approveAction`, `completeAction`, `dismissAction`, `dismissAllPendingActions`, `updateActionDraft`, `markActionsNotified`, `getHighPriorityUnnotifiedActions`, `markActionsInstantNotified`, `calculatePriorityScore`, `getActionsForConversation`, `hasPendingAction` |
-| `todos.ts` | `getTodoById`, `getTodosForUser`, `getPendingTodos`, `createTodo`, `updateTodo`, `completeTodo`, `deleteTodo`, `getTodosForThread`, `getOverdueTodos`, `getTodosDueToday` |
-| `events.ts` | `getEventById`, `getEventsInRange`, `getEventsForToday`, `getUpcomingEvents`, `createEvent`, `updateEvent`, `deleteEvent`, `findConflicts`, `getLastEventLocation`, `getEventsWithCP`, `findAvailableSlots`, `getEventsByBlockGroup`, `cleanupBlockGroup`, `createHoldEvent`, `createTravelBuffer`, `cleanupTravelBuffers`, `getTravelBuffers`, `confirmEvent`, `cancelEventWithCleanup`, `calculateEventScore`, `upsertEventByGoogleId`, `getChildEvents` |
-| `embeddings.ts` | `saveMessageEmbedding`, `saveConversationEmbedding`, `getConversationsWithEmbeddingsByCP` |
-| `gdpr.ts` | `writeAuditLog`, `exportAllUserData`, `deleteAllUserData`, `enforceRetentionPolicy` |
-| `locks.ts` | `tryAcquireUserLock`, `releaseUserLock` |
-| `index.ts` | Barrel re-exports (do not read) |
+| users.ts | getUserById, getUserByEmail, upsertUser, getUserSettings, updateUserSettings, getUsersWithEmailEnabled, getUsersDueBrief, updateUserGoogleTokens, getUserGoogleTokens |
+| counterparties.ts | normalizeGmailAddress, isSameGmailAddress, purgeUserAsCp, getCPById, getCPByIdentifier, getCPsForUser, upsertCP, findOrCreateCP, updateCP, blacklistCP, getCPState, updateCPState |
+| conversations.ts | getConversationById, getConversationsForUser, createConversation, updateConversation, updateConversationSummary, incrementMessageCount, getMessagesForConversation, getRecentMessages, addParticipant, getParticipants, findConversationByExternalThread |
+| messages.ts | getMessageById, getMessageByExternalId, messageExists, createMessage, createMessages, updateMessage, getMessagesInRange, getUnprocessedMessages, assignMessageToConversation, getLatestMessageFromCP, countMessagesInConversation |
+| actions.ts | getActionById, getActionsForUser, getPendingActionsForBrief, createAction, updateAction, updateActionStatus, approveAction, completeAction, dismissAction, dismissAllPendingActions, updateActionDraft, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, calculatePriorityScore, getActionsForConversation, hasPendingAction |
+| todos.ts | getTodoById, getTodosForUser, getPendingTodos, createTodo, updateTodo, completeTodo, deleteTodo, getTodosForThread, getOverdueTodos, getTodosDueToday |
+| events.ts | getEventById, getEventsInRange, getEventsForToday, getUpcomingEvents, createEvent, updateEvent, deleteEvent, findConflicts, getLastEventLocation, getEventsWithCP, findAvailableSlots, getEventsByBlockGroup, cleanupBlockGroup, createHoldEvent, createTravelBuffer, cleanupTravelBuffers, getTravelBuffers, confirmEvent, cancelEventWithCleanup, calculateEventScore, upsertEventByGoogleId, getChildEvents |
+| embeddings.ts | saveMessageEmbedding, saveConversationEmbedding, getConversationsWithEmbeddingsByCP |
+| gdpr.ts | writeAuditLog, exportAllUserData, deleteAllUserData, enforceRetentionPolicy |
+| locks.ts | tryAcquireUserLock, releaseUserLock |
+| index.ts | Barrel re-exports (do not read) |
 
-All db files follow the same pattern: import `getSupabaseAdmin` from `../supabase/client`, import types from `../supabase/types`, export async CRUD functions.
+All db files follow the same pattern: import getSupabaseAdmin from ../supabase/client, import types from ../supabase/types, export async CRUD functions.
 
-**SECURITY:** When adding new queries, always filter by `user_id` unless specifically needed:
+**SECURITY**: When adding new queries, always filter by user_id unless specifically needed:
 ```typescript
 // GOOD
 const actions = await supabase.from('action_proposals').select('*').eq('user_id', userId)
@@ -182,138 +180,133 @@ const actions = await supabase.from('action_proposals').select('*')
 ```
 
 ## Per-User Config
+All user configuration is stored in `users.settings` JSONB column. See ONBOARDING.md for the full settings reference. Configured via `scripts/configure-user.ts`.
 
-All user configuration is stored in `users.settings` JSONB column. See `ONBOARDING.md` for the full settings reference. Configured via `scripts/configure-user.ts`.
-
-**`src/config/client.ts`** exports helper functions that take `UserSettings` as input:
+`src/config/client.ts` exports helper functions that take UserSettings as input:
 - `getAISystemPrompt(settings)` — builds the AI system prompt from user's business context
 - `containsHighValueSignals(text, settings)` — checks text against user's high-value keywords (used in both planning and lead tracking)
 - `isPersonalEvent(title, settings)` — detects personal calendar events
 
-The `clientConfig` const object in this file is **legacy dead code** — not consumed at runtime. All runtime behavior reads from `UserSettings` via DB.
+The `clientConfig` const object in this file is legacy dead code — not consumed at runtime. All runtime behavior reads from UserSettings via DB.
 
 ## Lead Tracking (src/services/lead-tracking.ts)
-
-Runs as Step 6 of agent pipeline. Scans all conversations, detects stale leads:
+Runs as Step 7 of agent pipeline. Scans all conversations, detects stale leads:
 
 | Status | Days Inactive | Action |
-|--------|--------------|--------|
+|--------|---------------|--------|
 | Active | < 2 | None |
 | Cooling | 2-5 | Gentle check-in (1.5x priority boost) |
 | Cold | 5-14 | Urgent follow-up (2.5x boost) |
 | Dead | 14+ | Last-chance contact (3.75x boost) |
 
+**Snooze Bypass**: Ignores any conversation where `current_date < snooze_until`. This prevents Mila from panicking and flagging a deal as "Dead" when it's just sitting in the land registry or waiting on a bank.
+
 Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation. Uses `selectOfferMultiplier()` to apply seller/buyer role-based multiplier to follow-up priority scores. High-value conversations (matching `highValueSignals`) get additional 1.5x boost in lead tracking and are flagged to the AI during planning for better dollar value estimation.
 
 ## Database Schema
+Full schema reference (all tables, columns, deal property model, migrations): See docs/SCHEMA.md
 
-Full schema reference (all tables, columns, deal property model, migrations): See `docs/SCHEMA.md`
+Key tables: users, cps, conversation_threads, messages, action_proposals, events, todos, emails, audit_logs, user_agent_locks. All tables have user_id — always filter by it in queries.
 
-Key tables: `users`, `cps`, `conversation_threads`, `messages`, `action_proposals`, `events`, `todos`, `emails`, `audit_logs`, `user_agent_locks`. All tables have `user_id` — always filter by it in queries.
+Conversation statuses (WAIT, ARCHIVE) are stored in `conversation_threads.status` (e.g., active, waiting, archived), not as user-facing actions. `conversation_threads` also tracks `snooze_until` for third-party delays.
 
 ## Priority Scoring
-
-**Formula:** `score = normVal + U + daysIgnored² + W`
+**Formula**: `Score = (BaseDealScore * sellerMultiplier) + (urgency * daysIgnored^1.5) + weight`
 
 Four independent terms — each measures a different dimension, no cross-contamination:
-1. `normVal = log_compress(dollarValue) × sellerMultiplier` — deal size (post-log multiplier so it's a real % boost)
-2. `U` — urgency: AI-assessed starting pressure (1-10). Also the baseline for non-deal tasks (doctor appointment, printer deadline)
-3. `daysIgnored²` — time pressure that escalates quadratically. Day 0 = 0, day 1 = 1, day 3 = 9, day 7 = 49
-4. `W` — weight/immovability: flat, never changes. 1-10 for normal items, 100 for absolutely immovable (court date, kids concert)
 
-**Why these are independent:**
-- **normVal** answers "how much money is at stake?" — static for the deal's lifetime
-- **U** answers "how urgently does this need doing?" — sets both the starting floor and baseline pressure
-- **daysIgnored²** answers "how long has this been sitting?" — escalates equally regardless of deal value
-- **W** answers "can this be moved?" — kid's concert is W=100 from day 1 to day 1000, never changes
+- **BaseDealScore** = `Math.max(1, Math.round((dollarValue / kcHighValue) * 10))` — Percentage-based normalization capped at a reasonable ceiling. A 5M deal with a 10M high-value anchor gets a base score of 5. Hard floor of 1 ensures no deal ever drops to 0 or negative.
+- **sellerMultiplier** — Applied to the BaseDealScore. Default 1.5 for sellers, 1.0 for buyers (user-configurable).
+- **urgency * daysIgnored^1.5** — Time penalty. Ignored items escalate aggressively to force the user to act. ^1.5 provides a strong but manageable curve (Day 1 = 1, Day 3 ≈ 5.2, Day 5 ≈ 11.1, Day 7 ≈ 18.5).
+- **weight** — immovability: flat, never changes. 1-10 for normal items, 100 for absolutely immovable (court date, kids concert). User-created events default to 7.
 
-**Why log normalization exists:** Different users have different deal ranges. Agent A sells 2M-5M homes, Agent B sells 10M-100M. The log scale maps both to the same score range (~2-13 for their respective kcLow→kcHigh). Like Fibonacci tiers (1,2,3,5,8,13,21,34) but smooth — no jumps between values. User sets their own anchors via `kc_low_value` and `kc_high_value`. Below-floor deals go below 2 (can be negative) — they sink naturally.
-
-**Why sellerMultiplier is post-log:** Applied AFTER log compression so 1.5× actually gives 50% more score. Pre-log it gets swallowed by the logarithm and barely moves the needle. Default 1.5 for sellers, 1.0 for buyers (user-configurable).
-
-**Implementation:** `src/lib/db/actions.ts` → `calculatePriorityScore()`
+**Implementation**: `src/lib/db/actions.ts` → `calculatePriorityScore()`
 
 | Input | Scale | Notes |
 |-------|-------|-------|
-| `dollarValue` | 0+ (CZK) | Deal/transaction value |
-| `kcLowValue` | default 500000 | "Small deal" anchor from `settings.kc_low_value`. Maps to normalized score ~2. |
-| `kcHighValue` | default 5000000 | "Big deal" anchor from `settings.kc_high_value`. Maps to normalized score ~13. |
-| `sellerMultiplier` | default 1 | Applied AFTER log. From user settings: `offer_multiplier_seller` (1.5) or `offer_multiplier_buyer` (1.0) based on CP role |
-| `urgency` | 1-10 | AI-assessed, safe default 1 |
-| `daysIgnored` | 0+ | Days since last activity (squared: day 3 = 9, day 7 = 49) |
-| `weight` | 1-10 or 100 | How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable (court date, kids concert, airport pickup). No values between 10-100. **NEVER null** — always has a value. Do not add null guards for weight. |
+| dollarValue | 0+ (CZK) | Deal/transaction value |
+| kcHighValue | default 5000000 | "Big deal" anchor from settings.kc_high_value. Used to calculate BaseDealScore. |
+| sellerMultiplier | default 1 | From user settings: offer_multiplier_seller (1.5) or offer_multiplier_buyer (1.0) based on CP role |
+| urgency | 1-10 | AI-assessed, safe default 1 |
+| daysIgnored | 0+ | Days since last activity (escalates via ^1.5) |
+| weight | 1-10 or 100 | How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable. User events default to 7. NEVER null — always has a value. Do not add null guards for weight. |
 
-Safe defaults: `urgency`, `sellerMultiplier` fallback to 1 if 0/null (prevents score collapse). `kcLowValue` falls back to 500000, `kcHighValue` must be > kcLowValue (falls back to kcLowValue × 10).
+**Safe defaults**: urgency, sellerMultiplier fallback to 1 if 0/null (prevents score collapse). kcHighValue falls back to 5000000.
 
-**DO NOT REMOVE OR CHANGE** the log-scale normalization, the four-term independence, or `weight` wiring without explicit user permission.
+**DO NOT REMOVE OR CHANGE** the formula, the four-term independence, or weight wiring without explicit user permission.
 
-**Wiring:** `planning.ts` passes `sellerMultiplier` (from CP role via `selectOfferMultiplier`), `kcLowValue`/`kcHighValue` (from user settings), and `weight` (from AI response) to `calculatePriorityScore()`. `lead-tracking.ts` also passes `sellerMultiplier` and `kcLowValue`/`kcHighValue` for follow-up actions.
+**Wiring**: `planning.ts` passes sellerMultiplier (from CP role via `selectOfferMultiplier`), kcHighValue (from user settings), and weight (from AI response) to `calculatePriorityScore()`. `lead-tracking.ts` also passes sellerMultiplier and kcHighValue for follow-up actions.
 
 ## AI Model Configuration
+**Config**: `src/config/ai-models.ts` — 7 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
 
-**Config:** `src/config/ai-models.ts` — 7 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
-**Runner:** `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, retries 429s with exponential backoff (1s, 2s, 4s), logs which model succeeded.
+**Runner**: `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, retries 429s with exponential backoff (1s, 2s, 4s), logs which model succeeded.
 
 | Stage | Purpose | Primary → Fallback1 → Fallback2 |
-|-------|---------|----------------------------------|
-| `filter` | Spam detection | `gemini-2.5-flash-lite` → `claude-haiku-4-5-20251001` |
-| `classify` | Email category + priority | `gemini-2.5-flash-lite` → `claude-haiku-4-5-20251001` |
-| `enrichment` | Per-message key info extraction | `gemini-2.5-flash-lite` → `gemini-2.5-flash` |
-| `threading` | extractTopic, shouldJoinConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` |
-| `analysis` | analyzeConversation | `gemini-2.5-flash` → `claude-sonnet-4-6` |
-| `planning` | proposeAction (type, rationale, intent) | `gemini-2.5-flash` → `claude-sonnet-4-6` |
-| `drafting` | All mila-voice.ts functions (generateFinalDraft, generateBriefIntro, generateSchedulingIntent, generateLeadFollowUpIntent, generateUrgentIntro) | `gemini-2.5-flash` → `claude-sonnet-4-6` |
+|-------|---------|--------------------------------|
+| filter | Spam detection | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
+| classify | Email category + priority | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
+| enrichment | Per-message key info extraction | gemini-2.5-flash-lite → gemini-2.5-flash |
+| threading | extractTopic, shouldJoinConversation | gemini-2.5-flash → claude-sonnet-4-6 |
+| analysis | analyzeConversation | gemini-2.5-flash → claude-sonnet-4-6 |
+| planning | proposeAction (type, rationale, intent) | gemini-2.5-flash → claude-sonnet-4-6 |
+| drafting | All mila-voice.ts functions (generateFinalDraft, generateBriefIntro, generateSchedulingIntent, generateLeadFollowUpIntent, generateUrgentIntro) | gemini-2.5-flash → claude-sonnet-4-6 |
 
-**Rate limit handling:** On 429/RESOURCE_EXHAUSTED errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
+**Rate limit handling**: On 429/RESOURCE_EXHAUSTED errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
 
-**Embedding model:** `gemini-embedding-001` (768-dim, multilingual) — separate from chat, NO fallback chain. Embedding failures are caught silently — the app works without them (threading falls back to Gmail thread ID matching).
+**Embedding model**: gemini-embedding-001 (768-dim, multilingual) — separate from chat, NO fallback chain. Embedding failures are caught silently — the app works without them (threading falls back to Gmail thread ID matching).
 
-**Providers:**
-- `src/lib/ai/providers/gemini.ts` — `@google/generative-ai` SDK. Supports **multi-key rotation** via `GEMINI_API_KEYS` (comma-separated) — round-robins across keys. Falls back to single `GEMINI_API_KEY` if not set.
-- `src/lib/ai/providers/anthropic.ts` — `@anthropic-ai/sdk`. Uses `ANTHROPIC_API_KEY` env var.
+**Providers**:
+- `src/lib/ai/providers/gemini.ts` — @google/generative-ai SDK. Supports multi-key rotation via GEMINI_API_KEYS (comma-separated) — strictly round-robins across keys on every request to spread load. Falls back to single GEMINI_API_KEY if not set.
+- `src/lib/ai/providers/anthropic.ts` — @anthropic-ai/sdk. Uses ANTHROPIC_API_KEY env var.
 
-**Prompt language convention: ALL prompts are written in English. Czech output is requested via explicit directives (e.g. "in Czech", "Output in CZECH").** This is consistent across all 9 AI functions. Never write mixed-language prompts — English instructions with Czech labels, or vice versa. If the AI needs to output Czech, tell it in English.
+**Prompt language convention**: ALL prompts are written in English. This is consistent across all 9 AI functions because LLMs reason better in English. Output language is controlled via a strict directive injected at the end of the prompt: `CRITICAL: You must generate the final text for the user in ${settings.ai_language}. Do not output English.` This ensures high-quality reasoning with localized output (Czech by default).
 
-**Business context injection:** `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()`, `generateFinalDraft()`, and `analyzeConversation()` prompts. `enrichMessage()` receives a lighter business context (company, specialization, market) + language setting. All AI functions that process user content now receive `UserSettings` for consistent language (Czech) and domain interpretation. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates `dollarValue` and `weight` (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies `dealType`.
+**Business context injection**: `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()`, `generateFinalDraft()`, and `analyzeConversation()` prompts. `enrichMessage()` receives a lighter business context (company, specialization, market) + language setting. All AI functions that process user content now receive UserSettings for consistent language and domain interpretation. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates dollarValue and weight (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies dealType.
 
 ## Embeddings & Semantic Threading
 
-**Purpose:** Assign incoming messages to existing conversations when external thread ID doesn't match. Supports cross-channel matching (WhatsApp message finds its email conversation).
+### Purpose
+Assign incoming messages to existing conversations when external thread ID doesn't match. Supports cross-channel matching (WhatsApp message finds its email conversation).
 
-**Per-message enrichment** (`enrichMessage` in `gemini.ts`):
+### Per-message enrichment (enrichMessage in gemini.ts)
 - Runs after cleaning, before threading. Extracts: who's involved, property/subject, message kind, deal numbers, core intent.
-- **Output language:** Czech (matches `ai_language` setting). Enrichment prompt includes business context from `UserSettings` so domain-specific terms are interpreted correctly (e.g. Czech "statek" = farm/estate, not "ship").
+- **Output language**: Matches ai_language setting. Enrichment prompt includes business context from UserSettings so domain-specific terms are interpreted correctly (e.g. Czech "statek" = farm/estate, not "ship").
 - Saves to `messages.enriched_text` column. Embedding generated from enriched text (not raw body).
-- Stage: `enrichment` (gemini-2.5-flash-lite → gemini-2.5-flash). Cost-sensitive — runs per message.
-- Accepts optional `UserSettings` for business context injection. All callers (`ingestion.ts`, `bulk-ingestion.ts`, QStash worker) fetch and pass user settings.
-- Runs in **both** regular ingestion (`ingestion.ts`) **and** bulk historical ingestion (`bulk-ingestion.ts`). Bulk enrichment runs in Phase 2 (`Phase2EnrichResult` tracks `enriched`, `enrichmentFailed`, `embedded`, `embeddingFailed`).
+- **Stage**: enrichment (gemini-2.5-flash-lite → gemini-2.5-flash). Cost-sensitive — runs per message.
+- Accepts optional UserSettings for business context injection. All callers (ingestion.ts, bulk-ingestion.ts, QStash worker) fetch and pass user settings.
+- Runs in both regular ingestion (ingestion.ts) and bulk historical ingestion (bulk-ingestion.ts). Bulk enrichment runs in Phase 2 (Phase2EnrichResult tracks enriched, enrichmentFailed, embedded, embeddingFailed).
 
-**Pipeline** (`src/services/threading.ts`):
-1. **External thread ID match** (primary) — exact match on `external_thread_id` (Gmail thread ID, Exchange conversation ID, `wa:+phone`). Only matches messages already assigned to a conversation (`conversation_id IS NOT NULL`) — unassigned messages are skipped to prevent 1:1 message-to-conversation creation during bulk ingestion.
-2. **Enriched embedding similarity** (secondary) — cosine similarity of enriched message embedding against conversation embeddings, same CP only
-3. **New conversation** (fallback) — if nothing matches. Creates thin-conversation ToDo if enrichment yielded < 100 chars.
+### Purpose
+Unified conversation tracking across channels, email threads, and senders. An email from Jan Novotny, a forwarded email from his assistant, and a WhatsApp from the same Jan — all about the same deal — land in ONE conversation. This is the core intelligence that lets Mila see the full picture.
 
-**Thresholds:**
-- `≥ 0.78` → auto-join conversation (no AI needed)
-- `0.55 – 0.78` → AI tiebreak via `shouldJoinConversation()`
-- `< 0.55` → new conversation
+### Pipeline (src/services/threading.ts)
+1. **External thread ID match (primary)** — exact match on external_thread_id (Gmail thread ID, Exchange conversation ID, wa:+phone). Only matches messages already assigned to a conversation (conversation_id IS NOT NULL) — unassigned messages are skipped to prevent 1:1 message-to-conversation creation during bulk ingestion.
+2. **Enriched embedding similarity (secondary)** — cosine similarity of enriched message embedding against conversation embeddings, same CP only
+3. **New conversation (fallback)** — if nothing matches. Creates thin-conversation ToDo if enrichment yielded < 100 chars.
 
-**WhatsApp threading:** By phone number — `external_thread_id = wa:+phone`
+**Thresholds**:
+- ≥ 0.78 → auto-join conversation (no AI needed)
+- 0.55 – 0.78 → AI tiebreak via `shouldJoinConversation()`
+- < 0.55 → new conversation
 
-**Conversation summaries** (`analyzeConversation` in `gemini.ts`) use enriched messages (adaptive count: enough to reach ~1500 chars). Falls back to cleaned_text for older un-enriched messages. Embedding generated from summary text. Accepts optional `UserSettings` — when provided, the AI receives business context and explicit role mapping: `[outbound]` = user (email account owner), `[inbound]` = counterparty. All output in Czech.
+**WhatsApp threading**: By phone number — external_thread_id = `wa:+phone`
 
-**Channel-aware cleaning** (`cleanMessageText` in `generate.ts`):
-- `email`/`email/gmail`: Full cleaning (signatures, quoted replies, disclaimers, tracking pixels)
-- `email/exchange`: Gmail base + Outlook-specific patterns (EXTERNAL EMAIL banners, From/Sent/To headers, aka.ms links)
-- `whatsapp`: Minimal — system messages and forwarded labels only
-- `cleanEmailText()` is a backward-compatible alias for `cleanMessageText(text, 'email')`
+**Conversation summaries** (`analyzeConversation` in gemini.ts) use enriched messages (adaptive count: enough to reach ~1500 chars). Falls back to cleaned_text for older un-enriched messages. Embedding generated from summary text. Accepts optional UserSettings — when provided, the AI receives business context and explicit role mapping: [outbound] = user (email account owner), [inbound] = counterparty. All output matches ai_language.
+
+### Channel-aware cleaning (cleanMessageText in generate.ts)
+- **email/email/gmail**: Full cleaning (signatures, quoted replies, disclaimers, tracking pixels)
+- **email/exchange**: Gmail base + Outlook-specific patterns (EXTERNAL EMAIL banners, From/Sent/To headers, aka.ms links)
+- **whatsapp**: Minimal — system messages and forwarded labels only
+
+`cleanEmailText()` is a backward-compatible alias for `cleanMessageText(text, 'email')`
 
 ## Scheduling & Calendar Management
-
-**Implementation:** `src/services/scheduling.ts` (702 lines — largest service)
+**Implementation**: `src/services/scheduling.ts` (702 lines — largest service)
 
 ### Core Flow — Batch Schedule Optimization
 When the brief is being prepared, Mila pre-optimizes ALL unsent SCHEDULE actions as a batch:
+
 1. Collects all pending, unsent SCHEDULE actions
 2. Optimizes slot selection across all new meetings using these criteria (in priority order):
    - **CP availability** — stated or inferred from conversation (e.g. "I can only do Tuesday afternoon")
@@ -321,118 +314,117 @@ When the brief is being prepared, Mila pre-optimizes ALL unsent SCHEDULE actions
    - **Travel optimization** — avoid crossing town twice; cluster meetings geographically when possible while respecting criteria above
    - **Conflict resolution (last resort)** — Mila first tries to schedule without moving existing events. Not accepting a meeting due to time conflict is acceptable in most cases. However, if a new meeting has high priority AND the conversation indicates the CP can only meet at a specific conflicted time, Mila suggests moving the conflicting event — even if it has high weight. The user always has the final call; Mila only suggests, never auto-moves
 3. Picks THE optimal slot for each meeting — one slot per meeting, not multiple options
-4. Creates a tentative **hold event** for each chosen slot (prevents double-booking while user reviews)
-5. Presents a single **batch schedule card** in the brief, grouped by day
-6. Each sub-card shows: suggested time, CP name, location, deal value, and Mila's reasoning for that slot
-7. Standard CTAs per sub-card (UDĚLAT / UPRAVIT / UDĚLÁM SÁM) plus a batch "UDĚLAT VŠE" button
-8. On approval: hold becomes confirmed event, invite sent to CP
-9. On rejection or edit via UPRAVIT: hold is cleared, new hold created if user picks a different time
+4. Creates a tentative hold event for each chosen slot (prevents double-booking while user reviews)
+5. Presents a single batch schedule card in the brief, grouped by day
+   - Each sub-card shows: suggested time, CP name, location, deal value, and Mila's reasoning for that slot
+   - Standard CTAs per sub-card (UDĚLAT / UPRAVIT / UDĚLÁM SÁM) plus a batch "UDĚLAT VŠE" button
+6. On approval: hold becomes confirmed event, invite sent to CP
+7. On rejection or edit via UPRAVIT: hold is cleared, new hold created if user picks a different time
 
-**Scope rules:**
-- **Only touches penciled-in (unsent) meetings.** Once an invite is sent to CP, that slot is locked — treated as a confirmed event
+**Scope rules**:
+- Only touches penciled-in (unsent meetings). Once an invite is sent to CP, that slot is locked — treated as a confirmed event
 - Sent invites and confirmed events are fixed walls the optimizer plans around — never auto-moved (but Mila may suggest moving them if conflict resolution requires it)
 - For a single SCHEDULE action, the same flow applies — Mila picks the optimal slot and presents it
 
 ### Slot Finding
 - `findFreeSlots()` scans working hours for gaps between ALL calendar events (including holds)
-- Respects `working_hours_start/end`, `working_days` from user settings
-- Applies `meeting_buffer_minutes` (default 15m) between meetings
+- Respects working_hours_start/end, working_days from user settings
+- Applies meeting_buffer_minutes (default 15m) between meetings
 
 ### Travel Time
 - `calculateTravelForSlot()` uses Google Maps Distance Matrix API (`src/lib/google/maps.ts`)
 - Origin: previous event location → office_location → home_location (fallback chain)
-- **>500m**: always driving via Google Maps. Factors in road work (persistent); ignores short-term incidents (accidents clear before the meeting, which is usually days away)
-- **≤500m**: 15min flat buffer (walking distance)
-- Buffer formula for >500m: `max(travelMinutes + 10, 15min minimum)`
-- Creates travel buffer events linked via `parent_event_id`
+- **Same Location / Online**: 0 min buffer.
+- **Different Location**: Queries Google Maps API for estimated travel time + adds a flat 10 min safety buffer (for parking/walking to the door).
+- Creates travel buffer events linked via parent_event_id
 
 ### Hold Events
 - One hold per meeting — the optimal slot Mila chose
 - Prevents double-booking between brief generation and user action
-- **Short-lived**: approved → becomes confirmed event. Rejected/edited → cleared
+- Short-lived: approved → becomes confirmed event. Rejected/edited → cleared
 - If user doesn't act by next brief, the hold remains and the brief nudges again
 
 ### Priority-Based Conflict Resolution
 When a new meeting conflicts with existing events:
 - `handleConflict()` compares `calculateEventScore()` of new vs existing
-- **New score > existing score** → `recommendation: 'move_existing'`
-- **New score ≤ existing score** → `recommendation: 'suggest_alternate'`
-- **User-created events default weight = 100** (treated as immovable)
-- **Weight is NEVER null** — every event has a weight value. Do not add null guards for weight
+- New score > existing score → recommendation: 'move_existing'
+- New score ≤ existing score → recommendation: 'suggest_alternate'
+- User-created events default weight = 7 (treated as planned but movable for high-value deals)
+- Weight is NEVER null — every event has a weight value. Do not add null guards for weight
 - Conflict resolution handles rare conflicts with confirmed events — separate from batch optimization
 
 ### Calendar Invitations
-- When Mila detects an invitation (from email/WhatsApp text or calendar event), she always creates a **SCHEDULE action** for user approval — human in the loop, no auto-accept
+- When Mila detects an invitation (from email/WhatsApp text or calendar event), she always creates a SCHEDULE action for user approval — human in the loop, no auto-accept
 - Mila checks user's calendar and suggests accept/reject/propose new time
 
 ### Personal Calendar Events
-- Personal events (matching `isPersonalEvent(title, settings)`) **block time** but **do NOT generate action proposals**
-- Detection in `calendar-ingestion.ts`
+- Personal events (matching `isPersonalEvent(title, settings)`) block time but do NOT generate action proposals
+- Detection in calendar-ingestion.ts
 
 ## Mila Voice — Centralized Text Generation
+**Module**: `src/lib/ai/mila-voice.ts` — single source of truth for ALL text Mila produces, both user-facing and CP-facing.
 
-**Module:** `src/lib/ai/mila-voice.ts` — single source of truth for ALL text Mila produces, both user-facing and CP-facing.
+### Mila → User (uses settings.ai_tone_user)
 
-### Mila → User (uses `settings.ai_tone_user`)
 | Function | Replaces | Purpose |
 |----------|----------|---------|
 | `generateSchedulingIntent()` | Hardcoded overwrites in planning.ts | Rewrites AI's intent_cs with scheduling details (slot, conflicts, location) baked in. Tone scales with urgency |
 | `generateLeadFollowUpIntent()` | Hardcoded templates in lead-tracking.ts | Generates intent_cs + rationale_cs for cooling/cold/dead leads |
-| `generateBriefIntro()` | Hardcoded greeting/subject in morning-brief.ts | Returns `{ greeting, subject, headline }` for morning/afternoon briefs |
-| `generateUrgentIntro()` | Hardcoded urgent strings in morning-brief.ts | Returns `{ subject, header, body }` for instant high-priority notifications |
+| `generateBriefIntro()` | Hardcoded greeting/subject in morning-brief.ts | Returns { greeting, subject, headline } for morning/afternoon briefs |
+| `generateUrgentIntro()` | Hardcoded urgent strings in morning-brief.ts | Returns { subject, header, body } for instant high-priority notifications |
 
-### Mila → CP (uses `settings.ai_tone_cp`)
+### Mila → CP (uses settings.ai_tone_cp)
+
 | Function | Replaces | Purpose |
 |----------|----------|---------|
 | `generateFinalDraft()` | Was in gemini.ts | CP-facing email/WhatsApp draft, on-demand at execution time |
 
 ### Urgency-aware tone
 All user-facing functions receive urgency level. The AI adjusts tone accordingly:
-- Urgency 9-10: direct, bold, conveys time pressure
-- Urgency 4-8: standard professional
-- Urgency 1-3: calm, routine
+- **Urgency 9-10**: direct, bold, conveys time pressure
+- **Urgency 4-8**: standard professional
+- **Urgency 1-3**: calm, routine
 
 ### Tone settings (in UserSettings)
 - `ai_tone_user` — how Mila talks TO the user (default: "professional and concise")
 - `ai_tone_cp` — how Mila talks TO counterparties (default: "polite and formal")
-- Both injected into prompts via `mila-voice.ts`. When user-configurable tone UI lands, it plugs in here.
 
-## Draft Generation
+Both injected into prompts via mila-voice.ts. When user-configurable tone UI lands, it plugs in here.
 
-**Timing:** On-demand only — drafts are generated at execution time, NOT during proposal creation.
-**Language:** Czech (configured in `src/config/client.ts` → `ai.language`)
-**Channel-aware tone:** Implemented — email gets formal tone + signature; WhatsApp gets short, conversational messages.
-
-Proposal phase stores: `intent_cs`, `rationale_cs`, `missing_info`, `dollar_value`, `offer_multiplier`, `weight`. Draft fields (`draft_subject`, `draft_body_text`) are null until execution. Channel is stored in `payload.channel`. Deal context (`deal_type`, `weight`, `is_high_value`) is stored in `payload.action_metadata`.
-
-`generateFinalDraft()` in `src/lib/ai/mila-voice.ts` takes conversation context + intent + user notes + channel → returns `{ subject, body }`.
+### Draft Generation
+- **Timing**: On-demand only — drafts are generated at execution time, NOT during proposal creation.
+- **Language**: Matches ai_language setting.
+- **Channel-aware tone**: Implemented — email gets formal tone + signature; WhatsApp gets short, conversational messages.
+- Proposal phase stores: intent_cs, rationale_cs, missing_info, dollar_value, offer_multiplier, weight. Draft fields (draft_subject, draft_body_text) are null until execution. Channel is stored in payload.channel. Deal context (deal_type, weight, is_high_value) is stored in payload.action_metadata.
+- `generateFinalDraft()` in `src/lib/ai/mila-voice.ts` takes conversation context + intent + user notes + channel → returns { subject, body }.
 
 ## Bulk Ingestion & Backfill Report
-
-Historical email backfill with 5-phase pipeline (fetch → enrich → thread → classify → report). Phases 1/2/4 run 20 emails in parallel. Uses QStash worker chaining on Vercel, NDJSON streaming locally. See `docs/BULK-INGESTION.md` for full details including QStash architecture, batch sizes, and backfill action handler.
+Historical email backfill with 5-phase pipeline (fetch → enrich → thread → classify → report). Phases 1/2/4 run 5 emails in parallel to prevent Gemini API 429 errors, utilizing strict round-robin key rotation. Uses QStash worker chaining on Vercel, NDJSON streaming locally. See docs/BULK-INGESTION.md for full details including QStash architecture, batch sizes, and backfill action handler.
 
 ## WhatsApp Integration
+Standalone Baileys daemon (`scripts/whatsapp-daemon.ts`) — pure WebSocket, multi-session, ~5-10 MB/session. Messages flow into agent pipeline same as email. See docs/WHATSAPP.md for daemon API, message flow, and scaling details.
 
-Standalone Baileys daemon (`scripts/whatsapp-daemon.ts`, port 3001) — pure WebSocket, multi-session, ~5-10 MB/session. Messages flow into agent pipeline same as email. See `docs/WHATSAPP.md` for daemon API, message flow, and scaling details.
+- **Process Manager**: Runs via PM2 (`pm2 start scripts/whatsapp-daemon.ts --watch`) on an always-on server/PC.
+- **Companion Device**: Acts as a linked companion device. Works 24/7 even if the user's phone is turned off, out of battery, or in their pocket.
+- **Group Chats**: Extracts the participant (sender) ID from group messages, prepends the group name to the text (e.g., `[Group: Prodej Praha] Jan: Ano`), and processes it so Mila understands multi-party deal chats.
 
 ## Conventions
-- All server-side code uses `async/await` with Supabase client
-- Error handling: check `error` from Supabase responses, throw with descriptive messages
-- API routes use Next.js App Router conventions (`route.ts` with exported HTTP method functions)
+- All server-side code uses async/await with Supabase client
+- Error handling: check error from Supabase responses, throw with descriptive messages
+- API routes use Next.js App Router conventions (route.ts with exported HTTP method functions)
 - Components use Tailwind CSS classes (no CSS modules)
 - Type imports use `import type { ... }` syntax
-- Tests use Vitest — test files are co-located with source (`*.test.ts`). See **Testing** section below for sync rules
+- Tests use Vitest — test files are co-located with source (*.test.ts). See Testing section below for sync rules
 
 ## Testing
+**Framework**: Vitest 4 with @/* path aliases. Tests co-located (foo.ts → foo.test.ts). Mock-Only-AI philosophy: mock AI + Google APIs, everything else (DB, scoring, tokens, cleaning) runs for real.
 
-**Framework:** Vitest 4 with `@/*` path aliases. Tests co-located (`foo.ts` → `foo.test.ts`). Mock-Only-AI philosophy: mock AI + Google APIs, everything else (DB, scoring, tokens, cleaning) runs for real.
+**296 tests total**: 252 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See docs/TESTING.md
 
-**296 tests total:** 252 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See `docs/TESTING.md`
-
-**Key rules:**
+**Key rules**:
 - Changed a function → update its pinning test
-- Changed a default → update `defaults.test.ts` + field count
-- New API route → add auth test in `route-protection.test.ts`
+- Changed a default → update defaults.test.ts + field count
+- New API route → add auth test in route-protection.test.ts
 - Run `npm test` before every commit. Tests must pass alongside `npm run build`.
 
 ## Security & Authentication
@@ -442,17 +434,17 @@ Standalone Baileys daemon (`scripts/whatsapp-daemon.ts`, port 3001) — pure Web
 
 ### API Protection
 All API endpoints are protected by one of:
-1. **API Key** (`MILA_USER_API_KEY`) — For `/api/agent/run`, `/api/ingest`, `/api/ingest/bulk`, `/api/gdpr/*`
-2. **Cron Secret** (`CRON_SECRET`) — For `/api/cron/*`, `/api/ingest/bulk/worker`
-3. **Action Token** (HMAC-signed) — For `/api/action/[id]/*` (email links)
-4. **Superadmin Key** — For `/api/superadmin/*`
+- **API Key** (MILA_USER_API_KEY) — For /api/agent/run, /api/ingest, /api/ingest/bulk, /api/gdpr/*
+- **Cron Secret** (CRON_SECRET) — For /api/cron/*, /api/ingest/bulk/worker
+- **Action Token** (HMAC-signed) — For /api/action/[id]/* (email links)
+- **Superadmin Key** — For /api/superadmin/*
 
-**Implementation:** `src/lib/auth/api.ts` exports `verifyApiKey(request)` middleware.
+**Implementation**: `src/lib/auth/api.ts` exports `verifyApiKey(request)` middleware.
 
 ### Row Level Security (RLS)
-- All Supabase tables have `user_id` column
+- All Supabase tables have user_id column
 - RLS policies ensure data isolation between customers
-- API routes use service key (bypasses RLS) — MUST manually validate `user_id`
+- API routes use service key (bypasses RLS) — MUST manually validate user_id
 
 ### Critical Environment Variables
 ```bash
@@ -465,82 +457,78 @@ ANTHROPIC_API_KEY    # Claude fallback models (required for fallback chain)
 QSTASH_TOKEN         # Upstash QStash token for brief scheduling + bulk ingest worker chaining
 ```
 
-**SECURITY:** OAuth tokens migrating from `users.google_oauth_tokens` (plaintext jsonb) to `users.encrypted_google_tokens` (encrypted text). See `SECURITY.md`.
+**SECURITY**: OAuth tokens migrating from `users.google_oauth_tokens` (plaintext jsonb) to `users.encrypted_google_tokens` (encrypted text). See SECURITY.md.
 
 ## Morning/Afternoon Briefs
 
 ### Scheduling via QStash (Upstash)
-- **No Vercel cron** — briefs are scheduled per-user via QStash (`src/lib/qstash/client.ts`)
+- Two daily briefs — morning (default 7:00) and late-morning (default 11:30), per-user configurable
+- No Vercel cron — briefs are scheduled per-user via QStash (`src/lib/qstash/client.ts`)
 - `createBriefSchedules(userId, morningTime, afternoonTime, timezone)` → creates QStash schedules that call `/api/cron/morning-brief?userId=<id>` at each user's configured times
 - `updateBriefSchedules()` / `deleteBriefSchedules()` for lifecycle management
 - Schedule IDs stored in user settings for cleanup
-- Requires `QSTASH_TOKEN` env var
+- Requires QSTASH_TOKEN env var
 - The `/api/cron/morning-brief` endpoint still exists as the target for QStash HTTP calls
 
 ### Parallelized Sending
-- `sendAllMorningBriefs()` processes users in batches of 10 (`BRIEF_CONCURRENCY`)
+- `sendAllMorningBriefs()` processes users in batches of 10 (BRIEF_CONCURRENCY)
 - Uses `Promise.allSettled()` for fault isolation — one user's failure doesn't block others
-- 5-minute function timeout (`maxDuration: 300`) handles ~100 users per invocation
+- 5-minute function timeout (maxDuration: 300) handles ~100 users per invocation
 
 ### Instant High-Priority Notifications
-Actions with `urgency >= 9` get an immediate email notification (same action card template as briefs).
+Actions with urgency >= 9 get an immediate email notification (same action card template as briefs).
 
-- **Polling:** Global QStash schedule (`*/5 * * * *`) hits `/api/cron/instant-notify` every 5 minutes
-- **Query:** `getHighPriorityUnnotifiedActions(urgencyThreshold)` — finds `urgency >= threshold`, `status = 'pending'`, `last_notified_at IS NULL`, `queued_for_brief = true`
-- **Send:** `sendInstantNotifications()` groups actions by user, sends email with `⚡ Urgentní akce` subject, batches users at concurrency 10
-- **Re-inclusion in brief:** `markActionsInstantNotified()` sets `last_notified_at` but keeps `queued_for_brief = true` — if the user doesn't act, the action still appears in the next morning/afternoon brief
-- **No double-send:** `last_notified_at IS NULL` filter prevents re-sending on subsequent polls
-- **Schedule management:** `createInstantNotifySchedule()` / `deleteInstantNotifySchedule()` in `src/lib/qstash/client.ts`
-- **Threshold:** `DEFAULT_INSTANT_URGENCY_THRESHOLD = 9` in `morning-brief.ts`
-
+- **Polling**: Global QStash schedule (`*/5 * * * *`) hits `/api/cron/instant-notify` every 5 minutes
+- **Query**: `getHighPriorityUnnotifiedActions(urgencyThreshold)` — finds urgency >= threshold, status = 'pending', last_notified_at IS NULL, queued_for_brief = true
+- **Send**: `sendInstantNotifications()` groups actions by user, sends email with ⚡ Urgentní akce subject, batches users at concurrency 10
+- **Re-inclusion in brief**: `markActionsInstantNotified()` sets last_notified_at but keeps queued_for_brief = true — if the user doesn't act, the action still appears in the next morning/afternoon brief
+- **No double-send**: last_notified_at IS NULL filter prevents re-sending on subsequent polls
+- **Schedule management**: `createInstantNotifySchedule()` / `deleteInstantNotifySchedule()` in `src/lib/qstash/client.ts`
+- **Threshold**: DEFAULT_INSTANT_URGENCY_THRESHOLD = 9 in morning-brief.ts
 
 ## Error Monitoring (Sentry)
-- **Client-side:** Session replay + error tracking
-- **Server-side:** API route errors, database issues
-- **Edge runtime:** Middleware errors
-- **Config:** `instrumentation.ts`, `instrumentation-client.ts`, `sentry.*.config.ts`
-- **Global handler:** `src/app/global-error.tsx` (React error boundary)
-
-**Setup:** Requires `SENTRY_DSN` env var. Free tier = 5k errors/month.
+- **Client-side**: Session replay + error tracking
+- **Server-side**: API route errors, database issues
+- **Edge runtime**: Middleware errors
+- **Config**: instrumentation.ts, instrumentation-client.ts, sentry.*.config.ts
+- **Global handler**: `src/app/global-error.tsx` (React error boundary)
+- **Setup**: Requires SENTRY_DSN env var. Free tier = 5k errors/month.
 
 ## Documentation Files
-- **`SPEC.md`** — Full product specification
-- **`CLAUDE.md`** (this file) — Code architecture reference for AI coding assistants
-- **`SECURITY.md`** — Security architecture, risks, incident response
-- **`ONBOARDING.md`** — User setup, settings reference, API quick reference
-- **`docs/SCHEMA.md`** — Database schema, deal property model, migration SQL
-- **`docs/TESTING.md`** — Test tiers, inventory, update rules, setup
-- **`docs/BULK-INGESTION.md`** — Bulk ingestion pipeline, QStash worker chaining, backfill report
-- **`docs/WHATSAPP.md`** — WhatsApp daemon API, message flow, scaling
+- **SPEC.md** — Full product specification
+- **CLAUDE.md** (this file) — Code architecture reference for AI coding assistants
+- **SECURITY.md** — Security architecture, risks, incident response
+- **ONBOARDING.md** — User setup, settings reference, API quick reference
+- **docs/SCHEMA.md** — Database schema, deal property model, migration SQL
+- **docs/TESTING.md** — Test tiers, inventory, update rules, setup
+- **docs/BULK-INGESTION.md** — Bulk ingestion pipeline, QStash worker chaining, backfill report
+- **docs/WHATSAPP.md** — WhatsApp daemon API, message flow, scaling
 
 ## GDPR Compliance
-
-**Implementation:** `src/lib/db/gdpr.ts` — `deleteAllUserData` (FK-safe cascade across 13 tables), `exportAllUserData`, `writeAuditLog` (never throws), `enforceRetentionPolicy`.
+**Implementation**: `src/lib/db/gdpr.ts` — deleteAllUserData (FK-safe cascade across 13 tables), exportAllUserData, writeAuditLog (never throws), enforceRetentionPolicy.
 
 - `POST /api/gdpr/delete` — Art. 17 Right to Erasure. Auth: API key.
 - `GET /api/gdpr/export?userId=` — Art. 15 Right of Access. Auth: API key.
-- Audit logs survive user deletion (`ON DELETE SET NULL`).
+- **Soft Deletion**: Implements a deleted_at timestamp for the users table. Wipes personal/business data but keeps the UUID intact so audit_logs are not orphaned.
 
 ## Concurrency Control
+**DB-level agent lock** (`src/lib/db/locks.ts`) — tryAcquireUserLock/releaseUserLock with 10-min auto-expiry. Strictly relies on DB lock. Aborts if DB lock fails (no in-memory fallback). Used in `agent.ts` → `runAgentForUser()`.
 
-DB-level agent lock (`src/lib/db/locks.ts`) — `tryAcquireUserLock`/`releaseUserLock` with 10-min auto-expiry. Falls back to in-memory Map if migration not applied. Used in `agent.ts` → `runAgentForUser()`.
-
-Migration SQL for locks, audit logs, and enriched_text: See `docs/SCHEMA.md`.
+Migration SQL for locks, audit logs, and enriched_text: See docs/SCHEMA.md.
 
 ## Parallelism Architecture
-
-All services use **batched `Promise.allSettled`** for fault isolation — one item's failure doesn't block others.
+All services use batched Promise.allSettled for fault isolation — one item's failure doesn't block others.
 
 | Service | Pattern | Concurrency | Notes |
 |---------|---------|-------------|-------|
-| `agent.ts` | Steps 2/2.1/2.5 in parallel | 3 | Inbound, outbound, calendar are independent |
-| `planning.ts` | Conversations batched | 5 | Each involves an AI call (proposeAction) |
-| `ingestion.ts` | Emails batched (inbound + outbound) | 5 | classifyEmail AI call is the bottleneck |
-| `lead-tracking.ts` | Conversations batched | 10 | Independent conversations, DB-heavy |
-| `threading.ts` | Pre-assigned lookups + CP fetches | All | `Promise.all` for reads; serial for `assignToConversation` (prevents duplicate creation) |
-| `bulk-ingestion.ts` | QStash worker chaining (Vercel) + batched allSettled | 20 parallel / 50 per QStash hop | Phase 1 splits into 50-email hops via QStash; Phases 2–5 each a single hop. Phases 1/2/4 process 20 emails in parallel within each hop |
+| agent.ts | Steps 2/2.1/2.5 in parallel | 3 | Inbound, outbound, calendar are independent |
+| planning.ts | Conversations batched | 5 | Each involves an AI call (proposeAction) |
+| ingestion.ts | Emails batched (inbound + outbound) | 5 | classifyEmail AI call is the bottleneck |
+| lead-tracking.ts | Conversations batched | 10 | Independent conversations, DB-heavy |
+| threading.ts | Pre-assigned lookups + CP fetches | All | Promise.all for reads; serial for assignToConversation (prevents duplicate creation) |
+| bulk-ingestion.ts | QStash worker chaining (Vercel) + batched allSettled | 5 parallel / 50 per QStash hop | Phase 1 splits into 50-email hops via QStash; Phases 2–5 each a single hop. Phases 1/2/4 process 5 emails in parallel within each hop to prevent 429 errors |
 
 ## Superadmin
 - Dashboard at `/superadmin`
-- Protected by `SUPERADMIN_KEY` env var (passed via `?key=` or header)
+- Protected by SUPERADMIN_KEY env var (passed via ?key= or header)
 - Shows system health, user stats, and error logs

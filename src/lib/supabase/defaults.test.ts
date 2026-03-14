@@ -217,8 +217,8 @@ describe('DEFAULT_USER_SETTINGS — Full Snapshot', () => {
     expect(DEFAULT_USER_SETTINGS.personal_calendar_id).toBeNull()
   })
 
-  it('default_event_weight = 5', () => {
-    expect(DEFAULT_USER_SETTINGS.default_event_weight).toBe(5)
+  it('default_event_weight = 7', () => {
+    expect(DEFAULT_USER_SETTINGS.default_event_weight).toBe(7)
   })
 
   it('personal_event_keywords contains expected keywords', () => {

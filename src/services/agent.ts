@@ -12,6 +12,7 @@ import { getUnprocessedMessages } from '@/lib/db/messages'
 import { getConversationsForUser } from '@/lib/db/conversations'
 import { getUserById } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
+import { tryAcquireUserLock, releaseUserLock } from '@/lib/db/locks'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import type { ActionProposal } from '@/lib/supabase/types'
 
@@ -59,8 +60,6 @@ export function createLogCollector(): { logs: string[]; capture: () => () => voi
   return { logs, capture }
 }
 
-const runningUsers = new Map<string, true>()
-
 /**
  * Run the full agent pipeline for a user
  */
@@ -85,13 +84,12 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     logs,
   }
 
-  if (runningUsers.has(userId)) {
+  const lockAcquired = await tryAcquireUserLock(userId)
+  if (!lockAcquired) {
     console.warn(`[Agent] Skipping — pipeline already running for ${userId}`)
     restore()
     return emptyResult
   }
-
-  runningUsers.set(userId, true)
 
   const result: AgentRunResult = {
     success: false,
@@ -269,7 +267,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     console.error('[Agent] Error:', error)
     result.errors.push(error instanceof Error ? error.message : 'Unknown error')
   } finally {
-    runningUsers.delete(userId)
+    await releaseUserLock(userId)
     restore()
   }
 

@@ -121,6 +121,11 @@ async function processConversationForLeadTracking(
   result: LeadTrackingResult,
   settings: UserSettings
 ): Promise<void> {
+  // Snooze bypass: skip conversations where current date < snooze_until
+  if (conversation.snooze_until && new Date() < new Date(conversation.snooze_until)) {
+    return
+  }
+
   // Find the counterparty from recent messages
   const recentMessages = await getRecentMessages(conversation.id, 5)
   const latestWithCP = recentMessages.filter(m => m.cp_id).pop()
@@ -184,7 +189,6 @@ async function processConversationForLeadTracking(
     urgency: status === 'dead' ? 9 : status === 'cold' ? 7 : 5,
     daysIgnored: daysSinceActivity,
     sellerMultiplier: offerMultiplier,
-    kcLowValue: settings.kc_low_value,
     kcHighValue: settings.kc_high_value,
   })
 

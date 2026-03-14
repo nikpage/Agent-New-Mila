@@ -18,7 +18,7 @@
  * - Travel buffer: >500m = driving via Maps, ≤500m = 15min flat
  * - Buffer formula: max(travelTime + 10min, 15min minimum)
  * - Conflict resolution: higher score wins, weight=null → never move
- * - User-created events default weight = 100
+ * - User-created events default weight = 7
  * - Personal events block time, don't generate actions
  * - Invitations always create SCHEDULE action (human in loop)
  * - calculateEventScore delegates to calculatePriorityScore correctly
@@ -175,25 +175,25 @@ describe('Scheduling — Default Settings Pinning', () => {
 // ── Event Score (real calculatePriorityScore) ───────────────────────────────
 
 describe('Scheduling — calculateEventScore', () => {
-  it('user-created events default to weight=100', async () => {
+  it('user-created events default to weight=7', async () => {
     const { calculateEventScore } = await vi.importActual<typeof import('@/lib/db/events')>('@/lib/db/events')
     const score = calculateEventScore({ isUserCreated: true })
-    // weight=100, normVal=0, U=1, days=0 → 0 + 1 + 0 + 100 = 101
-    expect(score).toBe(101)
+    // weight=7, BaseDealScore=1, U=1, days=0 → (1*1) + (1*0) + 7 = 8
+    expect(score).toBe(8)
   })
 
   it('non-user-created events default to weight=0', async () => {
     const { calculateEventScore } = await vi.importActual<typeof import('@/lib/db/events')>('@/lib/db/events')
     const score = calculateEventScore({ isUserCreated: false })
-    // weight=0, normVal=0, U=1, days=0 → 0 + 1 + 0 + 0 = 1
+    // weight=0, BaseDealScore=1, U=1, days=0 → (1*1) + (1*0) + 0 = 1
     expect(score).toBe(1)
   })
 
   it('explicit weight overrides isUserCreated', async () => {
     const { calculateEventScore } = await vi.importActual<typeof import('@/lib/db/events')>('@/lib/db/events')
     const score = calculateEventScore({ isUserCreated: true, weight: 5 })
-    // explicit weight=5 wins over isUserCreated default of 100
-    // normVal=0, U=1, days=0 → 0 + 1 + 0 + 5 = 6
+    // explicit weight=5 wins over isUserCreated default of 7
+    // BaseDealScore=1, U=1, days=0 → (1*1) + (1*0) + 5 = 6
     expect(score).toBe(6)
   })
 

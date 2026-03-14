@@ -420,7 +420,7 @@ export async function cancelEventWithCleanup(eventId: string): Promise<void> {
 
 /**
  * Calculate priority score for a calendar event
- * User-created events default weight = 100
+ * User-created events default weight = 7
  * All events must have scores
  */
 export function calculateEventScore(params: {
@@ -431,7 +431,7 @@ export function calculateEventScore(params: {
   sellerMultiplier?: number
   isUserCreated?: boolean
 }): number {
-  const weight = params.weight ?? (params.isUserCreated ? 100 : 0)
+  const weight = params.weight ?? (params.isUserCreated ? 7 : 0)
 
   return calculatePriorityScore({
     dollarValue: params.dollarValue || 0,

@@ -207,7 +207,6 @@ export async function generateActionProposal(
         urgency: proposal.urgency,
         daysIgnored,
         sellerMultiplier: offerMultiplier,
-        kcLowValue: settings.kc_low_value,
         kcHighValue: settings.kc_high_value,
         weight,
       })

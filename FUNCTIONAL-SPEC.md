@@ -75,16 +75,16 @@ Mila doesn't just find a free slot. She thinks about the whole day.
 
 ---
 
-## 7. Morning Brief
+## 7. Daily Briefs
 
-Every morning (and optionally afternoon), the user gets one email:
+Twice a day — morning (default 7:00) and late-morning (default 11:30) — the user gets one email:
 
-- AI-generated headline summarizing the day's priorities
+- AI-generated headline summarizing priorities
 - Today's calendar at a glance
 - Ranked action cards, most urgent first
 - Each card: who, what's at stake, what Mila proposes, and three buttons — UDĚLAT (approve), UPRAVIT (edit), UDĚLÁM SÁM (handle it myself)
 
-That's the user's entire interaction. One email. A few taps. Done.
+Times are per-user configurable. That's the user's entire interaction. One email. A few taps. Done.
 
 ---
 
@@ -114,6 +114,7 @@ Each client gets Mila configured for their specific business:
 - Business context: specialization, market, typical deal range
 - AI persona: how Mila talks to the user vs. to counterparties
 - Working hours, working days, timezone
+- Brief times: morning (default 7:00), late-morning (default 11:30)
 - Meeting defaults: duration, buffer between meetings
 - Lead tracking thresholds: when to nudge, when to escalate
 - High-value signals: keywords that flag a conversation as important

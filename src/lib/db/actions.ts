@@ -330,7 +330,6 @@ export function calculatePriorityScore(params: {
   daysIgnored: number
   weight?: number
   sellerMultiplier?: number
-  kcLowValue?: number
   kcHighValue?: number
 }): number {
   const {
@@ -339,29 +338,22 @@ export function calculatePriorityScore(params: {
     daysIgnored,
     weight = 0,
     sellerMultiplier = 1,
-    kcLowValue = 500_000,
     kcHighValue = 5_000_000,
   } = params
 
   const safeSellerMultiplier = sellerMultiplier || 1
   const safeUrgency = urgency || 1
-  const safeWeight = weight || 0
-  const safeLow = kcLowValue > 0 ? kcLowValue : 500_000
-  const safeHigh = kcHighValue > safeLow ? kcHighValue : safeLow * 10
+  const safeHigh = kcHighValue > 0 ? kcHighValue : 5_000_000
 
-  // Log-scale normalization: lowValue→2, highValue→13, no clamping
-  let normalizedValue = 0
-  if (dollarValue > 0) {
-    const logLow = Math.log(safeLow)
-    const logHigh = Math.log(safeHigh)
-    const logVal = Math.log(dollarValue)
-    normalizedValue = 2 + ((logVal - logLow) / (logHigh - logLow)) * 11
-  }
+  // BaseDealScore: percentage-based normalization with hard floor of 1
+  const baseDealScore = Math.max(1, Math.round((dollarValue / safeHigh) * 10))
 
-  // Apply sellerMultiplier AFTER log so it's a real percentage boost
-  const normVal = normalizedValue * safeSellerMultiplier
-
-  return Math.round(normVal + safeUrgency + Math.pow(daysIgnored, 2) + safeWeight)
+  // Score = (BaseDealScore * sellerMultiplier) + (urgency * daysIgnored^1.5) + weight
+  return Math.round(
+    (baseDealScore * safeSellerMultiplier) +
+    (safeUrgency * Math.pow(daysIgnored, 1.5)) +
+    weight
+  )
 }
 
 /**
