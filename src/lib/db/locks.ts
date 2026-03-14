@@ -46,9 +46,14 @@ export async function tryAcquireUserLock(userId: string): Promise<boolean> {
     .insert({ user_id: userId, locked_at: now, expires_at: expiresAt })
 
   if (error) {
-    // Unique constraint violation (23505) = lock already held
-    // Any other error = treat as lock failure for safety
-    return false
+    // 23505 = unique constraint violation = lock genuinely held by another run
+    if (error.code === '23505') {
+      return false
+    }
+    // Any other error (table missing, network issue, etc.) — fail OPEN.
+    // Better to risk a rare double-run than permanently block the pipeline.
+    console.error('[Lock] Failed to acquire lock, proceeding anyway:', error.message || error)
+    return true
   }
 
   return true
