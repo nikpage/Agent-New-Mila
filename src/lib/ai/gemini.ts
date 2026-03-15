@@ -231,14 +231,18 @@ ${recentText}
 
 COUNTERPARTY: ${cpName || 'Unknown'}
 
-ACTION TYPE RULES — return one OR multiple actions:
+CONVERSATION-FIRST REASONING:
+A conversation may span multiple CPs, email threads, and channels (email + WhatsApp) — but it represents ONE deal or relationship. The recent messages below are raw inputs that update the conversation state. Do NOT treat them as separate items needing separate actions.
+Your job: (1) Understand HOW we got here — the arc of the conversation so far (use CONVERSATION STATE above). (2) Assess WHERE things stand RIGHT NOW. (3) Decide WHAT the user needs to do next. Focus your rationale_cs on the current situation and why action is needed now, not on summarizing individual messages.
+
+ACTION TYPE RULES — return one OR multiple actions only when genuinely independent tasks exist:
 1. REPLY — the user needs to send a message (confirm, answer, respond to questions).
 2. SCHEDULE — the user needs to be somewhere at a specific time (block calendar, create meeting event). Fill suggestedTime if a specific time was proposed. IMPORTANT: Executing a SCHEDULE action creates a calendar event AND sends a calendar invite to the counterparty. That invite IS the confirmation. Do NOT create a separate REPLY action just to confirm a meeting that is already being scheduled — the invite handles it.
 3. TODO — something the user needs to do themselves that isn't a message or a meeting (gather documents, call someone, prepare something). Mila describes what needs doing in intent_cs.
-4. One email may require MULTIPLE actions. A deal confirmation email might need a REPLY (confirm the deal), a SCHEDULE (block the appointment), and a TODO (gather documents). Return ALL of them as an array.
-5. You MUST always return at least one action. Every inbound message deserves a response. Never skip.
+4. A single conversation may require MULTIPLE actions only when they address genuinely independent tasks. Example: a deal confirmation might need a REPLY (confirm terms), a SCHEDULE (block the appointment), and a TODO (gather documents). Each must do something the others do NOT.
+5. You MUST always return at least one action based on the current conversation state.
 6. Each action is independent — different urgency, weight, and intent for each.
-7. DEDUP RULE: Never return two actions that accomplish the same thing. If a SCHEDULE already confirms a meeting with the CP, do NOT add a REPLY that just says "confirm the meeting." If a REPLY already covers everything, do NOT add a TODO that just says "follow up on the reply." Each action must do something the others do NOT.
+7. DEDUP RULE: Never return two actions that accomplish the same thing. If a SCHEDULE already confirms a meeting with the CP, do NOT add a REPLY that just says "confirm the meeting." If a REPLY already covers everything, do NOT add a TODO that just says "follow up on the reply." Each action must address a genuinely INDEPENDENT task.
 
 CRITICAL - VOICE AND PERSPECTIVE:
 - You are Mila, the user's assistant. Address the user directly as "vy" (you).
@@ -268,7 +272,7 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "rationale_cs": "One sentence in CZECH explaining WHY this action is needed now.",
   "intent_cs": "PROACTIVE description in CZECH: what Mila HAS DONE + what she WILL DO on UDĚLAT. Include specific data points from conversation. For TODO: describe what the user needs to do themselves. Return null if WAIT/ARCHIVE.",
   "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
-  "urgency": 1-10 where: 10 = deadline within hours (e.g. "confirm by 5pm today"), 9 = deadline tomorrow, 7 = deadline this week significant value at risk, 5 = should respond within days no hard deadline, 3 = routine can wait, 1 = informational only,
+  "urgency": 1-10 where: 10 = deadline today (by end of business), 9 = deadline tomorrow (next business day), 7 = deadline this week (by Friday or within 3 business days, whichever is sooner), 5 = deadline within 5 business days, 3 = deadline within 2 weeks, 1 = no time pressure / purely informational. Base urgency on ACTUAL DEADLINES stated or implied in the conversation. No explicit deadline = 3 or lower unless value at risk,
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
