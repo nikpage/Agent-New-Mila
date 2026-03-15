@@ -19,6 +19,7 @@ export interface ModelChain {
   fallback1: string
   fallback2: string | null
   temperature?: number
+  thinkingBudget?: number
 }
 
 export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
@@ -61,11 +62,12 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
     fallback2: null,
   },
 
-  // Planning — proposeAction
+  // Planning — proposeAction (thinking enabled for complex multi-action reasoning)
   planning: {
     primary: 'gemini-2.5-flash',
     fallback1: 'claude-sonnet-4-6',
     fallback2: null,
+    thinkingBudget: 8192,
   },
 
   // Drafting — generateFinalDraft, generateBriefHeadline

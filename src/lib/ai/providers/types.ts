@@ -5,6 +5,7 @@
 
 export interface AIGenerateOptions {
   temperature?: number
+  thinkingBudget?: number
 }
 
 export interface AIProvider {

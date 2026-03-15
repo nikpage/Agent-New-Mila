@@ -67,9 +67,12 @@ export function getLastFingerprint(): string | null { return lastFingerprint }
 export const geminiProvider: AIProvider = {
   async generateContent(model: string, prompt: string, options?: AIGenerateOptions): Promise<string> {
     const { model: m, keyLabel, fingerprint } = getModel(model)
+    const genConfig: Record<string, unknown> = {}
+    if (options?.temperature !== undefined) genConfig.temperature = options.temperature
+    if (options?.thinkingBudget) genConfig.thinkingConfig = { thinkingBudget: options.thinkingBudget }
     const result = await m.generateContent({
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: options?.temperature !== undefined ? { temperature: options.temperature } : undefined,
+      generationConfig: Object.keys(genConfig).length > 0 ? genConfig : undefined,
     })
     keyUsage.set(keyLabel, (keyUsage.get(keyLabel) || 0) + 1)
     lastKeyLabel = keyLabel

@@ -23,7 +23,9 @@ function isRetryableError(error: unknown): boolean {
 export async function runAITask(stage: AIStage, prompt: string): Promise<string> {
   const chain = AI_TASK_MODELS[stage]
   const models = [chain.primary, chain.fallback1, chain.fallback2].filter((m): m is string => m !== null)
-  const options = chain.temperature !== undefined ? { temperature: chain.temperature } : undefined
+  const options: { temperature?: number; thinkingBudget?: number } = {}
+  if (chain.temperature !== undefined) options.temperature = chain.temperature
+  if (chain.thinkingBudget) options.thinkingBudget = chain.thinkingBudget
 
   for (let i = 0; i < models.length; i++) {
     for (let retry = 0; retry <= MAX_RETRIES; retry++) {
