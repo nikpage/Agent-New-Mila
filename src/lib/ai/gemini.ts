@@ -72,7 +72,7 @@ FORMATTING: Plain text only. No markdown, no ** bold **, no # headers.
 - If deal-related: stage, key numbers (price, area, dates), commitments made
 - If personal/admin: what it's about, any time sensitivity, any action needed
 - Core intent (what this message actually says or asks)
-- Urgency signals: deadlines, time pressure, explicit urgency language, consequences of delay (e.g. "do zítra", "ASAP", "jinak odstoupím", "deadline pátek"). Omit if none present
+- Urgency signals: QUOTE the exact original phrase from the message that indicates time pressure (e.g. verbatim: "this week", "do pátku", "ASAP", "jinak odstoupím"). Then classify: HARD DEADLINE (explicit date/day, contractual, or consequence stated) or SOFT REFERENCE (vague, conversational, no consequence). Omit this section entirely if no time pressure language is present
 
 Channel: ${channel}
 Direction: ${direction} (${directionLabel})
@@ -272,7 +272,9 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "rationale_cs": "One sentence in CZECH explaining WHY this action is needed now.",
   "intent_cs": "PROACTIVE description in CZECH: what Mila HAS DONE + what she WILL DO on UDĚLAT. Include specific data points from conversation. For TODO: describe what the user needs to do themselves. Return null if WAIT/ARCHIVE.",
   "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
-  "urgency": 1-10 where: 10 = deadline today (by end of business), 9 = deadline tomorrow (next business day), 7 = deadline this week (by Friday or within 3 business days, whichever is sooner), 5 = deadline within 5 business days, 3 = deadline within 2 weeks, 1 = no time pressure / purely informational. Base urgency on ACTUAL DEADLINES stated or implied in the conversation. No explicit deadline = 3 or lower unless value at risk,
+  "urgency": 1-10. ONLY use 7+ when a HARD DEADLINE exists (explicit date/day stated, contractual obligation, or stated consequence of delay). Soft/vague time references ("this week", "soon", "when you get a chance", "sometime next week") are NOT hard deadlines — cap at 5.
+  Scale: 10 = hard deadline today, 9 = hard deadline tomorrow, 7-8 = hard deadline this week (specific day named or contractual), 5 = soft "this week" or "within a few days" (no specific day, no consequence), 3 = within 2 weeks or vague future, 1 = no time pressure.
+  DEFAULT: If no deadline language appears in the conversation at all, urgency = 2. Only go to 3+ if there is SOME time-related language. Only go to 7+ if there is a HARD deadline with a specific day or consequence,
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
