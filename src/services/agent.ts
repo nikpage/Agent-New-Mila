@@ -4,7 +4,7 @@
  */
 
 import { ingestEmailsForUser, ingestOutboundEmails } from './ingestion'
-import { processMessagesForThreading } from './threading'
+import { processMessagesForThreading, rebuildConversationSummary } from './threading'
 import { generateActionsForConversations } from './planning'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { trackLeadsForUser } from './lead-tracking'
@@ -197,6 +197,18 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
         const conversations = await processMessagesForThreading(unprocessedMessages)
         result.conversationsUpdated = conversations.size
         console.log(`[Agent] Step 4: Threaded into ${conversations.size} conversations`)
+
+        // Step 4.5: Rebuild summaries for ALL updated conversations before planning.
+        // Threading only rebuilds after 5 new messages — but planning needs fresh
+        // summaries even after 1 new message. Force rebuild here.
+        console.log(`[Agent] Step 4.5: Rebuilding summaries for ${conversations.size} conversations`)
+        for (const conv of conversations.values()) {
+          try {
+            await rebuildConversationSummary(conv)
+          } catch (err) {
+            console.error(`[Agent] Step 4.5: Summary rebuild failed for ${conv.id}:`, err)
+          }
+        }
 
         // Step 5: Generate action proposals for updated conversations
         const conversationIds = Array.from(conversations.keys())

@@ -175,6 +175,7 @@ export async function assignToConversation(
 
   // Assign message to the new conversation
   await updateMessage(message.id, { conversation_id: conversation.id })
+  await incrementMessageCount(conversation.id)
 
   // Add participant
   if (message.cp_id) {

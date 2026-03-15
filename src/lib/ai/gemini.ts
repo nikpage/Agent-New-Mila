@@ -274,8 +274,8 @@ BAD examples (NEVER write like this):
 Respond with ONLY valid JSON — an array of one or more action objects:
 [{
   "actionType": "REPLY" | "SCHEDULE" | "TODO",
-  "rationale_cs": "One sentence in CZECH explaining WHY this action is needed now.",
-  "intent_cs": "PROACTIVE description in CZECH: what Mila HAS DONE + what she WILL DO on UDĚLAT. Include specific data points from conversation. For TODO: describe what the user needs to do themselves. Return null if WAIT/ARCHIVE.",
+  "rationale_cs": "One sentence in CZECH: the BUSINESS REASON this action is needed NOW. Focus on consequences, deadlines, or relationship risk. Example: 'Banka vyžaduje dokumenty do pátku — bez potvrzení hrozí zpoždění uzavření obchodu.' NEVER repeat what intent_cs says.",
+  "intent_cs": "PROACTIVE description in CZECH: what Mila HAS ALREADY DONE + what she WILL DO when user clicks UDĚLAT. Must contain SPECIFIC data from the conversation (names, dates, amounts, locations). For TODO: describe the concrete task the user must do themselves. Example: 'Zkontrolovala jsem kalendář a připravím pozvánku na schůzku s Martinem Králem v pondělí v 10:00 u notáře. Klikněte UDĚLAT a odešlu pozvánku.' NEVER repeat what rationale_cs says.",
   "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
   "urgency": 1-10. ONLY use 7+ when a HARD DEADLINE exists (explicit date/day stated, contractual obligation, or stated consequence of delay). Soft/vague time references ("this week", "soon", "when you get a chance", "sometime next week") are NOT hard deadlines — cap at 5.
   Scale: 10 = hard deadline today, 9 = hard deadline tomorrow, 7-8 = hard deadline this week (specific day named or contractual), 5 = soft "this week" or "within a few days" (no specific day, no consequence), 3 = within 2 weeks or vague future, 1 = no time pressure.

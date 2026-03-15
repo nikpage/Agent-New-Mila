@@ -176,8 +176,9 @@ async function syncGoogleEventToLocal(
     ...(isNewEvent && isNonPersonal ? { weight: settings.default_event_weight } : {}),
   })
 
-  // For NEW non-personal events: create a ToDo for the user to set weight (and optionally CP)
-  if (isNewEvent && !isPersonalEvent(gcalEvent.summary || '', settings)) {
+  // For NEW non-personal events WITH a counterparty: create a ToDo to set weight.
+  // Solo events (no attendees besides user) are internal blocks — no todo needed.
+  if (isNewEvent && !isPersonalEvent(gcalEvent.summary || '', settings) && cpId) {
     try {
       const dateStr = gcalEvent.startTime.toLocaleDateString('cs-CZ', {
         day: 'numeric',
@@ -186,7 +187,7 @@ async function syncGoogleEventToLocal(
       await createTodo({
         user_id: userId,
         cp_id: cpId,
-        description: `Nastavit váhu${!cpId ? ' a protistranu' : ''} pro: "${gcalEvent.summary}" (${dateStr})`,
+        description: `Nastavit váhu pro: "${gcalEvent.summary}" (${dateStr})`,
         status: 'pending',
         due_date: gcalEvent.startTime.toISOString().split('T')[0],
       })

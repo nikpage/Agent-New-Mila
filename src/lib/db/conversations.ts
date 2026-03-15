@@ -34,7 +34,7 @@ export async function getConversationsForUser(
   options?: {
     limit?: number
     state?: string
-    orderBy?: 'last_updated' | 'priority_score' | 'created_at'
+    orderBy?: 'last_updated' | 'created_at'
   }
 ): Promise<ConversationThread[]> {
   const supabase = getSupabaseAdmin()
