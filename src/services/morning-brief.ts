@@ -232,9 +232,7 @@ function generateBriefEmailHtml(
       const locationPartial = !!payload?.location_partial
       const hasHold = !!payload?.hold_event_id
       const hasUnfilledLocation = action.action_type === 'SCHEDULE' && !isOnline && (
-        !payloadLocation
-          ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
-          : locationPartial
+        !payloadLocation || locationPartial
       )
       const needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
       const location = (payload?.location as string | null) || null
@@ -430,9 +428,7 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
       const locationPartial = !!payload?.location_partial
       const hasHold = !!payload?.hold_event_id
       const hasUnfilledLocation = action.action_type === 'SCHEDULE' && !isOnline && (
-        !payloadLocation
-          ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
-          : locationPartial
+        !payloadLocation || locationPartial
       )
       const needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
       const location = (payload?.location as string | null) || null
