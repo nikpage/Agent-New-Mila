@@ -230,6 +230,7 @@ function generateBriefEmailHtml(
       const payloadLocation = payload?.location as string | null
       const isOnline = !!payload?.is_online
       const locationPartial = !!payload?.location_partial
+      const locationVerified = !!payload?.location_verified
       const hasHold = !!payload?.hold_event_id
       const hasUnfilledLocation = action.action_type === 'SCHEDULE' && !isOnline && (
         !payloadLocation || locationPartial
@@ -251,6 +252,7 @@ function generateBriefEmailHtml(
         needsInput,
         location,
         locationPartial,
+        locationVerified,
         isOnline,
       })
     }).join('')}
@@ -426,6 +428,7 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
       const payloadLocation = payload?.location as string | null
       const isOnline = !!payload?.is_online
       const locationPartial = !!payload?.location_partial
+      const locationVerified = !!payload?.location_verified
       const hasHold = !!payload?.hold_event_id
       const hasUnfilledLocation = action.action_type === 'SCHEDULE' && !isOnline && (
         !payloadLocation || locationPartial
@@ -447,6 +450,7 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
         needsInput,
         location,
         locationPartial,
+        locationVerified,
         isOnline,
       })
     }).join('')}

@@ -110,11 +110,10 @@ export function ActionCard({
   const actionPayload = action.payload as Record<string, unknown> | null
   const payloadLocation = actionPayload?.location as string | null
   const locationPartial = !!actionPayload?.location_partial
+  const locationVerified = !!actionPayload?.location_verified
   const isOnline = !!actionPayload?.is_online
   const hasUnfilledLocation = !isOnline && (
-    !payloadLocation
-      ? missingInfoFields.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
-      : locationPartial
+    !payloadLocation || locationPartial
   )
   const hasHold = !!actionPayload?.hold_event_id
   const doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold)
@@ -178,8 +177,14 @@ export function ActionCard({
                 <span style={{ color: theme.colors.warning, fontWeight: theme.typography.weights.medium }}>
                   {payloadLocation} — ⚠ upřesněte přes UPRAVIT
                 </span>
+              ) : locationVerified ? (
+                <span style={{ color: theme.colors.success, fontWeight: theme.typography.weights.medium }}>
+                  ✓ {payloadLocation}
+                </span>
               ) : (
-                <span style={{ color: theme.colors.text }}>{payloadLocation}</span>
+                <span style={{ color: theme.colors.warning, fontWeight: theme.typography.weights.medium }}>
+                  {payloadLocation} — ⚠ ověřte přes UPRAVIT
+                </span>
               )}
             </>
           ) : (
