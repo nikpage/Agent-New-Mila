@@ -149,6 +149,29 @@ export async function generateActionProposal(
       return true
     })
 
+    // SCHEDULE absorbs REPLY: when both exist, merge REPLY content into SCHEDULE
+    // The calendar invite IS the reply — there should never be a separate REPLY alongside SCHEDULE
+    const hasSchedule = dedupedProposals.some(p => p.actionType === 'SCHEDULE')
+    const replyIndex = dedupedProposals.findIndex(p => p.actionType === 'REPLY')
+    if (hasSchedule && replyIndex !== -1) {
+      const scheduleProposal = dedupedProposals.find(p => p.actionType === 'SCHEDULE')!
+      const replyProposal = dedupedProposals[replyIndex]
+      // Merge REPLY's missingInfo into SCHEDULE (CP questions to answer in the invite)
+      if (replyProposal.missingInfo?.length) {
+        scheduleProposal.missingInfo = [
+          ...(scheduleProposal.missingInfo || []),
+          ...replyProposal.missingInfo,
+        ]
+      }
+      // Append REPLY intent to SCHEDULE intent if it adds new info
+      if (replyProposal.intent_cs && !scheduleProposal.intent_cs?.includes(replyProposal.intent_cs)) {
+        scheduleProposal.intent_cs = `${scheduleProposal.intent_cs} ${replyProposal.intent_cs}`
+      }
+      // Remove the REPLY
+      dedupedProposals.splice(replyIndex, 1)
+      console.log(`[Planning] Merged REPLY into SCHEDULE — calendar invite is the reply`)
+    }
+
     for (const proposal of dedupedProposals) {
       // Validate and write deal_type onto conversation thread if AI classified it
       const dealType = validateDealType(proposal.dealType)
