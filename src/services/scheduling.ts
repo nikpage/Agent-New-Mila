@@ -732,10 +732,23 @@ export async function optimizeScheduleActions(
           // Already has timezone — parse directly
           parsed = new Date(suggestedTime)
         } else {
-          // No timezone — assume Prague local time
-          const pragueNow = new Date().toLocaleString('en-US', { timeZone: 'Europe/Prague' })
-          const utcNow = new Date().toLocaleString('en-US', { timeZone: 'UTC' })
-          const offsetMs = new Date(pragueNow).getTime() - new Date(utcNow).getTime()
+          // No timezone — assume Prague local time.
+          // Get Prague's real UTC offset via Intl (handles DST correctly).
+          const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'Europe/Prague',
+            timeZoneName: 'shortOffset',
+          })
+          const parts = formatter.formatToParts(new Date())
+          const tzPart = parts.find(p => p.type === 'timeZoneName')?.value || ''
+          const offsetMatch = tzPart.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/)
+          let offsetMs = 3600000 // fallback: CET (+01:00)
+          if (offsetMatch) {
+            const sign = offsetMatch[1] === '+' ? 1 : -1
+            const hours = parseInt(offsetMatch[2], 10)
+            const minutes = parseInt(offsetMatch[3] || '0', 10)
+            offsetMs = sign * (hours * 3600000 + minutes * 60000)
+          }
+          // suggestedTime has no TZ → Date parses as UTC. Subtract Prague offset to get true UTC.
           parsed = new Date(new Date(suggestedTime).getTime() - offsetMs)
         }
         if (!isNaN(parsed.getTime()) && parsed.getTime() > Date.now() - 86400000) {
