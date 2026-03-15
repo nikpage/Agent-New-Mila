@@ -4,11 +4,12 @@ Last updated: 2026-03-15
 
 ## Recently Fixed (this session — ready for testing)
 
-### BUG-001: Urgency inflation — all actions scored 8+
-- **Status**: FIXED (commit ad1f9c9)
-- **Symptom**: Every action came back with urgency 8, 9, or 10 regardless of actual time pressure.
-- **Root cause**: The urgency scale in `proposeAction()` had gaps (2, 4, 6, 8) with no concrete anchors. AI defaulted to high values when unsure.
-- **Fix**: Replaced with business-day deadline scale (10=today, 9=tomorrow, 7=this week, 5=five days, 3=two weeks, 1=no pressure). Added anchor rule: "no explicit deadline = 3 or lower."
+### BUG-001: Urgency inflation — all actions scored 7+
+- **Status**: FIXED (commits ad1f9c9, 28caa13)
+- **Symptom**: Every action came back with urgency 7+ regardless of actual time pressure. Even soft phrases like "this week" scored 7.
+- **Root cause**: (a) The urgency scale treated any "this week" mention as a hard deadline worth 7. (b) Enrichment paraphrased deadline language into Czech, losing the original phrasing — so proposeAction couldn't tell if the source said "by Friday" (hard) or "sometime this week" (soft).
+- **Fix v1** (ad1f9c9): Added concrete business-day anchors to the scale.
+- **Fix v2** (28caa13): Two changes — (1) enrichment now QUOTEs the verbatim original deadline phrase and classifies it as HARD DEADLINE vs SOFT REFERENCE; (2) proposeAction requires a HARD deadline (specific day or consequence) for 7+, soft references cap at 5, no deadline language defaults to 2.
 - **Files**: `src/lib/ai/gemini.ts`
 
 ### BUG-002: Per-message action spam — duplicate actions per conversation
