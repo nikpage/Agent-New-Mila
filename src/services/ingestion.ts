@@ -15,7 +15,7 @@ import { filterEmail, classifyEmail, enrichMessage } from '@/lib/ai/gemini'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
-import { generateMessageEmbedding, cleanMessageText } from '@/lib/embeddings/generate'
+import { generateMessageEmbedding, cleanMessageText, cleanMessageTextForEnrichment } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -294,9 +294,10 @@ async function processOneInboundEmail(
   })
 
   // Enrich message: extract key info, save enriched text, embed it
+  // Use enrichment-safe cleaning (keeps signatures — they contain addresses and contact info)
   try {
-    const cleanedText = cleanMessageText(email.body, 'email')
-    const enrichedText = await enrichMessage(cleanedText, 'email', 'inbound', undefined, settings ?? undefined)
+    const textForEnrichment = cleanMessageTextForEnrichment(email.body, 'email')
+    const enrichedText = await enrichMessage(textForEnrichment, 'email', 'inbound', undefined, settings ?? undefined)
     await updateMessage(messageId, { enriched_text: enrichedText })
 
     // Embed the enriched text (not the raw body) — skip cleaning since enriched text is AI-generated
@@ -418,9 +419,10 @@ async function processOneOutboundEmail(
   })
 
   // Enrich message: extract key info, save enriched text, embed it
+  // Use enrichment-safe cleaning (keeps signatures — they contain addresses and contact info)
   try {
-    const cleanedText = cleanMessageText(email.body, 'email')
-    const enrichedText = await enrichMessage(cleanedText, 'email', 'outbound', undefined, settings ?? undefined)
+    const textForEnrichment = cleanMessageTextForEnrichment(email.body, 'email')
+    const enrichedText = await enrichMessage(textForEnrichment, 'email', 'outbound', undefined, settings ?? undefined)
     await updateMessage(messageId, { enriched_text: enrichedText })
 
     // Embed the enriched text (not the raw body) — skip cleaning since enriched text is AI-generated

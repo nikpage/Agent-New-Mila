@@ -79,7 +79,7 @@ const TEST_EMAILS: TestEmail[] = [
     body: [
       'Hi,',
       '',
-      'I saw your listing for the apartment on Vinohradska 45. Is it still available?',
+      'I saw your Prague listing for the apartment on Vinohradska 45. Is it still available?',
       'I would like to schedule a viewing this week if possible.',
       '',
       'My budget is around 8,500,000 CZK. Is there room for negotiation?',
@@ -98,11 +98,12 @@ const TEST_EMAILS: TestEmail[] = [
       'We spoke last week about the office space in Karlin, 200m2.',
       'Our company is ready to sign a 3-year lease at 450 CZK/m2/month.',
       '',
-      'Can we finalize the contract this week? We need to move in by April.',
+      'Can we finalize the contract tomorrow morning at around 9 or 10? We need to move in by April.',
       '',
       'Dekuji,',
       'Eva Dvorakova',
       'Dvorak & Partners s.r.o.',
+      'Ďáblická, 182 00 Ďáblice, Czechia',
     ].join('\n'),
   },
   {
@@ -151,6 +152,7 @@ const HIGH_PRIORITY_EMAIL: TestEmail = {
     '',
     'Jan Novotný',
     'Senior Broker, Prague Commercial',
+    'Dykova 17, Praha',
   ].join('\n'),
 }
 

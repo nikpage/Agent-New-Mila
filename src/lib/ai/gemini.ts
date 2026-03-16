@@ -61,17 +61,22 @@ export async function enrichMessage(
     ? 'sent BY the email account owner'
     : 'received FROM a counterparty'
 
-  const prompt = `${businessContext}Extract key information from this message. Output in CZECH. Only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text. Interpret terms in context of the business domain above — do NOT translate domain-specific words literally.
+  const prompt = `${businessContext}Extract key information from this message the way a human assistant would read it. Output in CZECH. Only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text. Interpret terms in context of the business domain above — do NOT translate domain-specific words literally.
 
 VOICE: Refer to the email account owner as "vy" (you), never as "uživatel" (the user). The counterparty is referred to by name or as "protistrana".
 FORMATTING: Plain text only. No markdown, no ** bold **, no # headers.
 
-- Who's involved (all parties mentioned)
+Extract ALL of the following that are present:
+
+- Who's involved (all parties mentioned, including names from signatures)
 - What property, subject matter, or topic
 - Message type (meeting request, question, offer, info, personal, admin, legal, update...)
 - If deal-related: stage, key numbers (price, area, dates), commitments made
 - If personal/admin: what it's about, any time sensitivity, any action needed
 - Core intent (what this message actually says or asks)
+- ADDRESSES: Extract EVERY physical address, location, or place name mentioned ANYWHERE in the message — including the body, footer, and email signature. Examples: office address, meeting venue, property address, notary office, company HQ. Write each as a separate line prefixed with "Adresa:" (e.g. "Adresa: Dykova 17, Praha 2"). Include partial addresses too (e.g. "Adresa: u notáře, Praha 2").
+- PROPOSED TIMES: Extract EVERY specific time, day, or date the sender proposes or mentions for a meeting, viewing, appointment, deadline, or delivery. Write each as a separate line prefixed with "Navrhovaný čas:" and include the EXACT original phrasing plus your interpretation (e.g. "Navrhovaný čas: 'tomorrow at 2pm' = úterý 17. března 14:00" or "Navrhovaný čas: 'Can we meet at 9 or 10?' = 9:00 nebo 10:00"). Do NOT drop times. Do NOT convert 2pm to 20:00.
+- MEETING TYPE: If a meeting, viewing, signing, or appointment is discussed, note what kind (e.g. "Typ schůzky: prohlídka bytu", "Typ schůzky: podpis u notáře", "Typ schůzky: jednání o nájmu").
 - Urgency signals: QUOTE the exact original phrase from the message that indicates time pressure (e.g. verbatim: "this week", "do pátku", "ASAP", "jinak odstoupím"). Then classify: HARD DEADLINE (explicit date/day, contractual, or consequence stated) or SOFT REFERENCE (vague, conversational, no consequence). Omit this section entirely if no time pressure language is present
 
 Channel: ${channel}

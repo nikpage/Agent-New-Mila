@@ -32,7 +32,7 @@ import { filterEmail, classifyEmail, enrichMessage } from '@/lib/ai/gemini'
 import { findOrCreateCP, isSameGmailAddress, normalizeGmailAddress, purgeUserAsCp } from '@/lib/db/counterparties'
 import { createMessage, messageExists, getUnprocessedMessages, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
-import { cleanMessageText, generateMessageEmbedding } from '@/lib/embeddings/generate'
+import { cleanMessageText, cleanMessageTextForEnrichment, generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import { isBlockedSender } from './ingestion'
@@ -435,8 +435,11 @@ export async function phase2Enrich(
     const chunk = messages.slice(i, i + CONCURRENCY)
     const results = await Promise.allSettled(
       chunk.map(async (msg) => {
-        const bodyText = msg.cleaned_text || msg.raw_text || ''
-        if (!bodyText) return
+        // Use raw text with enrichment-safe cleaning (keeps signatures for address extraction)
+        // Fall back to cleaned_text if raw_text is missing
+        const rawText = msg.raw_text || msg.cleaned_text || ''
+        if (!rawText) return
+        const bodyText = cleanMessageTextForEnrichment(rawText, 'email')
 
         const direction = (msg.direction as 'inbound' | 'outbound') || 'inbound'
         const enrichedText = await enrichMessage(bodyText, 'email', direction, undefined, settings ?? undefined)

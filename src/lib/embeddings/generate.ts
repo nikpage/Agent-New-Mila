@@ -81,33 +81,31 @@ export function cleanEmailText(text: string): string {
   return cleanMessageText(text, 'email')
 }
 
+/**
+ * Clean message text for enrichment — removes noise but KEEPS signatures.
+ * Signatures contain addresses, company names, titles that enrichment needs.
+ * Use this when passing text to enrichMessage(). Use cleanMessageText() for embeddings.
+ */
+export function cleanMessageTextForEnrichment(text: string, channel: MessageChannel = 'email'): string {
+  if (channel === 'whatsapp') {
+    return cleanWhatsAppText(text)
+  }
+
+  let cleaned = cleanEmailBaseKeepSignature(text)
+
+  if (channel === 'email/exchange') {
+    cleaned = cleanExchangeText(cleaned)
+  }
+
+  return cleaned.trim()
+}
+
 /** Core email cleaning — Gmail patterns (also base for Exchange) */
 function cleanEmailBase(text: string): string {
-  let cleaned = text
-
-  // Remove forwarded-message headers (multilingual)
-  cleaned = cleaned.replace(/^-{2,}\s*(Forwarded message|Přeposlaná zpráva|Weitergeleitete Nachricht)\s*-{2,}[\s\S]*?^(Subject|Předmět|Betreff):.*$/mi, '')
-
-  // Remove quoted reply blocks: lines starting with ">" (possibly nested)
-  cleaned = cleaned.replace(/^(>{1,}\s?.*\n?)+/gm, '')
-
-  // Remove "On <date> <person> wrote:" preamble lines (EN, CS, DE)
-  cleaned = cleaned.replace(/^(On |Dne |Am ).+?(wrote|napsal|schrieb):?\s*$/gm, '')
+  let cleaned = cleanEmailBaseKeepSignature(text)
 
   // Remove signatures: everything after a line that is exactly "-- " or "—"
   cleaned = cleaned.replace(/^(--|—)\s*\n[\s\S]*$/m, '')
-
-  // Remove legal/confidentiality disclaimers (common in corporate email)
-  cleaned = cleaned.replace(/^(This email|Tato zpráva|Diese E-Mail).{0,30}(confidential|důvěrná|vertraulich)[\s\S]{0,500}$/gim, '')
-
-  // Remove unsubscribe/opt-out blocks
-  cleaned = cleaned.replace(/^.{0,20}(unsubscribe|odhlásit|abmelden).*$/gim, '')
-
-  // Remove tracking pixel / image tags
-  cleaned = cleaned.replace(/<img[^>]*>/gi, '')
-
-  // Collapse multiple blank lines into one (before sig check so position is accurate)
-  cleaned = cleaned.replace(/\n{3,}/g, '\n\n')
 
   // Remove common email signatures: "S pozdravem", "Best regards", etc.
   // Only strip from the line onward if it appears in the second half of the
@@ -120,6 +118,38 @@ function cleanEmailBase(text: string): string {
       cleaned = cleaned.slice(0, sigMatch.index)
     }
   }
+
+  return cleaned
+}
+
+/**
+ * Email cleaning that keeps signatures intact.
+ * Used for enrichment — signatures contain addresses, names, titles, company info
+ * that the AI needs to extract.
+ */
+function cleanEmailBaseKeepSignature(text: string): string {
+  let cleaned = text
+
+  // Remove forwarded-message headers (multilingual)
+  cleaned = cleaned.replace(/^-{2,}\s*(Forwarded message|Přeposlaná zpráva|Weitergeleitete Nachricht)\s*-{2,}[\s\S]*?^(Subject|Předmět|Betreff):.*$/mi, '')
+
+  // Remove quoted reply blocks: lines starting with ">" (possibly nested)
+  cleaned = cleaned.replace(/^(>{1,}\s?.*\n?)+/gm, '')
+
+  // Remove "On <date> <person> wrote:" preamble lines (EN, CS, DE)
+  cleaned = cleaned.replace(/^(On |Dne |Am ).+?(wrote|napsal|schrieb):?\s*$/gm, '')
+
+  // Remove legal/confidentiality disclaimers (common in corporate email)
+  cleaned = cleaned.replace(/^(This email|Tato zpráva|Diese E-Mail).{0,30}(confidential|důvěrná|vertraulich)[\s\S]{0,500}$/gim, '')
+
+  // Remove unsubscribe/opt-out blocks
+  cleaned = cleaned.replace(/^.{0,20}(unsubscribe|odhlásit|abmelden).*$/gim, '')
+
+  // Remove tracking pixel / image tags
+  cleaned = cleaned.replace(/<img[^>]*>/gi, '')
+
+  // Collapse multiple blank lines into one
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n')
 
   return cleaned
 }
