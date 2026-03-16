@@ -42,7 +42,7 @@ import { getUserSettings } from '@/lib/db/users'
 import { getUserById } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
 import { calculatePriorityScore, getPendingScheduleActions, updateAction } from '@/lib/db/actions'
-import { getTravelTime, calculateDepartureTime, geocodeAddress } from '@/lib/google/maps'
+import { getTravelTime, calculateDepartureTime } from '@/lib/google/maps'
 import { isWorkingDay, getNextWorkingDay } from '@/lib/holidays'
 import { generateSchedulingIntent } from '@/lib/ai/mila-voice'
 import type { UserSettings, Event, ActionProposal } from '@/lib/supabase/types'
@@ -919,21 +919,9 @@ async function updateActionWithHold(
 
   const locationPartial = !!payload.location_partial
   let locationStatus: 'confirmed' | 'partial' | 'missing' | null = null
-  let locationVerified = false
   if (!meetingLocation) locationStatus = 'missing'
   else if (locationPartial) locationStatus = 'partial'
-  else {
-    locationStatus = 'confirmed'
-    // Verify address via Google Maps geocoding
-    try {
-      const geo = await geocodeAddress(meetingLocation)
-      if (geo) {
-        locationVerified = true
-      }
-    } catch {
-      // Verification failure is non-fatal — treat as unverified
-    }
-  }
+  else locationStatus = 'confirmed'
 
   const conflicts = holdResult.conflicts?.map(c => ({
     name: c.existingEvent.title || 'existing event',
@@ -982,7 +970,6 @@ async function updateActionWithHold(
       start: hold.start_time,
       end: hold.end_time,
       location: meetingLocation || null,
-      location_verified: locationVerified,
       is_online: false,
       conflicts: holdResult.conflicts?.map(c => ({
         event_id: c.existingEvent.id,

@@ -42,7 +42,6 @@ export interface ActionCardEmailParams {
   needsInput?: boolean
   location?: string | null
   locationPartial?: boolean
-  locationVerified?: boolean
   isOnline?: boolean
 }
 
@@ -81,7 +80,7 @@ function formatIntentHtml(text: string): string {
 }
 
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
-  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, locationVerified, isOnline } = params
+  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline } = params
 
   const typeLabel = TYPE_LABEL[actionType] || actionType
   const typeVariant = TYPE_VARIANT[actionType] || 'default'
@@ -128,10 +127,8 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
           : location
             ? locationPartial
               ? `<span style="color: ${theme.colors.warning}; font-weight: 500;">${location} — ⚠ upřesněte přes UPRAVIT</span>`
-              : locationVerified
-                ? `<span style="color: ${theme.colors.success}; font-weight: 500;">✓ ${location}</span>`
-                : `<span style="color: ${theme.colors.warning}; font-weight: 500;">${location} — ⚠ ověřte přes UPRAVIT</span>`
-            : `<span style="color: ${theme.colors.accent}; font-weight: 500;">Chybí — doplňte přes UPRAVIT</span>`
+              : `<span style="color: ${theme.colors.text};">${location}</span>`
+            : `<span style="color: ${theme.colors.accent};">Chybí — doplňte přes UPRAVIT</span>`
         }
       </div>
       ` : ''}
