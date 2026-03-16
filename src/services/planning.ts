@@ -3,7 +3,7 @@ import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import {
   createAction,
   calculatePriorityScore,
-  hasPendingAction,
+  getPendingActionTypes,
 } from '@/lib/db/actions'
 import { getConversationById, getRecentMessages, updateConversation } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
@@ -69,11 +69,6 @@ export function selectOfferMultiplier(
 export async function generateActionProposal(
   conversation: ConversationThread
 ): Promise<ActionProposal[]> {
-  // Skip if conversation already has pending actions (prevents duplicates across runs)
-  if (await hasPendingAction(conversation.id)) {
-    return []
-  }
-
   const summary = conversation.summary_json as unknown as ConversationSummary
 
   const recentMessages = await getRecentMessages(conversation.id, 10)
@@ -141,9 +136,13 @@ export async function generateActionProposal(
 
     const createdActions: ActionProposal[] = []
 
-    // Dedup: max one of each actionType per conversation per run
+    // Filter out action types that already have pending actions for this conversation
+    const existingPendingTypes = await getPendingActionTypes(conversation.id)
+
+    // Dedup: max one of each actionType per conversation per run, and skip already-pending types
     const seenTypes = new Set<string>()
     const dedupedProposals = proposals.filter(p => {
+      if (existingPendingTypes.has(p.actionType)) return false
       if (seenTypes.has(p.actionType)) return false
       seenTypes.add(p.actionType)
       return true
@@ -258,7 +257,7 @@ export async function generateActionProposal(
             offer_multiplier: offerMultiplier,
             weight,
             deal_type: dealType,
-            is_high_value: isHighValue,
+            is_high_value: isHighValue || proposal.dollarValue > settings.kc_high_value,
           },
           ...schedulingPayload,
         },

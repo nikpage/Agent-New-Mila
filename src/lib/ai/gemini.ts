@@ -87,7 +87,20 @@ ${cleanedText.slice(0, 3000)}
 
 Respond with ONLY the extracted information as concise structured text in CZECH. No JSON. No markdown headers. Just the facts.`
 
-  return (await runAITask('enrichment', prompt)).trim()
+  const raw = (await runAITask('enrichment', prompt)).trim()
+
+  // Guard against hallucination loops: if any line is repeated more than 3 times, keep only 3
+  const lines = raw.split('\n')
+  const counts = new Map<string, number>()
+  const deduped: string[] = []
+  for (const line of lines) {
+    const key = line.trim()
+    if (!key) { deduped.push(line); continue }
+    const count = (counts.get(key) || 0) + 1
+    counts.set(key, count)
+    if (count <= 3) deduped.push(line)
+  }
+  return deduped.join('\n')
 }
 
 /**
@@ -289,12 +302,13 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
   "suggestedLocation": "Physical meeting location if mentioned or clearly implied. null if not specified.",
-  "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). null if no specific time mentioned."
+  "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). If the enriched messages contain 'Navrhovaný čas' with a specific day+time, you MUST convert it to ISO 8601 and put it here. Do NOT leave null when a specific time is stated. null ONLY if no specific time mentioned.",
+  "cpAvailability": "Free-text string describing when the CP said they're available (e.g. 'Tuesday afternoon', 'next week except Wednesday'). null if not mentioned."
 }]
 
 Rules:
 - DO NOT write the email draft.
-- For SCHEDULE: intent_cs describes what Mila will schedule. missingInfo should be empty (scheduling handles it).
+- For SCHEDULE: intent_cs describes what Mila will schedule. missingInfo should contain any questions the CP asked that need answering in the calendar invite (e.g. parking, documents, who's coming). Only LEAVE OUT time/slot logistics — scheduling handles those automatically.
 - For REPLY: intent_cs describes the email content Mila will prepare. missingInfo should contain questions CP asked.
 - For TODO: intent_cs describes what the user needs to do. No draft needed.
 - missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in Czech. Do NOT shorten to keywords. Examples: "Je tam sklep nebo komora?" not "Sklep/Komora".

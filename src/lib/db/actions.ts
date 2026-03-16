@@ -377,6 +377,24 @@ export async function getActionsForConversation(
 }
 
 /**
+ * Get the set of action_type values that already have pending status for a conversation.
+ */
+export async function getPendingActionTypes(conversationId: string): Promise<Set<string>> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('action_proposals')
+    .select('action_type')
+    .eq('conversation_id', conversationId)
+    .eq('status', 'pending')
+
+  if (error) {
+    throw new Error(`Failed to get pending action types: ${error.message}`)
+  }
+
+  return new Set((data || []).map(r => r.action_type))
+}
+
+/**
  * Check if there's an existing pending action for a conversation
  */
 export async function hasPendingAction(conversationId: string): Promise<boolean> {
