@@ -36,7 +36,7 @@ Mila is an AI-powered executive assistant that ingests emails, WhatsApp messages
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (296 tests: 252 unit, 22 integration, 10 smoke, 12 e2e)
+npm test             # Run Vitest test suite (366 tests: 262 unit, 22 integration, 10 smoke, 12 e2e)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -64,6 +64,12 @@ src/
 │   ├── api/whatsapp/status/    # WhatsApp daemon status proxy
 │   ├── action/[id]/            # Action detail + edit pages
 │   └── page.tsx                # Home/status dashboard
+│
+├── shared/                     # Shared pure business logic (prevents cross-service coupling)
+│   ├── scoring.ts              # selectOfferMultiplier, computeDaysIgnored
+│   ├── scoring.test.ts         # 10 tests pinning shared scoring behavior
+│   ├── deal-types.ts           # validateDealType
+│   └── index.ts                # Barrel re-exports
 │
 ├── services/                   # Business logic (orchestration layer)
 │   ├── agent.ts                # Main pipeline — 6-step orchestration (parallel ingestion)
@@ -115,6 +121,21 @@ src/
 └── scripts/
     └── whatsapp-daemon.ts      # Standalone Baileys multi-session WA daemon (excluded from tsconfig)
 ```
+
+## Shared Business Logic (src/shared/)
+Pure functions used by multiple services. Extracted to prevent the circular regression loop where fixing one service would break another.
+
+**Import rule: services import from `shared/`, `lib/`, and `config/` — NEVER from each other.** This is enforced by convention and prevents regression cascading.
+
+| File | Functions | Previously in | Used by |
+|------|-----------|---------------|---------|
+| `scoring.ts` | `selectOfferMultiplier(cpRole, sellerMul, buyerMul)` | planning.ts | planning, lead-tracking |
+| `scoring.ts` | `computeDaysIgnored(latestInboundTimestamp, conversationCreatedAt)` | planning.ts + lead-tracking.ts (duplicated, diverged) | planning, lead-tracking |
+| `deal-types.ts` | `validateDealType(value)` | planning.ts | planning, threading |
+
+**computeDaysIgnored**: Single source of truth for "days since last CP contact". Fallback chain: `latestInbound.timestamp` → `conversation.created_at` → `now`. Uses `created_at` (not `last_updated`) because `last_updated` resets on every summary rebuild. Clamps to `Math.max(0, ...)`.
+
+**Why this exists**: Before extraction, planning.ts fell back to `conversation.last_updated` while lead-tracking.ts fell back to `conversation.created_at`. This divergence caused a fix-A-break-B cycle — fixing the calculation in one service left the other stale.
 
 ## Agent Pipeline (src/services/agent.ts)
 ```
@@ -219,7 +240,7 @@ Priority escalation is handled entirely by the `daysIgnored^1.5` factor in the m
 
 **Snooze Bypass**: Ignores any conversation where `current_date < snooze_until`. This prevents Mila from panicking and flagging a deal as "Dead" when it's just sitting in the land registry or waiting on a bank.
 
-Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation — after three unanswered nudges, the deal still appears in lead tracking but Mila stops generating new follow-up actions. Uses `selectOfferMultiplier()` to apply seller/buyer role-based multiplier to follow-up priority scores. High-value conversations (matching `highValueSignals`) are flagged to the AI during planning for better dollar value estimation.
+Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation — after three unanswered nudges, the deal still appears in lead tracking but Mila stops generating new follow-up actions. Uses `selectOfferMultiplier()` from `@/shared/scoring` to apply seller/buyer role-based multiplier to follow-up priority scores. Uses `computeDaysIgnored()` from `@/shared/scoring` for consistent days-since-contact calculation (same logic as planning). High-value conversations (matching `highValueSignals`) are flagged to the AI during planning for better dollar value estimation.
 
 ## Database Schema
 Full schema reference (all tables, columns, deal property model, migrations): See docs/SCHEMA.md
@@ -286,7 +307,7 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 
 **DO NOT REMOVE OR CHANGE** the formula or wiring without explicit user permission.
 
-**Wiring**: `planning.ts` passes sellerMultiplier (from CP role via `selectOfferMultiplier`), kcHighValue (from user settings), and weight (from AI response) to `calculatePriorityScore()`. `lead-tracking.ts` also passes sellerMultiplier and kcHighValue for follow-up actions.
+**Wiring**: Both `planning.ts` and `lead-tracking.ts` import `selectOfferMultiplier` and `computeDaysIgnored` from `@/shared/scoring` — never from each other. Both pass sellerMultiplier (from CP role), kcHighValue (from user settings), and daysIgnored (from shared computation) to `calculatePriorityScore()`. `planning.ts` additionally passes weight (from AI response).
 
 ## AI Model Configuration
 **Config**: `src/config/ai-models.ts` — 7 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
@@ -473,11 +494,12 @@ Standalone Baileys daemon (`scripts/whatsapp-daemon.ts`) — pure WebSocket, mul
 - Components use Tailwind CSS classes (no CSS modules)
 - Type imports use `import type { ... }` syntax
 - Tests use Vitest — test files are co-located with source (*.test.ts). See Testing section below for sync rules
+- **Import hierarchy**: `services/` → `shared/`, `lib/`, `config/`. Services NEVER import from other services. Shared pure functions live in `src/shared/`. If you need a function in two services, put it in `shared/`, not in one service and import from the other
 
 ## Testing
 **Framework**: Vitest 4 with @/* path aliases. Tests co-located (foo.ts → foo.test.ts). Mock-Only-AI philosophy: mock AI + Google APIs, everything else (DB, scoring, tokens, cleaning) runs for real.
 
-**296 tests total**: 252 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See docs/TESTING.md
+**366 tests total**: 262 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See docs/TESTING.md
 
 **Key rules**:
 - Changed a function → update its pinning test
