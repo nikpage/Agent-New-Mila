@@ -47,20 +47,35 @@ User-facing actions (surface in morning brief for approval):
 | SNOOZE | Pauses lead tracking for X days because the deal is waiting on a third party (e.g., bank, land registry). |
 
 Internal states (stored in conversation_threads.status, not shown to user):
-- **active** — Ongoing conversation.
-- **waiting** — Flags the conversation as "no action needed now" — Mila keeps watching.
+- **active** — Ongoing conversation. Snoozed deals remain active — snooze_until suppresses lead tracking temporarily, deal resumes normal monitoring on expiry.
 - **archived** — Conversation is finished — no response needed, nothing to watch.
 
-### Draft Generation
-Drafts are generated on-demand, not during proposal creation. When the pipeline proposes an action, it stores only:
-- **intent_cs** — what Mila plans to do (in Czech)
-- **rationale_cs** — why this action is needed
-- **missing_info** — questions the user needs to answer before execution
+### Approval Workflow
+Action cards do not contain finished drafts. The workflow is multi-step:
 
-When the user clicks EXECUTE, Mila generates the actual email/message draft using the full conversation context + intent + any user notes.
+1. **Action card** — Mila presents her plan and outline. Stored as intent_cs (what Mila plans to do), rationale_cs (why), and missing_info (questions the user needs to answer). Buttons: UDĚLAT, UPRAVIT, UDĚLÁM SÁM.
+2. **Edit card** (on UPRAVIT) — A form with deal-specific questions Mila needs answered (e.g. is parking available? when was the roof last done?) plus a general comments field for the agent to shape tone or add details.
+3. **Draft** — Mila generates the full draft using conversation context, approved intent, and edit input. Draft tone adapts to channel (formal for email, short for WhatsApp) and counterparty (configured per user).
+4. **Review** — Agent reviews draft, can edit again, then approves with UDĚLAT. Mila sends.
+
+### Action Deduplication
+One conversation should not produce duplicate action cards across pipeline runs. If an action was proposed in a previous brief and the agent hasn't acted on it, it carries forward — not duplicated. If new information changes the proposed action, the card updates.
+
+*Note: deduplication is a known active bug in the current build.*
+
+### Execution & Agent Actions
+When the agent approves an action:
+- **REPLY**: Mila generates the draft (if not already generated via the edit workflow), sends the email or WhatsApp message.
+- **SCHEDULE**: Hold becomes confirmed. Invite sent to counterparty. Travel buffer booked.
+- **TODO**: Logged with due date.
+
+The agent can also:
+- **Dismiss** — remove from queue entirely
+- **Defer** — reappear in next brief
+- **Blacklist** — block a counterparty from future action proposals
 
 ### Daily Briefs
-Mila sends two daily briefing emails — morning (default 7:00) and late-morning (default 11:30). Times are per-user configurable.
+Mila sends two daily briefing emails — AM (default 7:00) and PM (default 11:30). Times are per-user configurable. AM prepares the agent before their main work block; PM covers what's still pending plus a preview of tomorrow.
 
 Each brief contains:
 - AI-generated headline summarizing priorities
@@ -75,7 +90,7 @@ Each brief contains:
 ### Instant High-Priority Notifications
 Actions with urgency >= 9 trigger an immediate email notification — the same action card format as briefs, sent within 5 minutes of action creation. Polled every 5 minutes via QStash (`/api/cron/instant-notify`).
 - If the user acts on the instant notification, the action is resolved before the next brief
-- If the user ignores it, the action still appears in the next morning/afternoon brief as a reminder
+- If the user ignores it, the action still appears in the next AM/PM brief as a reminder
 
 ## Channels
 
@@ -116,15 +131,8 @@ The core anti-churn mechanism. Runs as Step 7 of every pipeline execution.
    - Skips if there's already a pending action for that conversation
    - Skips if max auto follow-ups (3) already sent
    - Applies `selectOfferMultiplier()` based on CP role (seller/buyer) and kcHighValue from user settings
-   - Creates a REPLY action proposal with boosted priority score
+   - Creates a REPLY action proposal (priority escalation handled by daysIgnored^1.5 in the main formula — no separate boost multipliers)
    - Writes follow-up intent in Czech
-
-### Priority Boosting
-Lead tracking actions get multiplied priority so they surface at the top of the morning brief:
-- **Cooling**: 1.5x boost
-- **Cold**: 2.5x boost
-- **Dead**: 3.75x boost (2.5 * 1.5)
-- High-value conversations (matching `highValueSignals` from client config): additional 1.5x
 
 ### Thresholds
 Stored per-user in `users.settings` (see ONBOARDING.md > Lead Management):
@@ -134,6 +142,8 @@ cold_threshold_days: 5
 dead_threshold_days: 14
 max_auto_follow_ups: 3
 ```
+
+After max_auto_follow_ups (default 3) unanswered follow-ups per deal, Mila stops generating new follow-up actions. The deal still appears in lead tracking but the agent must decide whether to re-engage or let go.
 
 ## Per-User Configuration
 All per-user configuration is stored in the `users.settings` JSONB column and configured via `scripts/configure-user.ts`. See ONBOARDING.md for the full settings reference.
@@ -159,6 +169,9 @@ Messages are assigned to conversations using a 3-tier strategy:
 3. **WhatsApp**: threaded by phone number (`wa:+phone`)
 
 Conversation summaries are rebuilt after N new messages. Each summary includes: current state, risks, next steps, key points.
+
+### Deal Context
+Each conversation maintains a running narrative — not a message log, but a summary: where the deal stands, how it got there, key facts, and what needs to happen next. This is what appears on action cards so the agent can step back into a deal they haven't thought about in weeks.
 
 ## Calendar & Scheduling
 
@@ -198,30 +211,67 @@ When the brief is being prepared, Mila pre-optimizes ALL unsent SCHEDULE actions
 - Mila checks user's calendar and suggests accept/reject/propose new time
 
 ### Conflict Resolution
-- Compares event scores (new vs existing). Higher score wins
+- Compares new action's priority against existing event's W (immovability)
+- At urgency 9–10, Mila will suggest moving even a W=100 event
+- She always presents both sides. The agent decides. Mila never silently moves or drops anything
 - User-created events default weight = 7 (treated as planned but movable for high-value deals)
 - Handles rare conflicts with confirmed events — separate from batch optimization
+
+**Design test case**: a W=100 personal event (doctor, kids' concert) against an nVal-max deal with a single possible time slot. An impossible situation. Mila surfaces the conflict, presents both sides, and the agent chooses. This is by design — Mila never resolves impossible conflicts silently.
 
 ### Personal Calendar Events
 - Personal events (matching `isPersonalEvent(title, settings)`) block time but do NOT generate action proposals
 
 ## Priority Scoring
-**Formula**: `Score = (BaseDealScore * sellerMultiplier) + (urgency * daysIgnored^1.5) + weight`
+**Formula**: `Score = (nVal × sellerMultiplier × stageWeight) × (urgency + daysIgnored^1.5)`
 
-Four independent terms:
-- **BaseDealScore** = `Math.max(1, Math.round((dollarValue / kcHighValue) * 10))` — Percentage-based normalization capped at a reasonable ceiling. Hard floor of 1 ensures no deal ever drops to 0 or negative.
-- **sellerMultiplier** — Applied to the BaseDealScore. Default 1.5 for sellers, 1.0 for buyers (user-configurable).
-- **urgency * daysIgnored^1.5** — Time penalty. Ignored items escalate aggressively to force the user to act. ^1.5 provides a strong but manageable curve.
-- **weight** — immovability: flat, never changes. 1-10 for normal items, 100 for absolutely immovable. User-created events default to 7.
+Two groups, multiplied — deal importance × time pressure:
+- **nVal** (normalized deal value) = `Math.max(1, Math.round((dollarValue / kcHighValue) * 10))` — Percentage-based normalization capped at a reasonable ceiling. Hard floor of 1 ensures no deal ever drops to 0 or negative.
+- **sellerMultiplier** — Applied to nVal. Default 1.5 for sellers, 1.0 for buyers (user-configurable).
+- **stageWeight** — Multiplier reflecting deal lifecycle stage. Ascending from initial contact through closing — a deal near closing gets more weight than a fresh acquisition. More time invested, more at stake. Stage is AI-classified during action proposal (dealType on conversation_threads).
+- **urgency + daysIgnored^1.5** — Time pressure. Urgency is AI-assigned (1–10) based on when the action is due. daysIgnored escalates non-linearly. These are additive — a new conversation (daysIgnored=0) with high urgency still scores on time pressure.
+
+These factors are independent. A small urgent deal beats a large routine one. A todo with today's deadline beats a high-value deal that can wait.
+
+### Urgency Scale
+
+| U | Meaning |
+|---|---------|
+| 10 | Due within 1 hour. Do NOW. |
+| 9 | Due within 8 business hours. Do NOW or ASAP. |
+| 8 | Due end of business tomorrow. |
+| 7 | Due in 2 business days. |
+| 6 | Due in 3 business days. |
+| 5 | Due in 5 business days. Try before EOD Friday. |
+| 4 | Due next week. Try for EOD Friday or next Wednesday. |
+| 3 | Due within 2 weeks. Deadline exists but not yet visible. |
+| 2 | (unused) |
+| 1 | No time pressure. |
+
+**Display thresholds** (user-facing Czech labels in briefs):
+- 9–10: "MUSÍŠ to udělat TEĎ" (must do now)
+- 7–8: "Měl bys to udělat dnes" (should do today)
+- 5–6: "Měl bys to udělat brzy" (should do soon)
+
+**Instant alert trigger**: urgency > 8 (i.e. urgency >= 9). See Instant High-Priority Notifications.
+
+### Slot Defense (W — Immovability)
+
+**weight (W) is NOT part of the priority score.** W is a scheduling constraint only — it determines how strongly an existing calendar event resists being moved:
+- **1–10**: movable to hard-to-move. A casual viewing might be a 3. A client meeting with a specific requested time might be a 7.
+- **100**: effectively immovable. Court dates, notary appointments, personal commitments (doctor, kids' concert, partner's flight). The gap between 10 and 100 is intentional — it creates a hard tier.
+
+W applies to non-deal events too. The agent's life doesn't stop for work.
 
 | Input | Scale | Source |
 |-------|-------|--------|
 | dollarValue | 0+ CZK | AI-assessed from conversation |
-| kcHighValue | default 5000000 | settings.kc_high_value — "big deal" anchor, used to calculate BaseDealScore |
+| kcHighValue | default 5000000 | settings.kc_high_value — "big deal" anchor, used to calculate nVal |
 | sellerMultiplier | default 1 | User settings: offer_multiplier_seller (1.5) or offer_multiplier_buyer (1.0) based on CP role |
+| stageWeight | TBD | AI-classified deal stage, mapped to multiplier. Ascending from initial contact to closing. |
 | urgency | 1-10 | AI-assessed |
 | daysIgnored | 0+ | Days since last activity (escalates via ^1.5) |
-| weight | 1-10 or 100 | How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable. User events default to 7. |
+| weight | 1-10 or 100 | Scheduling constraint only. How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable. User events default to 7. |
 
 sellerMultiplier and urgency fall back to 1 if 0/null to prevent score collapse. kcHighValue falls back to 5000000.
 
