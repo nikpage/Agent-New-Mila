@@ -172,6 +172,28 @@ export async function generateActionProposal(
           locationPartial = validated.needsConfirmation
         }
 
+        // Address confidence handling:
+        // - AI said 'low' confidence → flag for user verification even if geocode succeeded
+        // - No location at all → add missing_info asking user for the address
+        const aiLocationConfidence = proposal.locationConfidence || null
+        if (aiLocationConfidence === 'low' && meetingLocation) {
+          // Geocode may have succeeded but the AI wasn't sure this is the right place.
+          // Flag as partial so user sees the verification prompt in EditForm.
+          locationPartial = true
+        }
+
+        if (!meetingLocation) {
+          // No location found at all — inject a missing_info field asking the user.
+          // The 'adresa' keyword in the label is what EditForm uses to render it as a location field.
+          const hasAddressField = proposal.missingInfo?.some(f => f.label.toLowerCase().includes('adresa'))
+          if (!hasAddressField) {
+            proposal.missingInfo = [
+              ...(proposal.missingInfo || []),
+              { label: 'Kde se schůzka koná? (adresa nebo Online)', value: null },
+            ]
+          }
+        }
+
         schedulingPayload = {
           suggestedTime: proposal.suggestedTime || null,
           suggestedLocation: meetingLocation || null,

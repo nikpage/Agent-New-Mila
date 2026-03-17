@@ -191,6 +191,7 @@ export type ProposedAction = {
   weight: number
   dealType: DealType
   suggestedLocation?: string | null
+  locationConfidence?: 'high' | 'low' | null
   suggestedTime?: string | null
 }
 
@@ -301,7 +302,8 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
-  "suggestedLocation": "Physical meeting location if mentioned or clearly implied. null if not specified.",
+  "suggestedLocation": "Physical address for the meeting. You MUST actively infer this from ALL available context — not just explicit 'meet me at X' statements. Use property addresses discussed in the conversation, addresses from email signatures, office addresses mentioned anywhere, notary/bank/office names + city context. Combine partial clues: if the conversation is about a property in Praha and someone says 'Dykova 17', infer 'Dykova 17, Praha'. Always output the most complete street address you can construct. null ONLY if truly no location clues exist anywhere in the conversation.",
+  "locationConfidence": "'high' if the address is explicitly stated or strongly implied by the conversation context (e.g. property address being discussed, CP said 'meet at my office' + signature has address). 'low' if you are guessing from weak signals (e.g. address only in email signature with no textual hint it is the meeting place, city mentioned but street is uncertain). null if suggestedLocation is null.",
   "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). If the enriched messages contain 'Navrhovaný čas' with a specific day+time, you MUST convert it to ISO 8601 and put it here. Do NOT leave null when a specific time is stated. null ONLY if no specific time mentioned.",
   "cpAvailability": "Free-text string describing when the CP said they're available (e.g. 'Tuesday afternoon', 'next week except Wednesday'). null if not mentioned."
 }]
@@ -309,6 +311,7 @@ Respond with ONLY valid JSON — an array of one or more action objects:
 Rules:
 - DO NOT write the email draft.
 - For SCHEDULE: intent_cs describes what Mila will schedule. missingInfo should contain any questions the CP asked that need answering in the calendar invite (e.g. parking, documents, who's coming). Only LEAVE OUT time/slot logistics — scheduling handles those automatically.
+- ADDRESS INFERENCE for SCHEDULE: You MUST try to find an address. Look at: (1) property/location being discussed in the conversation, (2) specific addresses in message bodies ("Dykova 17"), (3) addresses in email signatures or footers, (4) named places ("u notáře na Vinohradech" → infer district), (5) CP's office if meeting is at their place. Combine city context from the conversation with street details from any message. Output the most complete address you can. If you only have a partial address (district, landmark), output that — Google Maps can often resolve it. Set locationConfidence to 'low' when the address source is ambiguous (e.g. signature address with no meeting-place context).
 - For REPLY: intent_cs describes the email content Mila will prepare. missingInfo should contain questions CP asked.
 - For TODO: intent_cs describes what the user needs to do. No draft needed.
 - missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in Czech. Do NOT shorten to keywords. Examples: "Je tam sklep nebo komora?" not "Sklep/Komora".
