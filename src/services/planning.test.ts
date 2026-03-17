@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { validateDealType, selectOfferMultiplier } from './planning'
+import { validateDealType } from '@/shared/deal-types'
+import { selectOfferMultiplier } from '@/shared/scoring'
 import { VALID_DEAL_TYPES, VALID_CP_ROLES } from '@/lib/supabase/types'
 import { calculatePriorityScore } from '@/lib/db/actions'
 

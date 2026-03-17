@@ -11,14 +11,12 @@ import { getLatestMessageFromCP } from '@/lib/db/messages'
 import { getUserSettings } from '@/lib/db/users'
 import { geocodeAddress } from '@/lib/google/maps'
 import { containsHighValueSignals } from '@/config/client'
-import {
-  VALID_DEAL_TYPES,
-} from '@/lib/supabase/types'
+import { selectOfferMultiplier } from '@/shared/scoring'
+import { validateDealType } from '@/shared/deal-types'
 import type {
   ActionProposal,
   ConversationThread,
   ConversationSummary,
-  DealType,
 } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -41,29 +39,6 @@ export async function validateMeetingLocation(
 
   // Geocode couldn't resolve — keep raw text but ask user to confirm
   return { location: raw, needsConfirmation: true }
-}
-
-/**
- * Validate AI-returned dealType against known values.
- * Returns null for invalid/unknown values instead of storing garbage.
- */
-export function validateDealType(value: unknown): DealType {
-  if (typeof value !== 'string') return null
-  return (VALID_DEAL_TYPES as readonly string[]).includes(value)
-    ? (value as DealType)
-    : null
-}
-
-/**
- * Select offer multiplier based on counterparty role.
- * Sellers get higher multiplier (more commission value).
- */
-export function selectOfferMultiplier(
-  cpRole: string | null,
-  sellerMultiplier: number,
-  buyerMultiplier: number
-): number {
-  return cpRole === 'seller' ? sellerMultiplier : buyerMultiplier
 }
 
 export async function generateActionProposal(

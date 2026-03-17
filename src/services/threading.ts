@@ -20,7 +20,7 @@ import { generateConversationEmbedding, generateMessageEmbedding } from '@/lib/e
 import { saveConversationEmbedding, getConversationsWithEmbeddingsByCP } from '@/lib/db/embeddings'
 import { createTodo } from '@/lib/db/todos'
 import { getUserSettings } from '@/lib/db/users'
-import { validateDealType } from './planning'
+import { validateDealType } from '@/shared/deal-types'
 import type { Message, ConversationThread } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 

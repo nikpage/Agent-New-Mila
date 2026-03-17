@@ -53,7 +53,7 @@ vi.mock('@/lib/db/users', () => ({
   getUserSettings: vi.fn(),
 }))
 
-vi.mock('./planning', () => ({
+vi.mock('@/shared/deal-types', () => ({
   validateDealType: vi.fn(),
 }))
 
