@@ -11,7 +11,7 @@ import { getLatestMessageFromCP } from '@/lib/db/messages'
 import { getUserSettings } from '@/lib/db/users'
 import { geocodeAddress } from '@/lib/google/maps'
 import { containsHighValueSignals } from '@/config/client'
-import { selectOfferMultiplier } from '@/shared/scoring'
+import { selectOfferMultiplier, computeDaysIgnored } from '@/shared/scoring'
 import { validateDealType } from '@/shared/deal-types'
 import type {
   ActionProposal,
@@ -93,14 +93,7 @@ export async function generateActionProposal(
     const proposals = await proposeAction(summary, formattedMessages, cp.name, settings, channel)
 
     const latestInbound = await getLatestMessageFromCP(conversation.user_id, cp.id)
-    const lastContactDate = latestInbound?.timestamp
-      ? new Date(latestInbound.timestamp)
-      : conversation.last_updated
-        ? new Date(conversation.last_updated)
-        : new Date()
-    const daysIgnored = Math.floor(
-      (Date.now() - lastContactDate.getTime()) / (1000 * 60 * 60 * 24)
-    )
+    const daysIgnored = computeDaysIgnored(latestInbound?.timestamp, conversation.created_at)
     const offerMultiplier = selectOfferMultiplier(
       cp.role, settings.offer_multiplier_seller, settings.offer_multiplier_buyer
     )

@@ -4,5 +4,5 @@
  * Services import from here, NEVER from each other.
  * This prevents regression cascading across service boundaries.
  */
-export { selectOfferMultiplier } from './scoring'
+export { selectOfferMultiplier, computeDaysIgnored } from './scoring'
 export { validateDealType } from './deal-types'

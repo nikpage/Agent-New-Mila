@@ -18,7 +18,7 @@ import { getCPById } from '@/lib/db/counterparties'
 import { getLatestMessageFromCP } from '@/lib/db/messages'
 import { getUserSettings } from '@/lib/db/users'
 import { containsHighValueSignals } from '@/config/client'
-import { selectOfferMultiplier } from '@/shared/scoring'
+import { selectOfferMultiplier, computeDaysIgnored } from '@/shared/scoring'
 import { generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
 import type { ActionProposal, ConversationThread, UserSettings } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
@@ -137,14 +137,7 @@ async function processConversationForLeadTracking(
   // Measure days since last INBOUND message from the counterparty,
   // not conversation.last_updated (which resets on every summary rebuild).
   const latestInbound = await getLatestMessageFromCP(userId, cp.id)
-  const lastContactDate = latestInbound?.timestamp
-    ? new Date(latestInbound.timestamp)
-    : conversation.created_at
-      ? new Date(conversation.created_at)
-      : new Date()
-  const daysSinceActivity = Math.floor(
-    (Date.now() - lastContactDate.getTime()) / (1000 * 60 * 60 * 24)
-  )
+  const daysSinceActivity = computeDaysIgnored(latestInbound?.timestamp, conversation.created_at)
 
   const status = getLeadStatus(daysSinceActivity, settings)
 
