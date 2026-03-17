@@ -24,9 +24,16 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
   const locationPartial = !!payload?.location_partial
   const [isOnline, setIsOnline] = useState(!!payload?.is_online)
 
+  // Fixed key for the always-present address input on SCHEDULE cards
+  const ADDRESS_FIELD_KEY = 'Adresa schůzky'
+
   // Pre-populate dynamic fields from payload (e.g. location field from payload.location)
   const [dynamicFields, setDynamicFields] = useState<Record<string, string>>(() => {
     const initial: Record<string, string> = {}
+    // Always pre-fill the address field from payload.location for SCHEDULE actions
+    if (action.action_type === 'SCHEDULE' && payloadLocation) {
+      initial[ADDRESS_FIELD_KEY] = payloadLocation
+    }
     for (const field of missingInfo) {
       if (field.label.includes('adresa') && payloadLocation) {
         initial[field.label] = payloadLocation
@@ -60,8 +67,8 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
     return `${dateStr}, ${startStr} - ${endStr}`
   }
 
-  // Location fields are address-related fields from missing_info
-  const locationFields = missingInfo.filter(f => f.label.includes('adresa'))
+  // For SCHEDULE actions, address is handled by the always-present ADDRESS_FIELD_KEY input.
+  // Non-location fields from missing_info are rendered separately below.
   const nonLocationFields = missingInfo.filter(f => !f.label.includes('adresa'))
 
   return (
@@ -120,46 +127,26 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
         </label>
       )}
 
-      {/* Location fields — disabled when Online is checked */}
-      {isSchedule && locationFields.map((field, index) => (
-        <div key={`loc-${index}`}>
+      {/* Address field — ALWAYS shown for SCHEDULE actions, disabled when Online is checked */}
+      {isSchedule && (
+        <div>
           <Input
-            label={field.label}
-            value={isOnline ? '' : (dynamicFields[field.label] || '')}
-            onChange={e => setDynamicFields({ ...dynamicFields, [field.label]: e.target.value })}
+            label={ADDRESS_FIELD_KEY}
+            value={isOnline ? '' : (dynamicFields[ADDRESS_FIELD_KEY] || '')}
+            onChange={e => setDynamicFields({ ...dynamicFields, [ADDRESS_FIELD_KEY]: e.target.value })}
             disabled={isOnline}
-            style={isOnline ? { opacity: 0.4 } : locationPartial && !dynamicFields[field.label] ? {
+            placeholder={isOnline ? '' : 'např. Dykova 17, Praha 2'}
+            style={isOnline ? { opacity: 0.4 } : locationPartial && !dynamicFields[ADDRESS_FIELD_KEY] ? {
               borderColor: theme.colors.warning,
               backgroundColor: theme.colors.warningBg,
             } : undefined}
           />
-          {locationPartial && !isOnline && !dynamicFields[field.label] && (
+          {locationPartial && !isOnline && !dynamicFields[ADDRESS_FIELD_KEY] && (
             <p style={{
               fontSize: theme.typography.sizes.xs,
               color: theme.colors.warning,
               marginTop: '4px',
             }}>
-              ⚠ Mila nemohla ověřit toto místo. Upřesněte adresu.
-            </p>
-          )}
-        </div>
-      ))}
-
-      {/* Show inline location for SCHEDULE actions without an address field in missing_info */}
-      {isSchedule && locationFields.length === 0 && payloadLocation && !isOnline && (
-        <div style={{
-          fontSize: theme.typography.sizes.sm,
-          padding: theme.spacing.sm,
-          borderRadius: theme.borderRadius.md,
-          backgroundColor: locationPartial ? theme.colors.warningBg : theme.colors.secondary,
-          border: locationPartial ? `1px solid ${theme.colors.warning}` : 'none',
-        }}>
-          <span style={{ color: theme.colors.textMuted }}>Místo: </span>
-          <span style={{ color: locationPartial ? theme.colors.warning : theme.colors.text, fontWeight: locationPartial ? theme.typography.weights.medium : theme.typography.weights.normal }}>
-            {payloadLocation}
-          </span>
-          {locationPartial && (
-            <p style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.warning, marginTop: '4px', marginBottom: 0 }}>
               ⚠ Mila nemohla ověřit toto místo. Upřesněte adresu.
             </p>
           )}
@@ -185,8 +172,8 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
         />
       ))}
 
-      {/* Location fields for non-SCHEDULE actions (rendered normally) */}
-      {!isSchedule && locationFields.map((field, index) => (
+      {/* Location fields for non-SCHEDULE actions (rendered normally from missing_info) */}
+      {!isSchedule && missingInfo.filter(f => f.label.includes('adresa')).map((field, index) => (
         <Input
           key={`loc-ns-${index}`}
           label={field.label}
