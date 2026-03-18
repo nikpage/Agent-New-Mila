@@ -203,9 +203,11 @@ export async function proposeAction(
   channel: 'email' | 'whatsapp' = 'email'
 ): Promise<ProposedAction[]> {
   console.log(`[AI:proposeAction] Running stage 'planning' for ${cpName || 'unknown CP'}`)
+  // Planning.ts already caps messages at ~2000 chars of enriched text.
+  // Do NOT truncate further — enriched text contains structured extractions
+  // (Adresa:, Navrhovaný čas:, etc.) that get destroyed by slicing.
   const recentText = recentMessages
-    .slice(-3)
-    .map(m => `[${m.direction}]: ${m.text.slice(0, 500)}`)
+    .map(m => `[${m.direction}]: ${m.text}`)
     .join('\n\n')
 
   const systemContext = getAISystemPrompt(settings)
@@ -261,12 +263,21 @@ ACTION TYPE RULES — return one OR multiple actions only when genuinely indepen
    - CP proposed a specific time → SCHEDULE (create event + send invite)
    - CP wants to meet but no time yet → SCHEDULE (find slot + send invite)
    - CP asks to sign a contract in person → SCHEDULE (that's a meeting)
-   CRITICAL: The calendar invite body IS the reply to the counterparty. If the CP asked questions (parking, who can come, documents to bring, etc.), include the answers in the SCHEDULE intent_cs — they will be part of the invite message. There is NEVER a separate REPLY when a SCHEDULE exists. The invite handles ALL communication about the meeting.
-3. TODO — something the user needs to do themselves that is NOT a message and NOT a meeting. Examples: gather documents, review a contract internally, call someone. NEVER use TODO when the CP proposed a meeting — that is SCHEDULE. NEVER use TODO when the next step is responding to the CP — that is REPLY or SCHEDULE.
+   CRITICAL — suggestedTime: This MUST be the time of the ACTUAL MEETING with the CP. NEVER the time to prepare, send an invite, or do admin work. If CP says "meeting at 9:00" → suggestedTime = 9:00. If CP says "let's meet tomorrow afternoon" → suggestedTime = tomorrow 14:00 (your best interpretation). The invitation is sent automatically when the user clicks UDĚLAT — you do not need to schedule time to send it.
+   CRITICAL — invite is the reply: The calendar invite body IS the reply to the counterparty. If the CP asked questions (parking, who can come, documents to bring, etc.), include the answers in the SCHEDULE intent_cs — they will be part of the invite message. There is NEVER a separate REPLY when a SCHEDULE exists. The invite handles ALL communication about the meeting.
+3. TODO — something the user needs to do themselves that is NOT a message and NOT a meeting. Examples: gather documents, review a contract internally, get banker approval, verify an address, prepare specific paperwork. Be CONCRETE — list each specific task (e.g. "Získejte souhlas od banky" not "Připravte dokumenty"). NEVER use TODO when the CP proposed a meeting — that is SCHEDULE. NEVER use TODO when the next step is responding to the CP — that is REPLY or SCHEDULE.
+   CRITICAL: Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up", "send later", or "call if no reply". Mila proposes actions — the user decides and acts. If something is time-sensitive, set urgency accordingly so instant notifications alert the user.
 4. SCHEDULE ABSORBS REPLY: When a SCHEDULE action exists, do NOT return a REPLY action for the same conversation. The calendar invite is the reply. Any CP questions get answered in the invite body. This is absolute — no exceptions.
 5. You MUST always return at least one action based on the current conversation state.
 6. Each action is independent — different urgency, weight, and intent for each.
 7. DEDUP RULE: Never return two actions that accomplish the same thing. If a SCHEDULE already confirms a meeting with the CP, do NOT add a REPLY. If a REPLY already covers everything, do NOT add a TODO that just says "follow up on the reply." Each action must address a genuinely INDEPENDENT task.
+
+MULTI-ACTION TRIAGE:
+When a conversation requires multiple steps, think through the critical path the way a human assistant would:
+- What must happen FIRST or the deal is lost? (confirm, reply, lock in the appointment)
+- What meeting needs to be booked — at what ACTUAL time, at what ACTUAL location?
+- What does the user need to prepare BEFORE the meeting? (documents, approvals, external confirmations)
+Return a separate action for each genuinely independent step. Each gets its own urgency based on ITS OWN deadline — the confirmation email is urgency 10 if the deadline is today, while the document prep might be urgency 7 if the meeting is tomorrow.
 
 CRITICAL - VOICE AND PERSPECTIVE:
 - You are Mila, the user's assistant. Address the user directly as "vy" (you).
@@ -302,8 +313,8 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
-  "suggestedLocation": "Physical address for the meeting. You MUST actively infer this from ALL available context — not just explicit 'meet me at X' statements. Use property addresses discussed in the conversation, addresses from email signatures, office addresses mentioned anywhere, notary/bank/office names + city context. Combine partial clues: if the conversation is about a property in Praha and someone says 'Dykova 17', infer 'Dykova 17, Praha'. Always output the most complete street address you can construct. null ONLY if truly no location clues exist anywhere in the conversation.",
-  "locationConfidence": "'high' if the address is explicitly stated or strongly implied by the conversation context (e.g. property address being discussed, CP said 'meet at my office' + signature has address). 'low' if you are guessing from weak signals (e.g. address only in email signature with no textual hint it is the meeting place, city mentioned but street is uncertain). null if suggestedLocation is null.",
+  "suggestedLocation": "Physical address for the meeting. Use ONLY addresses explicitly stated in the messages — look for 'Adresa:' lines in the enriched text. If a notary, office, or venue is named with a street address in the conversation, use that exact address verbatim. NEVER construct, guess, or combine addresses from postal codes, email signatures alone, or vague context. null if no clear street address is present in the messages.",
+  "locationConfidence": "'high' if the address is explicitly stated in the message text (e.g. 'Adresa: Anežská 812/12, Praha', or CP wrote 'meet at Dykova 17'). 'low' if the address comes from indirect context (office name mentioned but address from signature, city mentioned but street uncertain). null if suggestedLocation is null.",
   "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). If the enriched messages contain 'Navrhovaný čas' with a specific day+time, you MUST convert it to ISO 8601 and put it here. Do NOT leave null when a specific time is stated. null ONLY if no specific time mentioned.",
   "cpAvailability": "Free-text string describing when the CP said they're available (e.g. 'Tuesday afternoon', 'next week except Wednesday'). null if not mentioned."
 }]
@@ -311,7 +322,7 @@ Respond with ONLY valid JSON — an array of one or more action objects:
 Rules:
 - DO NOT write the email draft.
 - For SCHEDULE: intent_cs describes what Mila will schedule. missingInfo should contain any questions the CP asked that need answering in the calendar invite (e.g. parking, documents, who's coming). Only LEAVE OUT time/slot logistics — scheduling handles those automatically.
-- ADDRESS INFERENCE for SCHEDULE: You MUST try to find an address. Look at: (1) property/location being discussed in the conversation, (2) specific addresses in message bodies ("Dykova 17"), (3) addresses in email signatures or footers, (4) named places ("u notáře na Vinohradech" → infer district), (5) CP's office if meeting is at their place. Combine city context from the conversation with street details from any message. Output the most complete address you can. If you only have a partial address (district, landmark), output that — Google Maps can often resolve it. Set locationConfidence to 'low' when the address source is ambiguous (e.g. signature address with no meeting-place context).
+- ADDRESS for SCHEDULE: Use the address as it appears in the enriched text ('Adresa:' lines). If the conversation mentions a specific venue (notary office, bank branch) and the enriched text has its address, use it. Do NOT fabricate addresses. If uncertain, output null and let missingInfo ask the user.
 - For REPLY: intent_cs describes the email content Mila will prepare. missingInfo should contain questions CP asked.
 - For TODO: intent_cs describes what the user needs to do. No draft needed.
 - missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in Czech. Do NOT shorten to keywords. Examples: "Je tam sklep nebo komora?" not "Sklep/Komora".
