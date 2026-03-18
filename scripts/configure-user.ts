@@ -106,6 +106,7 @@ async function configureInteractive(existing: UserSettings): Promise<Partial<Use
   settings.travel_mode = await askChoice('Travel mode', ['driving', 'walking', 'transit', 'bicycling'] as const, existing.travel_mode)
   settings.home_location = await ask('Home address (for travel time calc)', existing.home_location || undefined)
   settings.office_location = await ask('Office address', existing.office_location || undefined)
+  settings.lawyer_notary = await ask('Lawyer/Notary (name + address)', existing.lawyer_notary || undefined)
 
   // ── Section 6: Calendar ──
   // Business calendar uses 'primary' (Google API = authenticated user's main calendar)

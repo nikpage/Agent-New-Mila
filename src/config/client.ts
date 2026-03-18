@@ -152,15 +152,26 @@ import type { UserSettings } from '@/lib/supabase/types'
  * Reads from per-user settings stored in DB.
  */
 export function getAISystemPrompt(settings: UserSettings): string {
-  return `${settings.ai_system_context}
+  const lines: string[] = []
+  if (settings.ai_system_context) lines.push(settings.ai_system_context)
 
-Business: ${settings.client_company} — ${settings.business_specialization}
-Market: ${settings.business_market}
-Typical deal: ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} ${settings.typical_deal_size_currency}
+  lines.push('')
+  lines.push(`User: ${settings.client_name || 'Unknown'}${settings.client_role ? ` — ${settings.client_role}` : ''}`)
+  lines.push(`Business: ${settings.client_company} — ${settings.business_specialization}`)
+  lines.push(`Market: ${settings.business_market}`)
+  lines.push(`Typical deal: ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} ${settings.typical_deal_size_currency}`)
 
-High-value signals: ${settings.high_value_signals.join(', ')}
-Language: ${settings.ai_language === 'cs' ? 'Czech' : settings.ai_language}
-Tone with counterparties: ${settings.ai_tone_cp}`
+  lines.push('')
+  if (settings.office_location) lines.push(`User's office: ${settings.office_location}`)
+  if (settings.home_location) lines.push(`User's home: ${settings.home_location}`)
+  if (settings.lawyer_notary) lines.push(`User's lawyer/notary: ${settings.lawyer_notary}`)
+
+  lines.push('')
+  lines.push(`High-value signals: ${settings.high_value_signals.join(', ')}`)
+  lines.push(`Language: ${settings.ai_language === 'cs' ? 'Czech' : settings.ai_language}`)
+  lines.push(`Tone with counterparties: ${settings.ai_tone_cp}`)
+
+  return lines.join('\n')
 }
 
 /**

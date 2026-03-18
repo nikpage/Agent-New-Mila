@@ -73,6 +73,10 @@ describe('DEFAULT_USER_SETTINGS — Full Snapshot', () => {
     expect(DEFAULT_USER_SETTINGS.office_location).toBe('')
   })
 
+  it('lawyer_notary = empty string', () => {
+    expect(DEFAULT_USER_SETTINGS.lawyer_notary).toBe('')
+  })
+
   // -------------------------------------------------------------------------
   // Priority / Scoring
   // -------------------------------------------------------------------------
@@ -279,6 +283,6 @@ describe('DEFAULT_USER_SETTINGS — Full Snapshot', () => {
   it('has exactly the expected number of fields', () => {
     const fieldCount = Object.keys(DEFAULT_USER_SETTINGS).length
     // If you add a new field to UserSettings, add a test above AND update this count
-    expect(fieldCount).toBe(58)
+    expect(fieldCount).toBe(59)
   })
 })

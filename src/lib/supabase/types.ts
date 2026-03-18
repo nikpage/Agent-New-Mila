@@ -643,6 +643,7 @@ export interface UserSettings {
   travel_mode: 'driving' | 'walking' | 'transit' | 'bicycling' // default "driving"
   home_location: string
   office_location: string
+  lawyer_notary: string  // User's lawyer/notary name + address
 
   // Prioritization & Logic
   offer_multiplier_seller: number // default 1.5
@@ -729,6 +730,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   travel_mode: 'driving',
   home_location: '',
   office_location: '',
+  lawyer_notary: '',
 
   // Prioritization & Logic
   offer_multiplier_seller: 1.5,
