@@ -781,6 +781,18 @@ export async function optimizeScheduleActions(
         // CP-stated time has a conflict — book anyway and report conflict
         const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
         if (holdResult.success && holdResult.holdEvent) {
+          // Build conflict details so updateActionWithHold → generateSchedulingIntent
+          // can tell the user what they're double-booking over
+          const conflictInfos: ConflictInfo[] = conflicts.map(existing => {
+            const isImmovable = existing.weight == null || existing.weight >= 100
+            return {
+              existingEvent: existing,
+              existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
+              newScore: action.priority_score ?? 0,
+              recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
+            }
+          })
+          holdResult.conflicts = conflictInfos
           await updateActionWithHold(action, holdResult, meetingLocation, settings)
           result.optimized++
           result.holds.push(holdResult.holdEvent)
@@ -868,6 +880,17 @@ export async function optimizeScheduleActions(
             meetingLocation || undefined
           )
           if (holdResult.success && holdResult.holdEvent) {
+            // Pass conflict details to updateActionWithHold so intent_cs mentions them
+            const conflictInfos: ConflictInfo[] = conflicts.map(existing => {
+              const isImmovable = existing.weight == null || existing.weight >= 100
+              return {
+                existingEvent: existing,
+                existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
+                newScore: action.priority_score ?? 0,
+                recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
+              }
+            })
+            holdResult.conflicts = conflictInfos
             await updateActionWithHold(action, holdResult, meetingLocation, settings)
             result.optimized++
             result.holds.push(holdResult.holdEvent)
