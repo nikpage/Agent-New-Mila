@@ -149,7 +149,7 @@ After max_auto_follow_ups (default 3) unanswered follow-ups per deal, Mila stops
 All per-user configuration is stored in the `users.settings` JSONB column and configured via `scripts/configure-user.ts`. See ONBOARDING.md for the full settings reference.
 
 `src/config/client.ts` contains helper functions that read from UserSettings:
-- `getAISystemPrompt(settings)` — assembles the system prompt from the user's business context, tone, and language settings
+- `getAISystemPrompt(settings)` — assembles the system prompt from user identity, locations (office, home, lawyer/notary), business context, tone, and language settings
 - `containsHighValueSignals(text, settings)` — checks message text against the user's high-value keywords (used in planning + lead tracking)
 - `isPersonalEvent(title, settings)` — checks calendar event titles against personal keywords
 
@@ -298,9 +298,10 @@ Current chain: preFilter/classify use gemini-2.5-flash-lite primary; all other s
 
 ### Business Context Injection
 Every AI prompt receives the user's business context via `getAISystemPrompt(settings)` (reads from UserSettings in DB). This includes:
-- Who the user is and what they do
-- Market and specialization
+- User identity (name, role)
+- Business (company, market, specialization)
 - Typical deal size range (used as AI reference for dollarValue estimation in configured currency)
+- User locations: office_location, home_location, lawyer_notary — enables the AI to resolve contextual references like "your office" or "at the notary" to actual addresses
 - High-value signals to watch for (detected via `containsHighValueSignals`, flagged to AI in planning prompt)
 - Tone instructions
 - Channel context (email vs WhatsApp adjusts formality)

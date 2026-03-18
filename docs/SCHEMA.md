@@ -7,7 +7,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 |----------|--------|----------|
 | **Work Hours** | `working_hours_start`, `working_hours_end`, `working_days`, `timezone` | 9-17, Mon-Fri, Europe/Prague |
 | **Meetings** | `default_meeting_duration`, `default_meeting_type`, `meeting_buffer_minutes` | 30m, online, 15m |
-| **Travel** | `travel_mode`, `home_location`, `office_location` | driving |
+| **Travel & Locations** | `travel_mode`, `home_location`, `office_location`, `lawyer_notary` | driving |
 | **Priorities** | `offer_multiplier_seller`, `offer_multiplier_buyer`, `priority_multiplier_vip`, `kc_low_value`, `kc_high_value` | 1.5, 1.0, 2.0, 500000, 5000000 |
 | **AI Persona** | `ai_tone_user`, `ai_tone_cp`, `user_alias` | Professional, Polite, "User" |
 | **Briefs** | `morning_brief_time`, `afternoon_brief_time` | 08:00, 13:00 |

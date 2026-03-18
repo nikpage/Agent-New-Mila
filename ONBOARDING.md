@@ -383,8 +383,9 @@ All settings stored in `users.settings` JSONB column. Configured via `scripts/co
 | `default_meeting_type` | enum | `"online"` | `online`, `phone`, `office`, `walking` |
 | `meeting_buffer_minutes` | number | `15` | Gap between meetings |
 | `travel_mode` | enum | `"driving"` | `driving`, `walking`, `transit`, `bicycling` |
-| `home_location` | string | `""` | Home address (for travel time) |
-| `office_location` | string | `""` | Office address (for travel time) |
+| `home_location` | string | `""` | Home address (for travel time + AI context) |
+| `office_location` | string | `""` | Office address (for travel time + AI context) |
+| `lawyer_notary` | string | `""` | Lawyer/notary name + address (for AI context) |
 
 ## Prioritization & Scoring
 

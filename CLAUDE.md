@@ -220,7 +220,7 @@ const actions = await supabase.from('action_proposals').select('*')
 All user configuration is stored in `users.settings` JSONB column. See ONBOARDING.md for the full settings reference. Configured via `scripts/configure-user.ts`.
 
 `src/config/client.ts` exports helper functions that take UserSettings as input:
-- `getAISystemPrompt(settings)` — builds the AI system prompt from user's business context
+- `getAISystemPrompt(settings)` — builds the AI system prompt from user's identity, locations, and business context
 - `containsHighValueSignals(text, settings)` — checks text against user's high-value keywords (used in both planning and lead tracking)
 - `isPersonalEvent(title, settings)` — detects personal calendar events
 
@@ -334,7 +334,7 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 
 **Prompt language convention**: ALL prompts are written in English. This is consistent across all 9 AI functions because LLMs reason better in English. Output language is controlled via a strict directive injected at the end of the prompt: `CRITICAL: You must generate the final text for the user in ${settings.ai_language}. Do not output English.` This ensures high-quality reasoning with localized output (Czech by default).
 
-**Business context injection**: `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()`, `generateFinalDraft()`, and `analyzeConversation()` prompts. `enrichMessage()` receives a lighter business context (company, specialization, market) + language setting. All AI functions that process user content now receive UserSettings for consistent language and domain interpretation. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates dollarValue and weight (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies dealType.
+**Business context injection**: `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()`, `generateFinalDraft()`, and `analyzeConversation()` prompts. Includes: user name/role, company, specialization, market, deal range, office_location, home_location, lawyer_notary, high-value signals, language, tone. This lets the AI resolve contextual references like "your office" or "at the notary" to actual addresses. `enrichMessage()` receives the same location data in its business context line. All AI functions that process user content now receive UserSettings for consistent language and domain interpretation. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates dollarValue and weight (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies dealType.
 
 ## Embeddings & Semantic Threading
 
