@@ -28,7 +28,7 @@ import {
   createEvent,
   createHoldEvent,
   createTravelBuffer,
-  findConflicts,
+  findConflicts as findDbConflicts,
   getEventById,
   updateEvent,
   deleteEvent,
@@ -49,6 +49,61 @@ import type { UserSettings, Event, ActionProposal } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
 const MIN_TRAVEL_BUFFER_MINUTES = 15
+
+/**
+ * Check for conflicts against BOTH Google Calendar and local DB.
+ * Google Calendar has the user's real events (external appointments, etc).
+ * Local DB has Mila-created holds and events.
+ * Returns a unified list so nothing gets booked on top of existing events.
+ */
+async function findAllConflicts(
+  userId: string,
+  startTime: Date,
+  endTime: Date,
+  excludeEventId?: string
+): Promise<Event[]> {
+  // Check both sources in parallel
+  const [gcalConflicts, dbConflicts] = await Promise.all([
+    checkConflicts(userId, startTime, endTime).catch(err => {
+      console.error('[scheduling] Google Calendar conflict check failed, falling back to DB only:', err)
+      return [] as CalendarEvent[]
+    }),
+    findDbConflicts(userId, startTime, endTime, excludeEventId),
+  ])
+
+  // DB conflicts already have the right shape
+  const result: Event[] = [...dbConflicts]
+
+  // Track DB events by google_event_id so we don't double-count
+  const dbGoogleIds = new Set(
+    dbConflicts
+      .map(e => (e as Record<string, unknown>).google_event_id as string | undefined)
+      .filter(Boolean)
+  )
+
+  // Add Google Calendar events that aren't already in the DB
+  for (const gcalEvent of gcalConflicts) {
+    if (dbGoogleIds.has(gcalEvent.id)) continue
+
+    // Convert CalendarEvent to Event shape for conflict handling.
+    // These are real user calendar events — treat as immovable (weight=100)
+    // since Mila has no authority over events she didn't create.
+    result.push({
+      id: gcalEvent.id,
+      user_id: userId,
+      title: gcalEvent.summary || 'Calendar event',
+      start_time: gcalEvent.startTime.toISOString(),
+      end_time: gcalEvent.endTime.toISOString(),
+      location: gcalEvent.location || null,
+      weight: 100,
+      status: gcalEvent.status || 'confirmed',
+      google_event_id: gcalEvent.id,
+      created_at: new Date().toISOString(),
+    } as Event)
+  }
+
+  return result
+}
 
 export interface SlotProposal {
   start: Date
@@ -440,7 +495,7 @@ export async function handleConflict(
   newEventScore: number,
   newCpId: string
 ): Promise<ConflictInfo[]> {
-  const conflicts = await findConflicts(userId, proposedStart, proposedEnd)
+  const conflicts = await findAllConflicts(userId, proposedStart, proposedEnd)
   const conflictInfos: ConflictInfo[] = []
 
   for (const existing of conflicts) {
@@ -530,53 +585,59 @@ export async function proposeMeeting(
   const settings = await getUserSettings(userId)
   const duration = durationMinutes || settings.default_meeting_duration
 
-  // When a specific time was stated (e.g., "notary at 9:00 AM"),
-  // treat it as a hard constraint — check that exact slot first.
-  // Spec: CP availability is #1 priority in scheduling optimization.
+  // All slots — preferred or not — validated against Google Calendar free slots.
+  // findBestSlots calls findFreeSlots which reads the real calendar.
+  const slots = await findBestSlots(userId, duration, 10, preferredDate, location)
+
   if (preferredDate) {
     const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
-    const slotConflicts = await findConflicts(userId, preferredDate, preferredEnd)
+    const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
 
-    if (slotConflicts.length === 0) {
-      // Exact requested time is free — book it directly
-      const slot: SlotProposal = { start: preferredDate, end: preferredEnd }
-      return blockSlotForProposal(userId, cpId, slot, duration, location)
-    }
-
-    // Stated time has a conflict — always book the hold (consistent process),
-    // then return conflict info so the user or planning layer can act on it.
-    const slot: SlotProposal = { start: preferredDate, end: preferredEnd }
-    const holdResult = await blockSlotForProposal(userId, cpId, slot, duration, location)
-
-    // Build conflict details for each conflicting event
-    const conflictInfos: ConflictInfo[] = slotConflicts.map(existing => {
-      const isImmovable = existing.weight == null || existing.weight >= 100
-      return {
-        existingEvent: existing,
-        existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
-        newScore: 0, // caller computes final priority score
-        recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
-      }
-    })
-
-    const hasImmovableConflict = conflictInfos.some(
-      c => c.recommendation === 'suggest_alternate'
+    // Check if preferred time is within a known free slot
+    const isFree = slots.some(free =>
+      free.start.getTime() <= preferredDate!.getTime() &&
+      free.end.getTime() >= preferredEnd.getTime()
     )
 
-    return {
-      success: holdResult.success,
-      holdEvent: holdResult.holdEvent,
-      gcalEventId: holdResult.gcalEventId,
-      conflicts: conflictInfos,
-      error: hasImmovableConflict
-        ? `Requested time conflicts with immovable event: ${slotConflicts.map(c => c.title || 'existing event').join(', ')}`
-        : `Requested time conflicts with: ${slotConflicts.map(c => c.title || 'existing event').join(', ')}`,
+    if (isFree) {
+      // Genuinely free — book it
+      return blockSlotForProposal(userId, cpId, preferredSlot, duration, location)
     }
+
+    // CP-stated time conflicts — book anyway, report conflict
+    const holdResult = await blockSlotForProposal(userId, cpId, preferredSlot, duration, location)
+    const slotConflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
+
+    if (slotConflicts.length > 0) {
+      const conflictInfos: ConflictInfo[] = slotConflicts.map(existing => {
+        const isImmovable = existing.weight == null || existing.weight >= 100
+        return {
+          existingEvent: existing,
+          existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
+          newScore: 0, // caller computes final priority score
+          recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
+        }
+      })
+
+      const hasImmovableConflict = conflictInfos.some(
+        c => c.recommendation === 'suggest_alternate'
+      )
+
+      return {
+        success: holdResult.success,
+        holdEvent: holdResult.holdEvent,
+        gcalEventId: holdResult.gcalEventId,
+        conflicts: conflictInfos,
+        error: hasImmovableConflict
+          ? `Requested time conflicts with immovable event: ${slotConflicts.map(c => c.title || 'existing event').join(', ')}`
+          : `Requested time conflicts with: ${slotConflicts.map(c => c.title || 'existing event').join(', ')}`,
+      }
+    }
+
+    return holdResult
   }
 
-  // No specific time stated — find the best available slot
-  const slots = await findBestSlots(userId, duration, 10, undefined, location)
-
+  // No preferred date — pick first free slot (already GCal-validated)
   if (slots.length === 0) {
     return {
       success: false,
@@ -584,21 +645,8 @@ export async function proposeMeeting(
     }
   }
 
-  // Pick the first conflict-free slot (they're already sorted by quality)
-  for (const slot of slots) {
-    const slotConflicts = await findConflicts(userId, slot.start, slot.end)
-
-    if (slotConflicts.length === 0) {
-      // No conflicts — block this one slot
-      return blockSlotForProposal(userId, cpId, slot, duration, location)
-    }
-  }
-
-  // All slots have conflicts
-  return {
-    success: false,
-    error: 'All proposed slots have conflicts with higher-priority events',
-  }
+  // Slots are already free per Google Calendar. Pick the first one.
+  return blockSlotForProposal(userId, cpId, slots[0], duration, location)
 }
 
 /**
@@ -620,11 +668,8 @@ export async function proposeMeetingMultipleCPs(
     return { success: false, error: 'No available slots found' }
   }
 
-  // Pick first conflict-free slot
+  // Slots are already GCal-validated (free per Google Calendar). Pick the first one.
   for (const slot of slots) {
-    const slotConflicts = await findConflicts(userId, slot.start, slot.end)
-    if (slotConflicts.length > 0) continue
-
     // Build title from all CP names
     const cpNames: string[] = []
     for (const cpId of cpIds) {
@@ -761,57 +806,92 @@ export async function optimizeScheduleActions(
       }
     }
 
-    // If we have a preferred date, try that exact slot first (CP-stated = hard constraint)
+    // ── Unified slot selection ──────────────────────────────────────
+    // All slots — preferred or not — go through the same validation:
+    // 1. Is it in allSlots (i.e. genuinely free on Google Calendar)?
+    // 2. Is it available in this batch (not double-booked by earlier action)?
+    // If a CP-stated time conflicts, we still book it but report the conflict.
+
+    // Build candidate list. Preferred date gets checked against real GCal free slots.
+    let candidateSlots: SlotProposal[] = []
+    let preferredSlotIsFree = false
+
     if (preferredDate) {
       const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
       const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
 
-      if (isSlotAvailable(preferredSlot)) {
-        const conflicts = await findConflicts(userId, preferredDate, preferredEnd)
+      // Check if preferred time falls within a known free slot from Google Calendar.
+      // allSlots are GCal-sourced with buffer — if the preferred time isn't in there,
+      // it conflicts with something real on the calendar.
+      preferredSlotIsFree = allSlots.some(free =>
+        free.start.getTime() <= preferredDate!.getTime() &&
+        free.end.getTime() >= preferredEnd.getTime()
+      )
 
-        if (conflicts.length === 0) {
-          const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
-          if (holdResult.success && holdResult.holdEvent) {
-            await updateActionWithHold(action, holdResult, meetingLocation, settings)
-            result.optimized++
-            result.holds.push(holdResult.holdEvent)
-            bookedRanges.push({ start: preferredDate, end: preferredEnd })
-            continue
-          }
-        }
+      // allSlots may not cover the preferred date's day (e.g. if it's today and
+      // allSlots started from tomorrow). Fetch that day's free slots directly.
+      if (!preferredSlotIsFree) {
+        const daySlots = await findFreeSlots(
+          userId, preferredDate, duration,
+          settings.working_hours_start, settings.working_hours_end,
+          settings.meeting_buffer_minutes
+        )
+        preferredSlotIsFree = daySlots.some(free =>
+          free.start.getTime() <= preferredDate!.getTime() &&
+          free.end.getTime() >= preferredEnd.getTime()
+        )
+      }
 
-        // CP-stated time has a conflict — book anyway and report conflict
+      if (preferredSlotIsFree && isSlotAvailable(preferredSlot)) {
+        // Preferred time is genuinely free — use it directly
         const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
         if (holdResult.success && holdResult.holdEvent) {
-          // Build conflict details so updateActionWithHold → generateSchedulingIntent
-          // can tell the user what they're double-booking over
-          const conflictInfos: ConflictInfo[] = conflicts.map(existing => {
-            const isImmovable = existing.weight == null || existing.weight >= 100
-            return {
-              existingEvent: existing,
-              existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
-              newScore: action.priority_score ?? 0,
-              recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
-            }
-          })
-          holdResult.conflicts = conflictInfos
           await updateActionWithHold(action, holdResult, meetingLocation, settings)
           result.optimized++
           result.holds.push(holdResult.holdEvent)
           bookedRanges.push({ start: preferredDate, end: preferredEnd })
-          for (const conflict of conflicts) {
-            result.moveSuggestions.push({
-              existingEventId: conflict.id,
-              existingWeight: conflict.weight,
-              reason: `CP stated specific time: ${suggestedTime}`,
+          continue
+        }
+      } else if (isSlotAvailable(preferredSlot)) {
+        // Preferred time conflicts with calendar — CP stated it, so book anyway
+        // but report the conflict so the user knows.
+        const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+        if (holdResult.success && holdResult.holdEvent) {
+          // We don't have the specific conflicting event details from findFreeSlots,
+          // but we know there IS a conflict because the slot isn't free.
+          // Use findAllConflicts to get the details for reporting.
+          const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
+          if (conflicts.length > 0) {
+            const conflictInfos: ConflictInfo[] = conflicts.map(existing => {
+              const isImmovable = existing.weight == null || existing.weight >= 100
+              return {
+                existingEvent: existing,
+                existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
+                newScore: action.priority_score ?? 0,
+                recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
+              }
             })
+            holdResult.conflicts = conflictInfos
+            for (const conflict of conflicts) {
+              result.moveSuggestions.push({
+                existingEventId: conflict.id,
+                existingWeight: conflict.weight,
+                reason: `CP stated specific time: ${suggestedTime}`,
+              })
+            }
           }
+          await updateActionWithHold(action, holdResult, meetingLocation, settings)
+          result.optimized++
+          result.holds.push(holdResult.holdEvent)
+          bookedRanges.push({ start: preferredDate, end: preferredEnd })
           continue
         }
       }
+      // Preferred slot failed batch check (another action already booked it) —
+      // fall through to normal slot selection below.
     }
 
-    // No preferred date or preferred slot unavailable — find best available slot
+    // Normal path: pick from GCal-validated free slots
     const availableSlots = allSlots.filter(s => isSlotAvailable(s))
 
     if (availableSlots.length === 0) {
@@ -820,7 +900,7 @@ export async function optimizeScheduleActions(
     }
 
     // Priority 1: Filter by CP availability if stated
-    let candidateSlots = availableSlots
+    candidateSlots = availableSlots
     if (cpAvailability) {
       const cpFiltered = filterSlotsByCpAvailability(availableSlots, cpAvailability)
       if (cpFiltered.length > 0) {
@@ -838,76 +918,23 @@ export async function optimizeScheduleActions(
       )
     }
 
-    // Try to find a conflict-free slot
+    // All candidateSlots are already GCal-free. Pick the first batch-available one.
     let scheduled = false
     for (const slot of candidateSlots) {
-      const conflicts = await findConflicts(userId, slot.start, slot.end)
-
-      if (conflicts.length === 0) {
-        // No conflict — block this slot
-        const holdResult = await blockSlotForProposal(
-          userId,
-          action.cp_id,
-          slot,
-          duration,
-          meetingLocation || undefined
-        )
-        if (holdResult.success && holdResult.holdEvent) {
-          await updateActionWithHold(action, holdResult, meetingLocation, settings)
-          result.optimized++
-          result.holds.push(holdResult.holdEvent)
-          bookedRanges.push({ start: slot.start, end: slot.end })
-          scheduled = true
-          break
-        }
-      }
-    }
-
-    if (scheduled) continue
-
-    // Priority 4: Conflict resolution (last resort)
-    // Only suggest moving if CP is time-constrained
-    if (cpAvailability) {
-      // CP has a constraint — try to schedule at their required time
-      // and suggest moving the conflicting event
-      for (const slot of candidateSlots) {
-        const conflicts = await findConflicts(userId, slot.start, slot.end)
-        if (conflicts.length > 0) {
-          // Schedule here and suggest moving the conflict
-          const holdResult = await blockSlotForProposal(
-            userId,
-            action.cp_id,
-            slot,
-            duration,
-            meetingLocation || undefined
-          )
-          if (holdResult.success && holdResult.holdEvent) {
-            // Pass conflict details to updateActionWithHold so intent_cs mentions them
-            const conflictInfos: ConflictInfo[] = conflicts.map(existing => {
-              const isImmovable = existing.weight == null || existing.weight >= 100
-              return {
-                existingEvent: existing,
-                existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
-                newScore: action.priority_score ?? 0,
-                recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
-              }
-            })
-            holdResult.conflicts = conflictInfos
-            await updateActionWithHold(action, holdResult, meetingLocation, settings)
-            result.optimized++
-            result.holds.push(holdResult.holdEvent)
-            bookedRanges.push({ start: slot.start, end: slot.end })
-            for (const conflict of conflicts) {
-              result.moveSuggestions.push({
-                existingEventId: conflict.id,
-                existingWeight: conflict.weight,
-                reason: `CP can only meet at this time: ${cpAvailability}`,
-              })
-            }
-            scheduled = true
-            break
-          }
-        }
+      const holdResult = await blockSlotForProposal(
+        userId,
+        action.cp_id,
+        slot,
+        duration,
+        meetingLocation || undefined
+      )
+      if (holdResult.success && holdResult.holdEvent) {
+        await updateActionWithHold(action, holdResult, meetingLocation, settings)
+        result.optimized++
+        result.holds.push(holdResult.holdEvent)
+        bookedRanges.push({ start: slot.start, end: slot.end })
+        scheduled = true
+        break
       }
     }
 
