@@ -109,11 +109,6 @@ vi.mock('@/lib/db/messages', () => ({
   getUnprocessedMessages: vi.fn().mockResolvedValue([]),
 }))
 
-vi.mock('@/lib/db/locks', () => ({
-  tryAcquireUserLock: vi.fn().mockResolvedValue(true),
-  releaseUserLock: vi.fn().mockResolvedValue(undefined),
-}))
-
 // Service mocks
 vi.mock('@/services/agent', () => ({
   runAgentForUser: vi.fn().mockResolvedValue({ success: true }),

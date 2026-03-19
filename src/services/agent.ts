@@ -12,7 +12,6 @@ import { getUnprocessedMessages } from '@/lib/db/messages'
 import { getConversationsForUser } from '@/lib/db/conversations'
 import { getUserById } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
-import { tryAcquireUserLock, releaseUserLock } from '@/lib/db/locks'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import type { ActionProposal } from '@/lib/supabase/types'
 
@@ -66,30 +65,6 @@ export function createLogCollector(): { logs: string[]; capture: () => () => voi
 export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
   const { logs, capture } = createLogCollector()
   const restore = capture()
-
-  const emptyResult: AgentRunResult = {
-    success: true,
-    emailsIngested: 0,
-    whatsappMessagesProcessed: 0,
-    calendarEventsSynced: 0,
-    calendarInvitationsDetected: 0,
-    messagesProcessed: 0,
-    conversationsUpdated: 0,
-    actionsGenerated: 0,
-    followUpsGenerated: 0,
-    coolingLeads: 0,
-    coldLeads: 0,
-    actions: [],
-    errors: ['Skipped — concurrent run already in progress'],
-    logs,
-  }
-
-  const lockAcquired = await tryAcquireUserLock(userId)
-  if (!lockAcquired) {
-    console.warn(`[Agent] Skipping — pipeline already running for ${userId}`)
-    restore()
-    return emptyResult
-  }
 
   const result: AgentRunResult = {
     success: false,
@@ -279,7 +254,6 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     console.error('[Agent] Error:', error)
     result.errors.push(error instanceof Error ? error.message : 'Unknown error')
   } finally {
-    await releaseUserLock(userId)
     restore()
   }
 

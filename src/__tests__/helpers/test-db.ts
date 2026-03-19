@@ -199,9 +199,6 @@ export async function cleanupTestData() {
   await supabase.from('cps').delete().eq('user_id', TEST_USER_ID)
   await supabase.from('channels').delete().eq('user_id', TEST_USER_ID)
   await supabase.from('agent_errors').delete().eq('user_id', TEST_USER_ID)
-  try {
-    await supabase.from('user_agent_locks').delete().eq('user_id', TEST_USER_ID)
-  } catch { /* table may not exist yet */ }
 }
 
 // ─── Read Helpers (for assertions) ──────────────────────────────────────────

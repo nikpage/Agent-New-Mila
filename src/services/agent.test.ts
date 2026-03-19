@@ -54,11 +54,6 @@ vi.mock('@/lib/db/conversations', () => ({
   getConversationsForUser: vi.fn().mockResolvedValue([]),
 }))
 
-vi.mock('@/lib/db/locks', () => ({
-  tryAcquireUserLock: vi.fn().mockResolvedValue(true),
-  releaseUserLock: vi.fn().mockResolvedValue(undefined),
-}))
-
 vi.mock('@/lib/supabase/client', () => ({
   getSupabaseAdmin: vi.fn().mockReturnValue({
     from: () => ({ update: () => ({ in: () => ({ data: null, error: null }) }) }),
@@ -70,12 +65,8 @@ import { ingestEmailsForUser, ingestOutboundEmails } from './ingestion'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { trackLeadsForUser } from './lead-tracking'
 import { getUserById } from '@/lib/db/users'
-import { tryAcquireUserLock, releaseUserLock } from '@/lib/db/locks'
-
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.mocked(tryAcquireUserLock).mockResolvedValue(true)
-  vi.mocked(releaseUserLock).mockResolvedValue(undefined)
   vi.mocked(getUserById).mockResolvedValue({
     id: 'user-1',
     email: 'test@test.com',
@@ -89,33 +80,6 @@ describe('runAgentForUser', () => {
 
     expect(result.success).toBe(true)
     expect(result.errors).toEqual([])
-  })
-
-  it('skips concurrent run for same user (DB lock)', async () => {
-    // Second call fails to acquire lock
-    vi.mocked(tryAcquireUserLock).mockResolvedValueOnce(true).mockResolvedValueOnce(false)
-
-    const first = await runAgentForUser('user-1')
-    const second = await runAgentForUser('user-1')
-
-    expect(first.success).toBe(true)
-    expect(second.success).toBe(true)
-    expect(second.errors).toContain('Skipped — concurrent run already in progress')
-  })
-
-  it('releases DB lock after completion', async () => {
-    await runAgentForUser('user-1')
-
-    expect(releaseUserLock).toHaveBeenCalledWith('user-1')
-  })
-
-  it('releases DB lock even on failure', async () => {
-    vi.mocked(getUserById).mockRejectedValueOnce(new Error('DB exploded'))
-
-    const failResult = await runAgentForUser('user-1')
-    expect(failResult.success).toBe(false)
-
-    expect(releaseUserLock).toHaveBeenCalledWith('user-1')
   })
 
   it('returns error when user not found', async () => {
