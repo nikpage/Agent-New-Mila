@@ -285,8 +285,9 @@ const DEFAULT_INSTANT_URGENCY_THRESHOLD = 9
 
 /**
  * Poll for high-urgency actions and send instant notification emails.
- * Groups all urgent actions per user into ONE email (Mini Brief),
- * cards ordered by urgency descending (critical path: do NOW → do next).
+ * Groups actions by CONVERSATION — one email per conversation.
+ * Multiple urgent actions from the same email/conversation → one email.
+ * Different conversations → separate emails. Never merges across conversations.
  *
  * Uses urgency (AI-assessed immediate pressure, 1-10) instead of
  * priority_score, because priority_score is unreachable on day 0.
@@ -304,22 +305,27 @@ export async function sendInstantNotifications(
 
   console.log(`[InstantNotify] ${actions.length} high-priority action(s)`)
 
-  // Group actions by user — one email per user
-  const byUser = new Map<string, ActionProposal[]>()
+  // Group actions by conversation — one email per conversation
+  // Key: "userId:conversationId" to preserve user context
+  const byConversation = new Map<string, { userId: string; actions: ActionProposal[] }>()
   for (const action of actions) {
-    const existing = byUser.get(action.user_id) || []
-    existing.push(action)
-    byUser.set(action.user_id, existing)
+    const key = `${action.user_id}:${action.conversation_id}`
+    const existing = byConversation.get(key)
+    if (existing) {
+      existing.actions.push(action)
+    } else {
+      byConversation.set(key, { userId: action.user_id, actions: [action] })
+    }
   }
 
   let sent = 0
   let failed = 0
 
-  const userIds = Array.from(byUser.keys())
-  for (let i = 0; i < userIds.length; i += INSTANT_NOTIFY_CONCURRENCY) {
-    const batch = userIds.slice(i, i + INSTANT_NOTIFY_CONCURRENCY)
+  const groups = Array.from(byConversation.values())
+  for (let i = 0; i < groups.length; i += INSTANT_NOTIFY_CONCURRENCY) {
+    const batch = groups.slice(i, i + INSTANT_NOTIFY_CONCURRENCY)
     const results = await Promise.allSettled(
-      batch.map(userId => sendInstantNotificationForUser(userId, byUser.get(userId)!))
+      batch.map(group => sendInstantNotificationForConversation(group.userId, group.actions))
     )
     for (const result of results) {
       if (result.status === 'fulfilled' && result.value) {
@@ -334,10 +340,11 @@ export async function sendInstantNotifications(
 }
 
 /**
- * Send one instant notification email for a user containing ALL their
+ * Send one instant notification email for a single conversation's
  * urgent actions, ordered by urgency (most critical first).
+ * One email = one conversation. Never merges across conversations.
  */
-async function sendInstantNotificationForUser(
+async function sendInstantNotificationForConversation(
   userId: string,
   actions: ActionProposal[]
 ): Promise<boolean> {
@@ -401,8 +408,8 @@ async function sendInstantNotificationForUser(
       urgentHeader = intro.header
       urgentBody = intro.body
     } catch {
-      urgentSubject = `⚡ Mila — ${briefActions.length} urgentních akcí`
-      urgentHeader = 'Urgentní akce'
+      urgentSubject = `⚡ Mila — ${briefActions.length} urgent`
+      urgentHeader = 'Urgent'
       urgentBody = ''
     }
 
