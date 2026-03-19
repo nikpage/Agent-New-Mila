@@ -58,6 +58,10 @@ Every API route rejects unauthenticated/bad requests. Catches: removed auth chec
 | `src/services/lead-tracking.test.ts` | 12 | Lead thresholds (2/5/14 days), boost multipliers (1.5x/2.5x/3.75x), urgency mappings, threshold ordering |
 | `src/services/scheduling.test.ts` | 9 | Meeting duration, buffer, working hours, working days, timezone, travel mode defaults |
 | `src/services/morning-brief.test.ts` | 6 | Brief times (08:00/13:00), concurrency limit (10), max actions per brief (10), instant notify threshold (79), instant notify concurrency (10) |
+| `src/components/action/action-card-disable.test.ts` | 6 | UDĚLAT disable scoped to SCHEDULE only, REPLY/TODO never blocked, needsInput defaults false |
+| `src/services/instant-notify-grouping.test.ts` | 5 | Groups by conversation not user, optimizer runs before cards, re-fetches after optimizer |
+| `src/app/api/action/draft-payload.test.ts` | 5 | Batched payload writes, is_online in payloadUpdates, fresh payload fetch, no stale currentPayload |
+| `src/lib/ai/address-inference.test.ts` | 5 | suggestedLocation = meeting venue, priority order, signature ≠ venue, Karlin anti-example |
 
 ##### Logic Tests (127 tests)
 

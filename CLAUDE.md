@@ -8,7 +8,7 @@
 - NEVER default to generic patterns. Every decision must be specific to THIS project (Mila, nikpage/Agent-New-Mila, shared multi-tenant deployment)
 - NEVER use placeholders, stubs, or "TODO" on the developer side. Use real values, real logic, real implementations
 - NEVER take shortcuts that create maintenance debt (e.g., clone-per-client instead of multi-tenant, hardcoded config instead of DB-driven)
-- NEVER modify expected values in pinning tests (files: `actions.test.ts`, `lead-tracking.test.ts`, `threading.test.ts`, `defaults.test.ts`). If a pinning test fails, REPORT the failure and WAIT. Do not update the test to match new output
+- NEVER modify expected values in pinning tests (files: `actions.test.ts`, `lead-tracking.test.ts`, `threading.test.ts`, `defaults.test.ts`, `action-card-disable.test.ts`, `instant-notify-grouping.test.ts`, `draft-payload.test.ts`, `address-inference.test.ts`). If a pinning test fails, REPORT the failure and WAIT. Do not update the test to match new output
 
 ## Base URLs & Testing
 - **Local**: `http://localhost:3000`
@@ -36,7 +36,7 @@ Mila is an AI-powered executive assistant that ingests emails, WhatsApp messages
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (366 tests: 262 unit, 22 integration, 10 smoke, 12 e2e)
+npm test             # Run Vitest test suite (388 tests: 262 unit, 22 integration, 10 smoke, 12 e2e)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -336,6 +336,12 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 
 **Business context injection**: `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()`, `generateFinalDraft()`, and `analyzeConversation()` prompts. Includes: user name/role, company, specialization, market, deal range, office_location, home_location, lawyer_notary, high-value signals, language, tone. This lets the AI resolve contextual references like "your office" or "at the notary" to actual addresses. `enrichMessage()` receives the same location data in its business context line. All AI functions that process user content now receive UserSettings for consistent language and domain interpretation. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates dollarValue and weight (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies dealType.
 
+**Address inference for SCHEDULE**: `suggestedLocation` in proposeAction is the MEETING VENUE — where people will physically meet, NOT the property/deal subject. Priority: (1) explicit venue stated in conversation, (2) CP's office from signature if meeting is at their place, (3) user's office if CP says "at your office", (4) property address only for viewings/inspections. Email signature addresses are the sender's company address — never confuse with meeting venue. "Office space in Karlin" does NOT mean the meeting is in Karlin. Both proposeAction and generateFinalDraft prompts enforce this rule.
+
+**UDĚLAT button disable logic**: Only SCHEDULE actions can have UDĚLAT disabled (when location is missing or unfilled fields exist without a hold event). REPLY, TODO, and all other action types are NEVER blocked — their UDĚLAT is always active. This logic lives in `ActionCard.tsx`, `action-card-template.ts`, and `morning-brief.ts` (both brief and instant-notify HTML renderers).
+
+**Draft endpoint payload writes**: `src/app/api/action/[id]/draft/route.ts` batches all payload field updates (location, is_online, editedTo) into a single write using a freshly fetched payload. This prevents race conditions where sequential writes with stale payload overwrite each other.
+
 ## Embeddings & Semantic Threading
 
 ### Purpose
@@ -378,8 +384,11 @@ Unified conversation tracking across channels, email threads, and senders. An em
 ## Scheduling & Calendar Management
 **Implementation**: `src/services/scheduling.ts` (702 lines — largest service)
 
+### When the Optimizer Runs
+The schedule optimizer runs before ANY action card rendering — briefs, instant notifications, or any future surface. It must see ALL SCHEDULE actions for the user at once to batch-optimize. Never render SCHEDULE cards without running the optimizer first.
+
 ### Core Flow — Batch Schedule Optimization
-When the brief is being prepared, Mila pre-optimizes ALL unsent SCHEDULE actions as a batch:
+When a brief or instant notification is being prepared, Mila pre-optimizes ALL unsent SCHEDULE actions as a batch:
 
 1. Collects all pending, unsent SCHEDULE actions
 2. Optimizes slot selection across all new meetings using these criteria (in priority order):
@@ -499,7 +508,7 @@ Standalone Baileys daemon (`scripts/whatsapp-daemon.ts`) — pure WebSocket, mul
 ## Testing
 **Framework**: Vitest 4 with @/* path aliases. Tests co-located (foo.ts → foo.test.ts). Mock-Only-AI philosophy: mock AI + Google APIs, everything else (DB, scoring, tokens, cleaning) runs for real.
 
-**366 tests total**: 262 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See docs/TESTING.md
+**388 tests total**: 262 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See docs/TESTING.md
 
 **Key rules**:
 - Changed a function → update its pinning test
@@ -560,7 +569,9 @@ Actions with urgency >= 9 get an immediate email notification (same action card 
 
 - **Polling**: Global QStash schedule (`*/5 * * * *`) hits `/api/cron/instant-notify` every 5 minutes
 - **Query**: `getHighPriorityUnnotifiedActions(urgencyThreshold)` — finds urgency >= threshold, status = 'pending', last_notified_at IS NULL, queued_for_brief = true
-- **Send**: `sendInstantNotifications()` groups actions by user, sends email with ⚡ Urgentní akce subject, batches users at concurrency 10
+- **Grouping**: One email per **conversation** — multiple urgent actions from the same conversation go in one email. Different conversations → separate emails. Never merges across conversations.
+- **Schedule optimizer**: Runs per-user BEFORE rendering cards (same as briefs) — creates holds, resolves conflicts. Re-fetches actions after optimization so hold data is reflected in cards.
+- **Send**: `sendInstantNotifications()` groups actions by conversation, sends one email per conversation, batches at concurrency 10
 - **Re-inclusion in brief**: `markActionsInstantNotified()` sets last_notified_at but keeps queued_for_brief = true — if the user doesn't act, the action still appears in the next AM/PM brief
 - **No double-send**: last_notified_at IS NULL filter prevents re-sending on subsequent polls
 - **Schedule management**: `createInstantNotifySchedule()` / `deleteInstantNotifySchedule()` in `src/lib/qstash/client.ts`

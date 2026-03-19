@@ -89,6 +89,8 @@ Each brief contains:
 
 ### Instant High-Priority Notifications
 Actions with urgency >= 9 trigger an immediate email notification — the same action card format as briefs, sent within 5 minutes of action creation. Polled every 5 minutes via QStash (`/api/cron/instant-notify`).
+- **Grouping**: One email per conversation. Multiple urgent actions from the same conversation → one email. Different conversations → separate emails. Never merges across conversations.
+- **Schedule optimizer**: Runs per-user before rendering cards (same as briefs) — creates holds, resolves conflicts.
 - If the user acts on the instant notification, the action is resolved before the next brief
 - If the user ignores it, the action still appears in the next AM/PM brief as a reminder
 
