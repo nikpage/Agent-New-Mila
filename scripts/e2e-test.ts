@@ -138,7 +138,7 @@ const HIGH_PRIORITY_EMAIL: TestEmail = {
     'URGENTNÍ — NUTNÁ OKAMŽITÁ ODPOVĚĎ',
     '',
     'The buyer for the Vinohrady commercial building has confirmed 45,000,000 CZK.',
-    'The notary appointment is TOMORROW at 9:00 AM at Notářská kancelář Praha 2.',
+    'The notary appointment is TOMORROW at 9:00 AM at Třinecká 672, Praha.',
     '',
     'We need your confirmation TODAY by 5pm or the deal falls through.',
     'The buyer has another property lined up and will walk away.',
@@ -152,7 +152,7 @@ const HIGH_PRIORITY_EMAIL: TestEmail = {
     '',
     'Jan Novotný',
     'Senior Broker, Prague Commercial',
-    'Dykova 17, Praha',
+    'Třinecká 672, Praha',
   ].join('\n'),
 }
 

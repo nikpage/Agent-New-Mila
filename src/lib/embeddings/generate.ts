@@ -6,39 +6,7 @@
  * embeddings: threading falls back to Gmail thread ID matching.
  */
 
-import { GoogleGenerativeAI } from '@google/generative-ai'
-let genAI: GoogleGenerativeAI | null = null
-let embeddingKeyFingerprint: string = ''
-
-function keyFingerprint(key: string): string {
-  const prefix = 'AIza'
-  const idx = key.indexOf(prefix)
-  if (idx >= 0) return key.slice(idx + prefix.length, idx + prefix.length + 5) + '...'
-  return key.slice(0, 5) + '...'
-}
-
-function resolveGeminiKey(): string {
-  const multiKeys = process.env.GEMINI_API_KEYS
-  if (multiKeys) {
-    const keys = multiKeys.split(',').map(k => k.replace(/\s/g, '')).filter(Boolean)
-    if (keys.length > 0) return keys[0]
-  }
-  const singleKey = process.env.GEMINI_API_KEY
-  if (singleKey) {
-    const keys = singleKey.split(',').map(k => k.replace(/\s/g, '')).filter(Boolean)
-    if (keys.length > 0) return keys[0]
-  }
-  throw new Error('GEMINI_API_KEY or GEMINI_API_KEYS not configured')
-}
-
-function getEmbeddingClient(): GoogleGenerativeAI {
-  if (!genAI) {
-    const apiKey = resolveGeminiKey()
-    embeddingKeyFingerprint = keyFingerprint(apiKey)
-    genAI = new GoogleGenerativeAI(apiKey)
-  }
-  return genAI
-}
+import { getNextClient } from '@/lib/ai/providers/gemini-keys'
 
 export const embeddings = {
   model: 'models/gemini-embedding-001',
@@ -202,8 +170,8 @@ function cleanWhatsAppText(text: string): string {
 // ─── Embedding Functions ────────────────────────────────────────────────────
 
 export async function generateEmbedding(text: string): Promise<number[]> {
-  const client = getEmbeddingClient()
-  console.log(`[Embeddings] Generating embedding via ${embeddings.model}\n  ${embeddingKeyFingerprint}`)
+  const { client, keyLabel, fingerprint } = getNextClient()
+  console.log(`[Embeddings] Generating embedding via ${embeddings.model} (${keyLabel} ${fingerprint})`)
   const model = client.getGenerativeModel({
     model: embeddings.model,
   })

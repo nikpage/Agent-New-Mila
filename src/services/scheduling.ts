@@ -733,7 +733,8 @@ export async function optimizeScheduleActions(
           parsed = new Date(suggestedTime)
         } else {
           // No timezone — assume Prague local time.
-          // Get Prague's real UTC offset via Intl (handles DST correctly).
+          // Append Prague's real UTC offset so Date() parses correctly
+          // regardless of server timezone (UTC on Vercel, Europe/Prague locally).
           const formatter = new Intl.DateTimeFormat('en-US', {
             timeZone: 'Europe/Prague',
             timeZoneName: 'shortOffset',
@@ -741,15 +742,16 @@ export async function optimizeScheduleActions(
           const parts = formatter.formatToParts(new Date())
           const tzPart = parts.find(p => p.type === 'timeZoneName')?.value || ''
           const offsetMatch = tzPart.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/)
-          let offsetMs = 3600000 // fallback: CET (+01:00)
+          let offsetStr = '+01:00' // fallback: CET
           if (offsetMatch) {
-            const sign = offsetMatch[1] === '+' ? 1 : -1
-            const hours = parseInt(offsetMatch[2], 10)
-            const minutes = parseInt(offsetMatch[3] || '0', 10)
-            offsetMs = sign * (hours * 3600000 + minutes * 60000)
+            const sign = offsetMatch[1]
+            const hours = offsetMatch[2].padStart(2, '0')
+            const minutes = (offsetMatch[3] || '0').padStart(2, '0')
+            offsetStr = `${sign}${hours}:${minutes}`
           }
-          // suggestedTime has no TZ → Date parses as UTC. Subtract Prague offset to get true UTC.
-          parsed = new Date(new Date(suggestedTime).getTime() - offsetMs)
+          // Append offset to naive string → "2026-03-20T09:00:00+01:00"
+          // Date() now knows the intended timezone — works on any server.
+          parsed = new Date(`${suggestedTime}${offsetStr}`)
         }
         if (!isNaN(parsed.getTime()) && parsed.getTime() > Date.now() - 86400000) {
           preferredDate = parsed
