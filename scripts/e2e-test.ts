@@ -220,6 +220,7 @@ interface ActionProposal {
   intent_cs: string | null
   rationale: string
   priority_score: number
+  urgency: number
   dollar_value: number
   payload: Record<string, unknown>
 }
@@ -777,11 +778,12 @@ async function main() {
     // Step 2: Run agent to ingest the urgent email
     const instantAgent = await runAgent(USER_ID, 'instant')
 
-    // Step 3: Verify the agent produced a high-priority action (score > 79)
-    const highPriority = (instantAgent.actions || []).filter(a => a.priority_score > 79)
-    log('instant', `${highPriority.length}/${(instantAgent.actions || []).length} actions have priority_score > 79`)
+    // Step 3: Verify the agent produced an urgent action (urgency >= 9)
+    // Instant-notify uses urgency (AI-assessed pressure), NOT priority_score.
+    const highPriority = (instantAgent.actions || []).filter(a => a.urgency >= 9)
+    log('instant', `${highPriority.length}/${(instantAgent.actions || []).length} actions have urgency >= 9`)
     for (const a of highPriority) {
-      log('instant', `  ⚡ [${a.action_type}] score=${a.priority_score}: ${a.intent_cs || a.rationale}`)
+      log('instant', `  ⚡ [${a.action_type}] urgency=${a.urgency} score=${a.priority_score}: ${a.intent_cs || a.rationale}`)
     }
 
     const instantChecks: CheckResult[] = []
@@ -798,9 +800,9 @@ async function main() {
         detail: `${instantAgent.actionsGenerated} action(s) generated`,
       })
       instantChecks.push({
-        name: 'Instant: At least one action scored > 79',
+        name: 'Instant: At least one action has urgency >= 9',
         pass: highPriority.length > 0,
-        detail: `${highPriority.length} action(s) above threshold`,
+        detail: `${highPriority.length} action(s) with urgency >= 9`,
       })
     }
 
@@ -822,7 +824,7 @@ async function main() {
       instantChecks.push({
         name: 'Instant: High-priority actions notified',
         pass: notifyResult.sent > 0,
-        detail: `sent=${notifyResult.sent} (${highPriority.length} actions had score > 79)`,
+        detail: `sent=${notifyResult.sent} (${highPriority.length} actions had urgency >= 9)`,
       })
     }
 
