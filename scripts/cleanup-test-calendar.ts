@@ -21,11 +21,16 @@ const USER_ID = process.argv[2] || '9e59bc06-7276-453d-bc2e-f224a0a327e3'
 const TEST_MARKER = 'E2E-TEST'
 
 // Must match the CP names/emails used in e2e-test.ts
+// Include accented variants — the DB may store "Novotný" not "Novotny"
 const TEST_CP_NAMES = [
   'Bob',
   'Eva Dvorakova',
+  'Eva Dvořáková',
   'Martin Kral',
+  'Martin Král',
   'Jan Novotny',
+  'Jan Novotný',
+  'REZERVACE',
 ]
 
 function log(msg: string) {
