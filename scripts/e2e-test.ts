@@ -40,11 +40,26 @@ const flags = new Set(args.filter(a => a.startsWith('--')))
 const positional = args.filter(a => !a.startsWith('--'))
 
 const USER_ID = positional[0] || '9e59bc06-7276-453d-bc2e-f224a0a327e3'
-const BASE_URL = flags.has('--prod')
+let BASE_URL = flags.has('--prod')
   ? 'https://mila.specialagents.pro'
-  : (process.env.E2E_BASE_URL || process.env.APP_BASE_URL || 'http://localhost:3000')
+  : (process.env.E2E_BASE_URL || process.env.APP_BASE_URL || '')
 const API_KEY = process.env.MILA_USER_API_KEY || ''
 const CRON_SECRET = process.env.CRON_SECRET || ''
+
+/** Auto-detect dev server port if no explicit URL set */
+async function detectBaseUrl(): Promise<string> {
+  if (BASE_URL) return BASE_URL
+  for (const port of [3000, 3001, 3002]) {
+    try {
+      const res = await fetch(`http://localhost:${port}/api/health`, { signal: AbortSignal.timeout(2000) })
+      if (res.ok) {
+        console.log(`  Auto-detected dev server on port ${port}`)
+        return `http://localhost:${port}`
+      }
+    } catch { /* not listening */ }
+  }
+  return 'http://localhost:3000'
+}
 
 const TEST_MARKER = 'E2E-TEST'
 const RUN_ID = `${TEST_MARKER}-${Date.now()}`
@@ -727,6 +742,8 @@ async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise
 
 async function main() {
   const multiRound = !flags.has('--single-round')
+
+  BASE_URL = await detectBaseUrl()
 
   console.log('═══════════════════════════════════════════════════════')
   console.log('  Mila E2E Pipeline Test — Interactive')
