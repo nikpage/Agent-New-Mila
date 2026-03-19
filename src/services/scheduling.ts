@@ -964,6 +964,151 @@ export async function optimizeScheduleActions(
 }
 
 /**
+ * Schedule a single SCHEDULE action through the standard rules.
+ * Used by instant notify — processes only the urgent action, not the full batch.
+ * Same logic as the batch optimizer but without bookedRanges tracking.
+ */
+export async function scheduleSingleAction(
+  action: ActionProposal
+): Promise<OptimizeResult> {
+  const userId = action.user_id
+  const settings = await getUserSettings(userId)
+  const payload = action.payload as Record<string, unknown> | null
+
+  const result: OptimizeResult = {
+    optimized: 0,
+    unscheduled: 0,
+    moveSuggestions: [],
+    holds: [],
+  }
+
+  if (action.action_type !== 'SCHEDULE') return result
+
+  const cpAvailability = (payload?.cp_availability as string) || null
+  const suggestedTime = (payload?.suggestedTime as string) || null
+  const meetingLocation = (payload?.suggestedLocation as string) || (payload?.location as string) || null
+  const duration = (payload?.duration as number) || settings.default_meeting_duration
+
+  // Parse CP-stated time (same timezone logic as batch optimizer)
+  let preferredDate: Date | undefined
+  if (suggestedTime) {
+    try {
+      let parsed: Date
+      if (suggestedTime.includes('Z') || /[+-]\d{2}:\d{2}$/.test(suggestedTime)) {
+        parsed = new Date(suggestedTime)
+      } else {
+        const formatter = new Intl.DateTimeFormat('en-US', {
+          timeZone: 'Europe/Prague',
+          timeZoneName: 'shortOffset',
+        })
+        const parts = formatter.formatToParts(new Date())
+        const tzPart = parts.find(p => p.type === 'timeZoneName')?.value || ''
+        const offsetMatch = tzPart.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/)
+        let offsetStr = '+01:00'
+        if (offsetMatch) {
+          const sign = offsetMatch[1]
+          const hours = offsetMatch[2].padStart(2, '0')
+          const minutes = (offsetMatch[3] || '0').padStart(2, '0')
+          offsetStr = `${sign}${hours}:${minutes}`
+        }
+        parsed = new Date(`${suggestedTime}${offsetStr}`)
+      }
+      if (!isNaN(parsed.getTime()) && parsed.getTime() > Date.now() - 86400000) {
+        preferredDate = parsed
+      }
+    } catch {
+      // Invalid date — ignore
+    }
+  }
+
+  // If CP stated a specific time, try that first
+  if (preferredDate) {
+    const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
+    const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
+
+    // Check against Google Calendar
+    const daySlots = await findFreeSlots(
+      userId, preferredDate, duration,
+      settings.working_hours_start, settings.working_hours_end,
+      settings.meeting_buffer_minutes
+    )
+    const preferredSlotIsFree = daySlots.some(free =>
+      free.start.getTime() <= preferredDate!.getTime() &&
+      free.end.getTime() >= preferredEnd.getTime()
+    )
+
+    if (preferredSlotIsFree) {
+      const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+      if (holdResult.success && holdResult.holdEvent) {
+        await updateActionWithHold(action, holdResult, meetingLocation, settings)
+        result.optimized++
+        result.holds.push(holdResult.holdEvent)
+        return result
+      }
+    } else {
+      // CP stated time conflicts — book anyway but report conflict
+      const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+      if (holdResult.success && holdResult.holdEvent) {
+        const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
+        if (conflicts.length > 0) {
+          const conflictInfos: ConflictInfo[] = conflicts.map(existing => {
+            const isImmovable = existing.weight == null || existing.weight >= 100
+            return {
+              existingEvent: existing,
+              existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
+              newScore: action.priority_score ?? 0,
+              recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
+            }
+          })
+          holdResult.conflicts = conflictInfos
+          for (const conflict of conflicts) {
+            result.moveSuggestions.push({
+              existingEventId: conflict.id,
+              existingWeight: conflict.weight,
+              reason: `CP stated specific time: ${suggestedTime}`,
+            })
+          }
+        }
+        await updateActionWithHold(action, holdResult, meetingLocation, settings)
+        result.optimized++
+        result.holds.push(holdResult.holdEvent)
+        return result
+      }
+    }
+  }
+
+  // No preferred time or it failed — find best free slot
+  const allSlots = await findBestSlots(userId, duration, 20)
+  let candidateSlots = allSlots
+
+  if (cpAvailability) {
+    const cpFiltered = filterSlotsByCpAvailability(allSlots, cpAvailability)
+    if (cpFiltered.length > 0) {
+      candidateSlots = cpFiltered
+    }
+  }
+
+  if (meetingLocation && candidateSlots.length > 1) {
+    candidateSlots = await rankSlotsByTravel(
+      userId, candidateSlots, meetingLocation, [], settings
+    )
+  }
+
+  for (const slot of candidateSlots) {
+    const holdResult = await blockSlotForProposal(userId, action.cp_id, slot, duration, meetingLocation || undefined)
+    if (holdResult.success && holdResult.holdEvent) {
+      await updateActionWithHold(action, holdResult, meetingLocation, settings)
+      result.optimized++
+      result.holds.push(holdResult.holdEvent)
+      return result
+    }
+  }
+
+  result.unscheduled++
+  return result
+}
+
+/**
  * After creating a hold, update the action record with hold info and rewrite intent_cs.
  * This ensures the action card always matches the actual hold event.
  */

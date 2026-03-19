@@ -10,7 +10,7 @@ import { getConversationById } from '@/lib/db/conversations'
 import { getEventsForToday } from '@/lib/db/events'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefIntro, generateUrgentIntro } from '@/lib/ai/mila-voice'
-import { optimizeScheduleActions } from '@/services/scheduling'
+import { optimizeScheduleActions, scheduleSingleAction } from '@/services/scheduling'
 import { generateActionToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template';
 import { theme } from '@/config/theme'
@@ -308,22 +308,24 @@ export async function sendInstantNotifications(
 
   console.log(`[InstantNotify] ${actions.length} high-priority action(s)`)
 
-  // Run schedule optimizer per-user BEFORE rendering any cards.
-  // Optimizer needs to see ALL SCHEDULE actions at once to batch-optimize.
-  const userIds = new Set(actions.map(a => a.user_id))
-  for (const userId of userIds) {
+  // Schedule only the urgent SCHEDULE actions individually.
+  // Non-urgent SCHEDULE actions wait for AM/PM brief batch optimizer.
+  const urgentScheduleActions = actions.filter(a => a.action_type === 'SCHEDULE')
+  for (const action of urgentScheduleActions) {
     try {
-      const optimizeResult = await optimizeScheduleActions(userId)
-      if (optimizeResult.optimized > 0 || optimizeResult.moveSuggestions.length > 0) {
-        console.log(`[InstantNotify] User ${userId}: optimizer — ${optimizeResult.optimized} optimized, ${optimizeResult.unscheduled} unscheduled, ${optimizeResult.moveSuggestions.length} move suggestions`)
+      const scheduleResult = await scheduleSingleAction(action)
+      if (scheduleResult.optimized > 0 || scheduleResult.moveSuggestions.length > 0) {
+        console.log(`[InstantNotify] Action ${action.id}: scheduled — ${scheduleResult.moveSuggestions.length} conflicts`)
       }
-    } catch (optimizeError) {
-      console.error(`[InstantNotify] User ${userId}: optimizer failed, continuing:`, optimizeError)
+    } catch (scheduleError) {
+      console.error(`[InstantNotify] Action ${action.id}: scheduling failed, continuing:`, scheduleError)
     }
   }
 
-  // Re-fetch actions after optimizer (holds may have been created, payloads updated)
-  const updatedActions = await getHighPriorityUnnotifiedActions(urgencyThreshold)
+  // Re-fetch actions after scheduling (holds may have been created, payloads updated)
+  const updatedActions = urgentScheduleActions.length > 0
+    ? await getHighPriorityUnnotifiedActions(urgencyThreshold)
+    : actions
   const actionsToSend = updatedActions.length > 0 ? updatedActions : actions
 
   // Group actions by conversation — one email per conversation
