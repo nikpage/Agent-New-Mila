@@ -102,22 +102,27 @@ export function ActionCard({
   const adjValue = action.dollar_value * (action.offer_multiplier ?? 1)
   const intent   = getIntent(action)
 
-  // Determine if UDĚLAT should be disabled:
-  // Hold satisfies TIME requirement only — missing location still blocks execution
-  // But if payload.location exists, location is known regardless of missing_info state
-  const missingInfoFields = (action.missing_info as { label: string; value: string | null }[] | null) || []
-  const hasUnfilledFields = missingInfoFields.length > 0 && missingInfoFields.some(f => f.value === null || f.value === '')
+  // Payload fields used for rendering and disable logic
   const actionPayload = action.payload as Record<string, unknown> | null
   const payloadLocation = actionPayload?.location as string | null
   const locationPartial = !!actionPayload?.location_partial
   const isOnline = !!actionPayload?.is_online
-  const hasUnfilledLocation = !isOnline && (
-    !payloadLocation
-      ? missingInfoFields.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
-      : locationPartial
-  )
   const hasHold = !!actionPayload?.hold_event_id
-  const doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold)
+
+  // Determine if UDĚLAT should be disabled:
+  // Only SCHEDULE actions can be blocked — they need location or hold.
+  // REPLY, TODO, and other action types are never blocked.
+  let doItDisabled = false
+  if (action.action_type === 'SCHEDULE') {
+    const missingInfoFields = (action.missing_info as { label: string; value: string | null }[] | null) || []
+    const hasUnfilledFields = missingInfoFields.length > 0 && missingInfoFields.some(f => f.value === null || f.value === '')
+    const hasUnfilledLocation = !isOnline && (
+      !payloadLocation
+        ? missingInfoFields.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
+        : locationPartial
+    )
+    doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold)
+  }
 
   const getUrgencyLabel = (urgency: number): string => {
     if (urgency >= 8) return 'TEĎ'

@@ -260,6 +260,7 @@ RECIPIENT: ${cpName || 'The Counterparty'}
 ${toneInstruction}
 - Use the specific data provided in the missingInfo section to answer the counterparty's questions.
 - If the plan implies scheduling, propose the specific times mentioned.
+- Addresses in email signatures are the SENDER's company address, not the property or meeting location. Do not treat them as conflicting with addresses mentioned in the message body.
 
 Respond with ONLY valid JSON:
 {

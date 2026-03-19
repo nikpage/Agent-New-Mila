@@ -224,20 +224,23 @@ function generateBriefEmailHtml(
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
 
     ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl }) => {
-      const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
-      const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
       const payload = action.payload as Record<string, unknown> | null
       const payloadLocation = payload?.location as string | null
       const isOnline = !!payload?.is_online
       const locationPartial = !!payload?.location_partial
-      const hasHold = !!payload?.hold_event_id
-      const hasUnfilledLocation = action.action_type === 'SCHEDULE' && !isOnline && (
-        !payloadLocation
-          ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
-          : locationPartial
-      )
-      const needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
-      const location = (payload?.location as string | null) || null
+      let needsInput = false
+      if (action.action_type === 'SCHEDULE') {
+        const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
+        const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
+        const hasHold = !!payload?.hold_event_id
+        const hasUnfilledLocation = !isOnline && (
+          !payloadLocation
+            ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
+            : locationPartial
+        )
+        needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
+      }
+      const location = payloadLocation || null
       return getActionCardEmailHtml({
         cpName,
         cpRole,
@@ -305,10 +308,28 @@ export async function sendInstantNotifications(
 
   console.log(`[InstantNotify] ${actions.length} high-priority action(s)`)
 
+  // Run schedule optimizer per-user BEFORE rendering any cards.
+  // Optimizer needs to see ALL SCHEDULE actions at once to batch-optimize.
+  const userIds = new Set(actions.map(a => a.user_id))
+  for (const userId of userIds) {
+    try {
+      const optimizeResult = await optimizeScheduleActions(userId)
+      if (optimizeResult.optimized > 0 || optimizeResult.moveSuggestions.length > 0) {
+        console.log(`[InstantNotify] User ${userId}: optimizer — ${optimizeResult.optimized} optimized, ${optimizeResult.unscheduled} unscheduled, ${optimizeResult.moveSuggestions.length} move suggestions`)
+      }
+    } catch (optimizeError) {
+      console.error(`[InstantNotify] User ${userId}: optimizer failed, continuing:`, optimizeError)
+    }
+  }
+
+  // Re-fetch actions after optimizer (holds may have been created, payloads updated)
+  const updatedActions = await getHighPriorityUnnotifiedActions(urgencyThreshold)
+  const actionsToSend = updatedActions.length > 0 ? updatedActions : actions
+
   // Group actions by conversation — one email per conversation
   // Key: "userId:conversationId" to preserve user context
   const byConversation = new Map<string, { userId: string; actions: ActionProposal[] }>()
-  for (const action of actions) {
+  for (const action of actionsToSend) {
     const key = `${action.user_id}:${action.conversation_id}`
     const existing = byConversation.get(key)
     if (existing) {
@@ -450,20 +471,23 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${body}</p>
 
     ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl }) => {
-      const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
-      const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
       const payload = action.payload as Record<string, unknown> | null
       const payloadLocation = payload?.location as string | null
       const isOnline = !!payload?.is_online
       const locationPartial = !!payload?.location_partial
-      const hasHold = !!payload?.hold_event_id
-      const hasUnfilledLocation = action.action_type === 'SCHEDULE' && !isOnline && (
-        !payloadLocation
-          ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
-          : locationPartial
-      )
-      const needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
-      const location = (payload?.location as string | null) || null
+      let needsInput = false
+      if (action.action_type === 'SCHEDULE') {
+        const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
+        const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
+        const hasHold = !!payload?.hold_event_id
+        const hasUnfilledLocation = !isOnline && (
+          !payloadLocation
+            ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
+            : locationPartial
+        )
+        needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
+      }
+      const location = payloadLocation || null
       return getActionCardEmailHtml({
         cpName,
         cpRole,
