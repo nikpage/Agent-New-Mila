@@ -129,6 +129,7 @@ beforeEach(() => {
   uuidCounter = 0
   mockGetCPById.mockResolvedValue({ id: 'cp-1', name: 'Test CP', primary_identifier: 'test@cp.com', role: 'buyer' })
   mockFindConflicts.mockResolvedValue([])
+  mockCheckConflicts.mockResolvedValue([])
   // Default hold event with enough fields for updateActionWithHold
   mockCreateHoldEvent.mockImplementation(async (opts: Record<string, unknown>) => ({
     id: 'hold-1',
@@ -517,23 +518,16 @@ describe('Scheduling — proposeMeeting', () => {
     expect(mockCreateHoldEvent).toHaveBeenCalledTimes(1)
   })
 
-  it('returns failure when optimal slot conflicts with immovable event', async () => {
+  it('returns failure when no free slots found (event blocks all time)', async () => {
     const { proposeMeeting } = await import('./scheduling')
 
-    mockFindFreeSlots.mockResolvedValue([
-      { start: new Date('2026-03-10T09:00:00'), end: new Date('2026-03-10T09:30:00') },
-    ])
-    mockFindConflicts.mockResolvedValue([{
-      id: 'immovable-1',
-      weight: 100,
-      start_time: '2026-03-10T09:00:00Z',
-      end_time: '2026-03-10T09:30:00Z',
-    }])
+    // Calendar is full — findFreeSlots returns nothing
+    mockFindFreeSlots.mockResolvedValue([])
 
     const result = await proposeMeeting('user-1', 'cp-1')
 
     expect(result.success).toBe(false)
-    expect(result.error).toContain('conflicts')
+    expect(result.error).toContain('No available slots')
   })
 
   it('returns failure when no slots found in 14 days', async () => {
@@ -822,68 +816,60 @@ describe('Scheduling — Optimization Priority Order', () => {
     expect(Math.max(...hours) - Math.min(...hours)).toBeLessThanOrEqual(2)
   })
 
-  it('priority 4 (last resort): suggests moving existing event only when CP is time-constrained', async () => {
-    // CP can ONLY meet at 10:00 (from conversation). User has a low-weight event at 10:00.
-    // Optimizer should suggest moving the existing event rather than failing to schedule.
+  it('CP-constrained time with conflict uses suggestedTime (preferred date) path', async () => {
+    // CP can ONLY meet at 10:00 — AI sets suggestedTime. Calendar is blocked at 10:00.
+    // Optimizer books at 10:00 anyway (CP hard constraint) and reports the conflict.
     const { optimizeScheduleActions } = await import('./scheduling')
 
     mockGetPendingScheduleActions.mockResolvedValue([{
       id: 'action-1',
       cp_id: 'cp-1',
-      priority_score: 150, // high priority
-      payload: { channel: 'email', cp_availability: 'Only available at 10:00 on Tuesday' },
+      priority_score: 150,
+      payload: {
+        channel: 'email',
+        cp_availability: 'Only available at 10:00 on Tuesday',
+        suggestedTime: '2026-03-24T10:00:00',
+      },
     }])
 
-    // Only free slot is 10:00 but it conflicts with existing low-weight event
+    // 10:00 is NOT free on Google Calendar (blocked by existing event)
     mockFindFreeSlots.mockResolvedValue([
-      { start: new Date('2026-03-10T10:00:00'), end: new Date('2026-03-10T10:30:00') },
+      { start: new Date('2026-03-24T11:00:00'), end: new Date('2026-03-24T11:30:00') },
     ])
-    mockFindConflicts.mockResolvedValue([{
-      id: 'existing-1',
-      weight: 3, // low weight — movable
-      start_time: '2026-03-10T10:00:00Z',
-      end_time: '2026-03-10T10:30:00Z',
-    }])
-    mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
-
-    const result = await optimizeScheduleActions('user-1')
-
-    // Optimizer should still schedule (with a move suggestion), not fail
-    expect(result.optimized).toBe(1)
-    // Result should include a suggestion to move the conflicting event
-    expect(result.moveSuggestions).toBeDefined()
-    expect(result.moveSuggestions!.length).toBe(1)
-    expect(result.moveSuggestions![0].existingEventId).toBe('existing-1')
-  })
-
-  it('conflict resolution prefers declining over moving existing events', async () => {
-    // When there's no CP time constraint, optimizer should decline rather than
-    // suggest moving an existing event — even if the existing has low weight
-    const { optimizeScheduleActions } = await import('./scheduling')
-
-    mockGetPendingScheduleActions.mockResolvedValue([{
-      id: 'action-1',
-      cp_id: 'cp-1',
-      priority_score: 50, // moderate priority
-      payload: { channel: 'email' }, // no CP availability constraint
-    }])
-
-    // All slots conflict
-    mockFindFreeSlots.mockResolvedValue([
-      { start: new Date('2026-03-10T10:00:00'), end: new Date('2026-03-10T10:30:00') },
-    ])
+    // findAllConflicts returns the conflicting event details for reporting
     mockFindConflicts.mockResolvedValue([{
       id: 'existing-1',
       weight: 3,
-      start_time: '2026-03-10T10:00:00Z',
-      end_time: '2026-03-10T10:30:00Z',
+      start_time: '2026-03-24T10:00:00Z',
+      end_time: '2026-03-24T10:30:00Z',
     }])
+    mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-24T10:00:00.000Z', end_time: '2026-03-24T10:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await optimizeScheduleActions('user-1')
 
-    // Should NOT suggest moving — no CP constraint forces this time
-    // Should report as unscheduled, not force a move
+    // Books at CP's stated time despite conflict
+    expect(result.optimized).toBe(1)
+    expect(result.moveSuggestions.length).toBe(1)
+    expect(result.moveSuggestions[0].existingEventId).toBe('existing-1')
+  })
+
+  it('without CP time constraint or suggestedTime, reports unscheduled when no free slots match', async () => {
+    // No CP constraint, no suggestedTime — if calendar is full, report unscheduled.
+    const { optimizeScheduleActions } = await import('./scheduling')
+
+    mockGetPendingScheduleActions.mockResolvedValue([{
+      id: 'action-1',
+      cp_id: 'cp-1',
+      priority_score: 50,
+      payload: { channel: 'email' },
+    }])
+
+    // Calendar is completely full — no free slots
+    mockFindFreeSlots.mockResolvedValue([])
+
+    const result = await optimizeScheduleActions('user-1')
+
     expect(result.moveSuggestions ?? []).toHaveLength(0)
     expect(result.unscheduled).toBe(1)
   })
@@ -918,7 +904,11 @@ describe('Scheduling — Preferred Time Constraint', () => {
   it('when preferredDate is set and slot is free, books exactly at that time (not first free slot)', async () => {
     const { proposeMeeting } = await import('./scheduling')
 
-    mockFindConflicts.mockResolvedValue([])
+    // Google Calendar says 9:00 is free (included in free slots)
+    mockFindFreeSlots.mockResolvedValue([
+      { start: new Date('2026-03-11T09:00:00'), end: new Date('2026-03-11T09:30:00') },
+      { start: new Date('2026-03-11T10:00:00'), end: new Date('2026-03-11T10:30:00') },
+    ])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
     mockCreateHoldEvent.mockResolvedValue({
       id: 'hold-1', status: 'tentative',
@@ -929,17 +919,20 @@ describe('Scheduling — Preferred Time Constraint', () => {
     const result = await proposeMeeting('user-1', 'cp-1', 30, 'Notářská kancelář Praha 2', preferredDate)
 
     expect(result.success).toBe(true)
-    // Must book at exactly 9:00, not "first free slot"
+    // Must book at exactly 9:00, not "first free slot" from findBestSlots
     expect(mockCreateTentativeCalendarEvent).toHaveBeenCalledWith('user-1', expect.objectContaining({
       startTime: preferredDate,
     }))
-    // Should NOT call findFreeSlots — goes straight to the exact time
-    expect(mockFindFreeSlots).not.toHaveBeenCalled()
   })
 
   it('when preferredDate conflicts with movable event (W<100), books hold AND returns move suggestion', async () => {
     const { proposeMeeting } = await import('./scheduling')
 
+    // Google Calendar says 9:00 is NOT free (not in free slots)
+    mockFindFreeSlots.mockResolvedValue([
+      { start: new Date('2026-03-11T10:00:00'), end: new Date('2026-03-11T10:30:00') },
+    ])
+    // findAllConflicts returns the conflicting event for reporting
     mockFindConflicts.mockResolvedValue([{
       id: 'existing-1',
       title: 'Team standup',
@@ -956,7 +949,7 @@ describe('Scheduling — Preferred Time Constraint', () => {
     const preferredDate = new Date('2026-03-11T09:00:00')
     const result = await proposeMeeting('user-1', 'cp-1', 30, 'Notářská kancelář Praha 2', preferredDate)
 
-    // Hold is created at the stated time (consistent process)
+    // Hold is created at the stated time (CP hard constraint)
     expect(result.holdEvent).toBeDefined()
     expect(mockCreateHoldEvent).toHaveBeenCalledTimes(1)
     // Conflict info returned with move_existing recommendation
@@ -964,13 +957,15 @@ describe('Scheduling — Preferred Time Constraint', () => {
     expect(result.conflicts!.length).toBe(1)
     expect(result.conflicts![0].existingEvent.title).toBe('Team standup')
     expect(result.conflicts![0].recommendation).toBe('move_existing')
-    // Should NOT have searched for alternative slots
-    expect(mockFindFreeSlots).not.toHaveBeenCalled()
   })
 
   it('when preferredDate conflicts with immovable event (W=100), books hold AND returns suggest_alternate', async () => {
     const { proposeMeeting } = await import('./scheduling')
 
+    // 9:00 is NOT free on Google Calendar
+    mockFindFreeSlots.mockResolvedValue([
+      { start: new Date('2026-03-11T10:00:00'), end: new Date('2026-03-11T10:30:00') },
+    ])
     mockFindConflicts.mockResolvedValue([{
       id: 'existing-1',
       title: 'Soud - jednání',
@@ -998,6 +993,10 @@ describe('Scheduling — Preferred Time Constraint', () => {
   it('when preferredDate conflicts with null-weight event, treats as immovable', async () => {
     const { proposeMeeting } = await import('./scheduling')
 
+    // 9:00 is NOT free on Google Calendar
+    mockFindFreeSlots.mockResolvedValue([
+      { start: new Date('2026-03-11T10:00:00'), end: new Date('2026-03-11T10:30:00') },
+    ])
     mockFindConflicts.mockResolvedValue([{
       id: 'existing-1',
       title: 'User-created event',
@@ -1037,10 +1036,18 @@ describe('Scheduling — Preferred Time Constraint', () => {
 
   it('the notary bug: stated 9:00 AM with conflict must NOT silently book 10:35', async () => {
     // This is the exact bug: email says "notary at 9:00 AM", calendar has
-    // conflict at 9:00, old code silently picked 10:35 (first free slot).
-    // New code books at 9:00 and flags the conflict.
+    // conflict at 9:00 (morning meeting 8:30-9:30). Old code didn't check GCal
+    // and silently booked at 9:00 without reporting the conflict.
+    // New code: findBestSlots checks GCal, sees 9:00 isn't free, books anyway
+    // (CP hard constraint) but flags the conflict.
     const { proposeMeeting } = await import('./scheduling')
 
+    // Google Calendar shows 9:00 is NOT free (morning meeting blocks it)
+    // First free slot is 10:35
+    mockFindFreeSlots.mockResolvedValue([
+      { start: new Date('2026-03-11T10:35:00'), end: new Date('2026-03-11T11:05:00') },
+    ])
+    // findAllConflicts returns the actual conflicting event for reporting
     mockFindConflicts.mockResolvedValue([{
       id: 'morning-meeting',
       title: 'Interní porada',
@@ -1065,7 +1072,5 @@ describe('Scheduling — Preferred Time Constraint', () => {
     expect(result.conflicts!.length).toBe(1)
     expect(result.conflicts![0].existingEvent.title).toBe('Interní porada')
     expect(result.conflicts![0].recommendation).toBe('move_existing') // W=3, movable
-    // findBestSlots was NOT called — didn't silently pick another time
-    expect(mockFindFreeSlots).not.toHaveBeenCalled()
   })
 })
