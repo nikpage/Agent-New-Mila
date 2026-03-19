@@ -754,10 +754,27 @@ export async function optimizeScheduleActions(
     return true
   }
 
-  // Sort actions by priority so highest-priority meetings get first pick
-  const sortedActions = [...actions].sort(
-    (a, b) => (b.priority_score ?? 0) - (a.priority_score ?? 0)
-  )
+  // Sort actions by CP time constraint tightness (most constrained first).
+  // Per spec: CP availability is #1 optimization priority — NOT priority_score.
+  // Actions with a specific suggestedTime get scheduled first so they claim
+  // their constrained slot before flexible actions fill the gaps.
+  const sortedActions = [...actions].sort((a, b) => {
+    const payloadA = a.payload as Record<string, unknown> | null
+    const payloadB = b.payload as Record<string, unknown> | null
+    const timeA = (payloadA?.suggestedTime as string) || null
+    const availA = (payloadA?.cp_availability as string) || null
+    const timeB = (payloadB?.suggestedTime as string) || null
+    const availB = (payloadB?.cp_availability as string) || null
+
+    // Constraint score: specific time = 3, CP availability text = 2, none = 1
+    const constraintA = timeA ? 3 : availA ? 2 : 1
+    const constraintB = timeB ? 3 : availB ? 2 : 1
+
+    if (constraintA !== constraintB) return constraintB - constraintA
+
+    // Within same constraint level, break ties by urgency (higher first)
+    return (b.urgency ?? 1) - (a.urgency ?? 1)
+  })
 
   for (const action of sortedActions) {
     const payload = action.payload as Record<string, unknown> | null
