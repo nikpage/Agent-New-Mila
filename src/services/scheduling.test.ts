@@ -30,7 +30,7 @@ import type { UserSettings } from '@/lib/supabase/types'
 // ── Mocks (external services + DB only) ────────────────────────────────────
 
 const mockFindFreeSlots = vi.fn()
-const mockCheckConflicts = vi.fn()
+const mockCheckConflicts = vi.fn().mockResolvedValue([])
 const mockCreateTentativeCalendarEvent = vi.fn()
 const mockCreateCalendarEvent = vi.fn()
 const mockDeleteCalendarEvent = vi.fn()

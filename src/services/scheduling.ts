@@ -28,7 +28,7 @@ import {
   createEvent,
   createHoldEvent,
   createTravelBuffer,
-  findConflicts,
+  findConflicts as findDbConflicts,
   getEventById,
   updateEvent,
   deleteEvent,
@@ -49,6 +49,61 @@ import type { UserSettings, Event, ActionProposal } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
 const MIN_TRAVEL_BUFFER_MINUTES = 15
+
+/**
+ * Check for conflicts against BOTH Google Calendar and local DB.
+ * Google Calendar has the user's real events (external appointments, etc).
+ * Local DB has Mila-created holds and events.
+ * Returns a unified list so nothing gets booked on top of existing events.
+ */
+async function findAllConflicts(
+  userId: string,
+  startTime: Date,
+  endTime: Date,
+  excludeEventId?: string
+): Promise<Event[]> {
+  // Check both sources in parallel
+  const [gcalConflicts, dbConflicts] = await Promise.all([
+    checkConflicts(userId, startTime, endTime).catch(err => {
+      console.error('[scheduling] Google Calendar conflict check failed, falling back to DB only:', err)
+      return [] as CalendarEvent[]
+    }),
+    findDbConflicts(userId, startTime, endTime, excludeEventId),
+  ])
+
+  // DB conflicts already have the right shape
+  const result: Event[] = [...dbConflicts]
+
+  // Track DB events by google_event_id so we don't double-count
+  const dbGoogleIds = new Set(
+    dbConflicts
+      .map(e => (e as Record<string, unknown>).google_event_id as string | undefined)
+      .filter(Boolean)
+  )
+
+  // Add Google Calendar events that aren't already in the DB
+  for (const gcalEvent of gcalConflicts) {
+    if (dbGoogleIds.has(gcalEvent.id)) continue
+
+    // Convert CalendarEvent to Event shape for conflict handling.
+    // These are real user calendar events — treat as immovable (weight=100)
+    // since Mila has no authority over events she didn't create.
+    result.push({
+      id: gcalEvent.id,
+      user_id: userId,
+      title: gcalEvent.summary || 'Calendar event',
+      start_time: gcalEvent.startTime.toISOString(),
+      end_time: gcalEvent.endTime.toISOString(),
+      location: gcalEvent.location || null,
+      weight: 100,
+      status: gcalEvent.status || 'confirmed',
+      google_event_id: gcalEvent.id,
+      created_at: new Date().toISOString(),
+    } as Event)
+  }
+
+  return result
+}
 
 export interface SlotProposal {
   start: Date
@@ -440,7 +495,7 @@ export async function handleConflict(
   newEventScore: number,
   newCpId: string
 ): Promise<ConflictInfo[]> {
-  const conflicts = await findConflicts(userId, proposedStart, proposedEnd)
+  const conflicts = await findAllConflicts(userId, proposedStart, proposedEnd)
   const conflictInfos: ConflictInfo[] = []
 
   for (const existing of conflicts) {
@@ -535,7 +590,7 @@ export async function proposeMeeting(
   // Spec: CP availability is #1 priority in scheduling optimization.
   if (preferredDate) {
     const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
-    const slotConflicts = await findConflicts(userId, preferredDate, preferredEnd)
+    const slotConflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
 
     if (slotConflicts.length === 0) {
       // Exact requested time is free — book it directly
@@ -586,7 +641,7 @@ export async function proposeMeeting(
 
   // Pick the first conflict-free slot (they're already sorted by quality)
   for (const slot of slots) {
-    const slotConflicts = await findConflicts(userId, slot.start, slot.end)
+    const slotConflicts = await findAllConflicts(userId, slot.start, slot.end)
 
     if (slotConflicts.length === 0) {
       // No conflicts — block this one slot
@@ -622,7 +677,7 @@ export async function proposeMeetingMultipleCPs(
 
   // Pick first conflict-free slot
   for (const slot of slots) {
-    const slotConflicts = await findConflicts(userId, slot.start, slot.end)
+    const slotConflicts = await findAllConflicts(userId, slot.start, slot.end)
     if (slotConflicts.length > 0) continue
 
     // Build title from all CP names
@@ -767,7 +822,7 @@ export async function optimizeScheduleActions(
       const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
 
       if (isSlotAvailable(preferredSlot)) {
-        const conflicts = await findConflicts(userId, preferredDate, preferredEnd)
+        const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
 
         if (conflicts.length === 0) {
           const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
@@ -841,7 +896,7 @@ export async function optimizeScheduleActions(
     // Try to find a conflict-free slot
     let scheduled = false
     for (const slot of candidateSlots) {
-      const conflicts = await findConflicts(userId, slot.start, slot.end)
+      const conflicts = await findAllConflicts(userId, slot.start, slot.end)
 
       if (conflicts.length === 0) {
         // No conflict — block this slot
@@ -871,7 +926,7 @@ export async function optimizeScheduleActions(
       // CP has a constraint — try to schedule at their required time
       // and suggest moving the conflicting event
       for (const slot of candidateSlots) {
-        const conflicts = await findConflicts(userId, slot.start, slot.end)
+        const conflicts = await findAllConflicts(userId, slot.start, slot.end)
         if (conflicts.length > 0) {
           // Schedule here and suggest moving the conflict
           const holdResult = await blockSlotForProposal(
