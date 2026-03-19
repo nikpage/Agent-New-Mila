@@ -171,13 +171,12 @@ export async function PUT(
         missing_info: updatedMissingInfo
       })
 
-      // If user filled in the location field, update payload.location too
-      // (execute route reads location from payload, not missing_info)
-      // Re-geocode to validate/complete the address
+      // Batch all payload updates into one write to avoid race conditions
       const locationField = missingInfo.find(f => f.label.includes('adresa'))
       const locationValue = locationField ? dynamicFields[locationField.label] : undefined
+      const payloadUpdates: Record<string, unknown> = {}
+
       if (locationValue) {
-        const currentPayload = (action.payload as Record<string, unknown>) || {}
         let resolvedLocation = locationValue
         let locationPartial = true
         try {
@@ -189,33 +188,52 @@ export async function PUT(
         } catch {
           // Geocoding failed — keep raw value, mark as partial
         }
+        payloadUpdates.location = resolvedLocation
+        payloadUpdates.location_partial = locationPartial
+      }
+
+      if (typeof isOnline === 'boolean' && action.action_type === 'SCHEDULE') {
+        payloadUpdates.is_online = isOnline
+      }
+
+      if (to) {
+        payloadUpdates.editedTo = to
+      }
+
+      if (Object.keys(payloadUpdates).length > 0) {
+        const freshAction = await getActionById(actionId)
+        const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
         await updateAction(actionId, {
-          payload: { ...currentPayload, location: resolvedLocation, location_partial: locationPartial },
+          payload: { ...freshPayload, ...payloadUpdates } as Record<string, unknown> & { [key: string]: string | number | boolean | null },
+        })
+      }
+    } else {
+      // No dynamicFields — still handle is_online and to
+      const payloadUpdates: Record<string, unknown> = {}
+
+      if (typeof isOnline === 'boolean' && action.action_type === 'SCHEDULE') {
+        payloadUpdates.is_online = isOnline
+      }
+
+      if (to) {
+        payloadUpdates.editedTo = to
+      }
+
+      if (Object.keys(payloadUpdates).length > 0) {
+        const freshAction = await getActionById(actionId)
+        const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
+        await updateAction(actionId, {
+          payload: { ...freshPayload, ...payloadUpdates } as Record<string, unknown> & { [key: string]: string | number | boolean | null },
         })
       }
     }
 
-    // Persist is_online flag in payload
-    if (typeof isOnline === 'boolean' && action.action_type === 'SCHEDULE') {
-      const currentPayload = (action.payload as Record<string, unknown>) || {}
-      await updateAction(actionId, {
-        payload: { ...currentPayload, is_online: isOnline },
-      })
-    }
-
-    // Persist edited recipient if provided
-    if (to) {
-      const currentPayload = (action.payload as Record<string, unknown>) || {}
-      await updateAction(actionId, {
-        payload: { ...currentPayload, editedTo: to },
-      })
-    }
-
     // Store notes in payload if provided
     if (notes) {
-      const currentPayload = (action.payload as Record<string, unknown>) || {}
+      const freshAction = await getActionById(actionId)
+      const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
       await updateAction(actionId, {
-        payload: { ...currentPayload, userNotes: notes },
+        payload: { ...freshPayload, userNotes: notes },
       })
     }
 
