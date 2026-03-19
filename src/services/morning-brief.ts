@@ -285,6 +285,9 @@ const DEFAULT_INSTANT_URGENCY_THRESHOLD = 9
 
 /**
  * Poll for high-urgency actions and send instant notification emails.
+ * Groups all urgent actions per user into ONE email (Mini Brief),
+ * cards ordered by urgency descending (critical path: do NOW → do next).
+ *
  * Uses urgency (AI-assessed immediate pressure, 1-10) instead of
  * priority_score, because priority_score is unreachable on day 0.
  * Sets last_notified_at but keeps queued_for_brief=true so the action
@@ -301,14 +304,22 @@ export async function sendInstantNotifications(
 
   console.log(`[InstantNotify] ${actions.length} high-priority action(s)`)
 
+  // Group actions by user — one email per user
+  const byUser = new Map<string, ActionProposal[]>()
+  for (const action of actions) {
+    const existing = byUser.get(action.user_id) || []
+    existing.push(action)
+    byUser.set(action.user_id, existing)
+  }
+
   let sent = 0
   let failed = 0
 
-  // Send one email per action — each urgent action gets its own notification
-  for (let i = 0; i < actions.length; i += INSTANT_NOTIFY_CONCURRENCY) {
-    const batch = actions.slice(i, i + INSTANT_NOTIFY_CONCURRENCY)
+  const userIds = Array.from(byUser.keys())
+  for (let i = 0; i < userIds.length; i += INSTANT_NOTIFY_CONCURRENCY) {
+    const batch = userIds.slice(i, i + INSTANT_NOTIFY_CONCURRENCY)
     const results = await Promise.allSettled(
-      batch.map(action => sendInstantNotificationForAction(action))
+      batch.map(userId => sendInstantNotificationForUser(userId, byUser.get(userId)!))
     )
     for (const result of results) {
       if (result.status === 'fulfilled' && result.value) {
@@ -323,84 +334,94 @@ export async function sendInstantNotifications(
 }
 
 /**
- * Send an instant notification email for a single urgent action.
+ * Send one instant notification email for a user containing ALL their
+ * urgent actions, ordered by urgency (most critical first).
  */
-async function sendInstantNotificationForAction(
-  action: ActionProposal
+async function sendInstantNotificationForUser(
+  userId: string,
+  actions: ActionProposal[]
 ): Promise<boolean> {
   try {
-    const user = await getUserById(action.user_id)
+    const user = await getUserById(userId)
     if (!user || !user.email_enabled || user.email_unsubscribed) {
-      console.log(`[InstantNotify] User ${action.user_id}: skipped — ${!user ? 'not found' : user.email_unsubscribed ? 'unsubscribed' : 'email disabled'}`)
+      console.log(`[InstantNotify] User ${userId}: skipped — ${!user ? 'not found' : user.email_unsubscribed ? 'unsubscribed' : 'email disabled'}`)
       return false
     }
 
-    const [cp, conversation] = await Promise.all([
-      getCPById(action.cp_id),
-      getConversationById(action.conversation_id),
-    ])
+    // Critical path ordering: highest urgency first, then by priority_score
+    const sorted = [...actions].sort((a, b) => b.urgency - a.urgency || b.priority_score - a.priority_score)
 
-    if (!cp || !conversation) {
-      console.warn(`[InstantNotify] Skipping orphaned action ${action.id}`)
-      return false
+    const briefActions: BriefAction[] = []
+    for (const action of sorted) {
+      const [cp, conversation] = await Promise.all([
+        getCPById(action.cp_id),
+        getConversationById(action.conversation_id),
+      ])
+      if (!cp || !conversation) {
+        console.warn(`[InstantNotify] Skipping orphaned action ${action.id}`)
+        continue
+      }
+
+      const token = generateActionToken(action.id, userId)
+      briefActions.push({
+        action,
+        cpName: cp.name || cp.primary_identifier,
+        cpRole: cp.role || null,
+        topic: conversation.topic,
+        dealType: conversation.deal_type || null,
+        summary: conversation.summary_json as ConversationSummary | null,
+        actionUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&view=details`,
+        editUrl: `${APP_BASE_URL}/action/${action.id}/edit?token=${token}`,
+        executeUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute&type=${action.action_type}`,
+        todoUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`,
+        blacklistUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`,
+      })
     }
 
-    const token = generateActionToken(action.id, action.user_id)
-    const actionUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&view=details`
-    const editUrl = `${APP_BASE_URL}/action/${action.id}/edit?token=${token}`
-    const executeUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute&type=${action.action_type}`
-    const todoUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`
-    const blacklistUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`
+    if (briefActions.length === 0) return false
 
-    const briefAction: BriefAction = {
-      action,
-      cpName: cp.name || cp.primary_identifier,
-      cpRole: cp.role || null,
-      topic: conversation.topic,
-      dealType: conversation.deal_type || null,
-      summary: conversation.summary_json as ConversationSummary | null,
-      actionUrl,
-      editUrl,
-      executeUrl,
-      todoUrl,
-      blacklistUrl,
-    }
-
-    const settings = await getUserSettings(action.user_id)
+    const topAction = briefActions[0]
+    const settings = await getUserSettings(userId)
     let urgentSubject: string
     let urgentHeader: string
     let urgentBody: string
     try {
       const intro = await generateUrgentIntro(
-        1,
-        { cpName: briefAction.cpName, urgency: action.urgency, actionType: action.action_type, intent: action.intent_cs || action.rationale_cs || '', dollarValue: action.dollar_value || 0 },
+        briefActions.length,
+        {
+          cpName: topAction.cpName,
+          urgency: topAction.action.urgency,
+          actionType: topAction.action.action_type,
+          intent: topAction.action.intent_cs || topAction.action.rationale_cs || '',
+          dollarValue: topAction.action.dollar_value || 0,
+        },
         settings
       )
       urgentSubject = intro.subject
       urgentHeader = intro.header
       urgentBody = intro.body
     } catch {
-      urgentSubject = `Mila — 1`
-      urgentHeader = 'Mila'
+      urgentSubject = `⚡ Mila — ${briefActions.length} urgentních akcí`
+      urgentHeader = 'Urgentní akce'
       urgentBody = ''
     }
 
-    const htmlContent = generateInstantNotifyEmailHtml([briefAction], urgentHeader, urgentBody)
-    const textContent = generateInstantNotifyEmailText([briefAction], urgentHeader)
-    const userEmail = await getUserEmail(action.user_id)
+    const htmlContent = generateInstantNotifyEmailHtml(briefActions, urgentHeader, urgentBody)
+    const textContent = generateInstantNotifyEmailText(briefActions, urgentHeader)
+    const userEmail = await getUserEmail(userId)
 
-    await sendEmail(action.user_id, {
+    await sendEmail(userId, {
       to: userEmail,
       subject: urgentSubject,
       body: textContent,
       htmlBody: htmlContent,
     })
 
-    await markActionsInstantNotified([action.id])
-    console.log(`[InstantNotify] User ${user.email || action.user_id}: sent urgent action ${action.id}`)
+    await markActionsInstantNotified(sorted.map(a => a.id))
+    console.log(`[InstantNotify] User ${user.email || userId}: sent ${briefActions.length} urgent action(s) in one email`)
     return true
   } catch (error) {
-    console.error(`[InstantNotify] Action ${action.id}: FAILED —`, error instanceof Error ? error.message : error)
+    console.error(`[InstantNotify] User ${userId}: FAILED —`, error instanceof Error ? error.message : error)
     return false
   }
 }

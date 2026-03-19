@@ -1,25 +1,25 @@
 #!/usr/bin/env npx tsx
 /**
- * E2E Pipeline Test — Multi-Round Conversation
+ * E2E Pipeline Test — Interactive Multi-Round Conversation
  *
- * Simulates a full email lifecycle:
- *   Round 1: CPs email the user → agent ingests → generates REPLY actions
- *   Round 2: Execute REPLY actions (Mila sends emails) → verify execution
- *   Round 3: CPs respond back in same threads → agent re-runs → verifies
- *            threading into existing conversations + new action proposals
- *   Final:  Morning brief with full conversation history
+ * Flow:
+ *   1. Inject all CP emails (3 regular + 1 urgent) → run agent → actions
+ *   2. Instant-notify fires for urgent ones
+ *   3. Print action URLs → YOU interact in browser (UDĚLAT, UPRAVIT, etc.)
+ *   4. Press Enter when done
+ *   5. Script reads Mila's actual replies from Gmail
+ *   6. Script generates tailored CP responses based on what Mila wrote
+ *   7. Inject those → run agent → new actions from follow-ups
+ *   8. Print Round 2 action URLs → YOU interact again
+ *   9. Enter → morning brief with full real conversation history
  *
  * Usage:
  *   npx tsx scripts/e2e-test.ts [userId]
  *
- * Default userId: 9e59bc06-7276-453d-bc2e-f224a0a327e3
- *
- * Reads MILA_USER_API_KEY, CRON_SECRET, NEXTAUTH_SECRET from .env.local
- *
  * Flags:
  *   --skip-inject     Skip email injection (re-run agent on existing mail)
  *   --skip-brief      Skip morning brief step
- *   --single-round    Only run Round 1 (inject + agent), skip conversation
+ *   --single-round    Only run Round 1 + interact, skip Round 2
  *   --cleanup-only    Delete previously injected test emails and exit
  *   --prod            Use production URL (https://mila.specialagents.pro)
  */
@@ -27,9 +27,11 @@
 import { config } from 'dotenv'
 config({ path: '.env.local' })
 
+import * as readline from 'readline'
 import { google, gmail_v1 } from 'googleapis'
 import { getAuthenticatedClient } from '../src/lib/google/auth'
 import { generateActionToken } from '../src/lib/auth/tokens'
+import { runAITask } from '../src/lib/ai/runner'
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -44,27 +46,22 @@ const BASE_URL = flags.has('--prod')
 const API_KEY = process.env.MILA_USER_API_KEY || ''
 const CRON_SECRET = process.env.CRON_SECRET || ''
 
-// Unique marker so we can find/clean up our test emails
 const TEST_MARKER = 'E2E-TEST'
 const RUN_ID = `${TEST_MARKER}-${Date.now()}`
 
-/** Extract email address from "Name <email>" format */
 function extractEmail(from: string): string {
   const match = from.match(/<([^>]+)>/)
   return match ? match[1] : from
 }
 
-/** Extract display name from "Name <email>" format */
 function extractName(from: string): string {
   const match = from.match(/^([^<]+)\s*</)
   return match ? match[1].trim() : from
 }
 
 // ─── Test Scenarios ──────────────────────────────────────────────────────────
-// Each simulates a different counterparty emailing the Mila user.
 
 interface TestEmail {
-  /** Key to match with CP follow-up responses */
   cpKey: string
   from: string
   subject: string
@@ -113,7 +110,7 @@ const TEST_EMAILS: TestEmail[] = [
     body: [
       'Hi,',
       '',
-      'The seller of the Smichov property wants to close by March 15 instead of March 31.',
+      'The seller of the Smichov property wants to close by April instead of May.',
       'Purchase price 12,400,000 CZK as agreed.',
       '',
       'Can you confirm the financing is ready? The bank needs the signed documents by Friday.',
@@ -125,11 +122,6 @@ const TEST_EMAILS: TestEmail[] = [
   },
 ]
 
-/**
- * High-priority email designed to guarantee a priority_score > 79.
- * Massive deal value (45M CZK), immovable deadline (tomorrow), explicit urgency.
- * Injected after Round 1 specifically to test instant notifications.
- */
 const HIGH_PRIORITY_EMAIL: TestEmail = {
   cpKey: 'urgent',
   from: 'Jan Novotny <ainikpage+novotny.jan@gmail.com>',
@@ -156,47 +148,32 @@ const HIGH_PRIORITY_EMAIL: TestEmail = {
   ].join('\n'),
 }
 
-// All test CP identifiers — used for cleanup to find Mila's sent replies
 const ALL_TEST_SENDERS = [...TEST_EMAILS, HIGH_PRIORITY_EMAIL]
 const TEST_CP_EMAILS = ALL_TEST_SENDERS.map(e => extractEmail(e.from))
 
-/** CP follow-up responses for Round 3 — keyed by cpKey */
-const CP_RESPONSES: Record<string, string> = {
-  bob: [
-    'Great, thank you for your quick response!',
-    '',
-    'Tuesday at 2pm works perfectly for the viewing.',
-    'Can I bring my wife along? She wants to see the kitchen and bathrooms.',
-    '',
-    'Also, is parking included or is that extra?',
-    '',
-    'Bob',
-  ].join('\n'),
+// ─── CP Response Profiles (adaptive, not canned) ────────────────────────────
 
-  eva: [
-    'Dobry den,',
-    '',
-    'Thank you for the update. 450 CZK/m2 is our final offer.',
-    'We can meet at your office on Thursday to sign the lease.',
-    '',
-    'One more thing — we need 3 dedicated parking spots in the building.',
-    'Is that possible? Our COO, CFO and a company car need spaces.',
-    '',
-    'S pozdravem,',
-    'Eva Dvorakova',
-  ].join('\n'),
-
-  martin: [
-    'Hi,',
-    '',
-    'Good news — the bank confirmed the financing today.',
-    'All documents are signed and ready to go.',
-    '',
-    'When can we meet at the notary? The seller prefers morning hours.',
-    'I am available Monday through Wednesday next week.',
-    '',
-    'Martin',
-  ].join('\n'),
+const CP_RESPONSE_PROFILES: Record<string, { persona: string; context: string; guidance: string }> = {
+  bob: {
+    persona: 'Bob, a potential apartment buyer',
+    context: 'Interested in Prague apartment on Vinohradska 45, budget ~8.5M CZK',
+    guidance: 'If Mila proposed a viewing time, confirm it and ask to bring your wife. Ask about parking. If she answered the price question, react to it.',
+  },
+  eva: {
+    persona: 'Eva Dvorakova, representing Dvorak & Partners s.r.o.',
+    context: 'Negotiating a 3-year lease for 200m2 office in Karlin at 450 CZK/m2/month. Need to move in by April.',
+    guidance: 'Confirm 450 CZK/m2 is your final offer. If a meeting was proposed, agree. Ask about 3 dedicated parking spots for COO, CFO, and company car.',
+  },
+  martin: {
+    persona: 'Martin Kral, handling the Smichov property purchase',
+    context: 'Purchase price 12.4M CZK, seller wants to close by April. Bank needs signed docs by Friday.',
+    guidance: 'Confirm bank approved financing and all docs are signed. Ask about notary appointment. Available Monday-Wednesday next week, mornings preferred.',
+  },
+  urgent: {
+    persona: 'Jan Novotny, senior broker at Prague Commercial',
+    context: '45M CZK Vinohrady commercial building deal, notary appointment tomorrow 9 AM.',
+    guidance: 'Acknowledge whatever Mila confirmed. Press for exact document delivery timing. Remind the buyer has another property lined up. Keep urgency high.',
+  },
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -243,6 +220,23 @@ interface CheckResult {
   name: string
   pass: boolean
   detail: string
+}
+
+interface MilaReply {
+  cpKey: string
+  cpEmail: string
+  body: string
+  subject: string
+  threadId: string
+  messageId: string
+  gmailId: string
+}
+
+interface InstantNotifyResult {
+  success: boolean
+  sent: number
+  failed: number
+  timestamp: string
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -315,16 +309,55 @@ function printChecks(checks: CheckResult[]): boolean {
   return allPassed
 }
 
-// ─── Round 1: Inject initial CP emails ──────────────────────────────────────
+async function waitForKeypress(prompt: string): Promise<void> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise(resolve => {
+    rl.question(prompt, () => {
+      rl.close()
+      resolve()
+    })
+  })
+}
 
-async function injectTestEmails(userId: string): Promise<InjectedEmail[]> {
-  log('R1:inject', `Injecting ${TEST_EMAILS.length} test emails into inbox...`)
+function getHeaderValue(message: gmail_v1.Schema$Message, name: string): string {
+  return message.payload?.headers?.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value || ''
+}
+
+function extractMessageBody(message: gmail_v1.Schema$Message): string {
+  const payload = message.payload
+  if (!payload) return ''
+
+  if (payload.mimeType === 'text/plain' && payload.body?.data) {
+    return Buffer.from(payload.body.data, 'base64').toString('utf-8')
+  }
+
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/plain' && part.body?.data) {
+        return Buffer.from(part.body.data, 'base64').toString('utf-8')
+      }
+    }
+    for (const part of payload.parts) {
+      if (part.mimeType === 'text/html' && part.body?.data) {
+        return Buffer.from(part.body.data, 'base64').toString('utf-8')
+          .replace(/<[^>]+>/g, '')
+      }
+    }
+  }
+
+  return ''
+}
+
+// ─── Inject emails ──────────────────────────────────────────────────────────
+
+async function injectEmails(userId: string, emails: TestEmail[]): Promise<InjectedEmail[]> {
+  log('inject', `Injecting ${emails.length} emails into inbox...`)
 
   const gmail = await getGmailClient(userId)
   const userEmail = await getUserEmail(userId)
   const injected: InjectedEmail[] = []
 
-  for (const email of TEST_EMAILS) {
+  for (const email of emails) {
     const rfcMessageId = `<${RUN_ID}-${injected.length}@e2e-test.local>`
     const rfc2822 = [
       `From: ${email.from}`,
@@ -338,8 +371,6 @@ async function injectTestEmails(userId: string): Promise<InjectedEmail[]> {
       email.body,
     ].join('\r\n')
 
-    // Use insert (not import) so we control labels directly.
-    // import() runs SMTP-like classification which strips INBOX/UNREAD.
     const res = await gmail.users.messages.insert({
       userId: 'me',
       requestBody: { raw: encodeRaw(rfc2822), labelIds: ['INBOX', 'UNREAD'] },
@@ -354,60 +385,16 @@ async function injectTestEmails(userId: string): Promise<InjectedEmail[]> {
       subject: email.subject,
       rfcMessageId,
     })
-    log('R1:inject', `  ✓ "${email.subject.replace(`[${RUN_ID}] `, '')}" → ${res.data.id} (thread: ${res.data.threadId})`)
+    log('inject', `  ✓ "${email.subject.replace(`[${RUN_ID}] `, '')}" → ${res.data.id} (thread: ${res.data.threadId})`)
   }
 
-  log('R1:inject', `Injected ${injected.length} emails. Waiting 3s for Gmail indexing...`)
+  log('inject', `Injected ${injected.length} emails. Waiting 3s for Gmail indexing...`)
   await new Promise(r => setTimeout(r, 3000))
 
   return injected
 }
 
-// ─── Inject high-priority email (for instant-notify test) ───────────────────
-
-async function injectHighPriorityEmail(userId: string): Promise<InjectedEmail> {
-  log('instant:inject', 'Injecting high-priority trigger email...')
-
-  const gmail = await getGmailClient(userId)
-  const userEmail = await getUserEmail(userId)
-
-  const email = HIGH_PRIORITY_EMAIL
-  const rfcMessageId = `<${RUN_ID}-urgent-0@e2e-test.local>`
-  const rfc2822 = [
-    `From: ${email.from}`,
-    `To: ${userEmail}`,
-    `Subject: ${email.subject}`,
-    `Date: ${new Date().toUTCString()}`,
-    `Message-ID: ${rfcMessageId}`,
-    'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset="UTF-8"',
-    '',
-    email.body,
-  ].join('\r\n')
-
-  const res = await gmail.users.messages.insert({
-    userId: 'me',
-    requestBody: { raw: encodeRaw(rfc2822), labelIds: ['INBOX', 'UNREAD'] },
-    internalDateSource: 'dateHeader',
-  })
-
-  const injected: InjectedEmail = {
-    gmailId: res.data.id || 'unknown',
-    threadId: res.data.threadId || 'unknown',
-    cpKey: email.cpKey,
-    from: email.from,
-    subject: email.subject,
-    rfcMessageId,
-  }
-
-  log('instant:inject', `  ✓ "${email.subject.replace(`[${RUN_ID}] `, '')}" → ${injected.gmailId} (thread: ${injected.threadId})`)
-  log('instant:inject', 'Waiting 3s for Gmail indexing...')
-  await new Promise(r => setTimeout(r, 3000))
-
-  return injected
-}
-
-// ─── Run agent pipeline (reusable) ──────────────────────────────────────────
+// ─── Run agent pipeline ─────────────────────────────────────────────────────
 
 async function runAgent(userId: string, roundLabel: string): Promise<AgentResult> {
   log(`${roundLabel}:agent`, `Triggering agent run at ${BASE_URL}...`)
@@ -437,7 +424,7 @@ async function runAgent(userId: string, roundLabel: string): Promise<AgentResult
   if (result.actions?.length) {
     log(`${roundLabel}:agent`, `  Action details:`)
     for (const a of result.actions) {
-      log(`${roundLabel}:agent`, `    - [${a.action_type}] ${a.intent_cs || a.rationale} (score: ${a.priority_score})`)
+      log(`${roundLabel}:agent`, `    - [${a.action_type}] ${a.intent_cs || a.rationale} (score: ${a.priority_score}, urgency: ${a.urgency})`)
     }
   }
   if (result.errors?.length) {
@@ -447,94 +434,169 @@ async function runAgent(userId: string, roundLabel: string): Promise<AgentResult
   return result
 }
 
-// ─── Round 2: Execute REPLY actions ─────────────────────────────────────────
+// ─── Print action URLs for browser interaction ──────────────────────────────
 
-interface ExecutedAction {
-  actionId: string
-  cpKey: string | null
-  success: boolean
-}
-
-async function executeReplyActions(
-  userId: string,
-  actions: ActionProposal[],
-  injected: InjectedEmail[]
-): Promise<ExecutedAction[]> {
-  const replyActions = actions.filter(a => a.action_type === 'REPLY' && a.status === 'pending')
-  log('R2:execute', `Found ${replyActions.length} REPLY actions to execute out of ${actions.length} total`)
-
-  if (replyActions.length === 0) {
-    log('R2:execute', 'No REPLY actions to execute — skipping Round 2')
-    return []
+function printActionUrls(actions: ActionProposal[], userId: string): void {
+  if (!actions.length) {
+    log('actions', 'No actions to interact with')
+    return
   }
 
-  const executed: ExecutedAction[] = []
+  const sorted = [...actions].sort((a, b) => b.urgency - a.urgency || b.priority_score - a.priority_score)
 
-  for (const action of replyActions) {
-    // Match action to CP via conversation → try to find the cpKey
-    const matchedEmail = injected.find(e => {
-      // Match by CP identifier in the from field
-      const fromEmail = e.from.match(/<([^>]+)>/)?.[1] || e.from
-      return action.payload?.channel === 'email/gmail' || true // best-effort match
-    })
+  console.log()
+  console.log('  ┌─────────────────────────────────────────────────────────┐')
+  console.log('  │  ACTION URLS — open in browser, click UDĚLAT / UPRAVIT │')
+  console.log('  └─────────────────────────────────────────────────────────┘')
+  console.log()
 
+  for (const action of sorted) {
     const token = generateActionToken(action.id, userId)
+    const detailUrl = `${BASE_URL}/action/${action.id}?token=${token}&view=details`
+    const executeUrl = `${BASE_URL}/action/${action.id}?token=${token}&do=execute&type=${action.action_type}`
+    const editUrl = `${BASE_URL}/action/${action.id}/edit?token=${token}`
 
-    log('R2:execute', `  Executing action ${action.id} [${action.action_type}]...`)
-    const { status, body } = await api('POST', `/api/action/${action.id}/execute`, {
-      body: { token },
-      timeout: 60_000,
+    const urgencyTag = action.urgency >= 9 ? ' ⚡URGENT' : ''
+    console.log(`  [${action.action_type}] ${action.intent_cs || action.rationale}${urgencyTag}`)
+    console.log(`    Score: ${action.priority_score} | Urgency: ${action.urgency} | Value: ${action.dollar_value}`)
+    console.log(`    UDĚLAT:  ${executeUrl}`)
+    console.log(`    UPRAVIT: ${editUrl}`)
+    console.log(`    Detail:  ${detailUrl}`)
+    console.log()
+  }
+}
+
+// ─── Scan Gmail for Mila's actual sent replies ──────────────────────────────
+
+async function scanMilaReplies(userId: string): Promise<Map<string, MilaReply>> {
+  log('scan', 'Scanning Gmail SENT for Mila\'s replies to test CPs...')
+
+  const gmail = await getGmailClient(userId)
+  const replies = new Map<string, MilaReply>()
+
+  for (const testEmail of ALL_TEST_SENDERS) {
+    const cpEmail = extractEmail(testEmail.from)
+    const q = `in:sent to:${cpEmail} subject:${TEST_MARKER}`
+
+    const list = await gmail.users.messages.list({
+      userId: 'me',
+      q,
+      maxResults: 5,
     })
 
-    const success = status === 200
-    if (success) {
-      log('R2:execute', `    ✓ ${(body as Record<string, unknown>).message || 'Done'}`)
-    } else {
-      log('R2:execute', `    ✗ HTTP ${status}: ${JSON.stringify(body)}`)
+    if (!list.data.messages?.length) {
+      log('scan', `  - No reply found for ${testEmail.cpKey} (${cpEmail})`)
+      continue
     }
 
-    executed.push({
-      actionId: action.id,
-      cpKey: matchedEmail?.cpKey || null,
-      success,
+    const msg = await gmail.users.messages.get({
+      userId: 'me',
+      id: list.data.messages[0].id!,
+      format: 'full',
     })
+
+    const body = extractMessageBody(msg.data)
+    const subject = getHeaderValue(msg.data, 'Subject')
+    const messageId = getHeaderValue(msg.data, 'Message-ID')
+
+    replies.set(testEmail.cpKey, {
+      cpKey: testEmail.cpKey,
+      cpEmail,
+      body,
+      subject,
+      threadId: msg.data.threadId || '',
+      messageId,
+      gmailId: msg.data.id || '',
+    })
+
+    log('scan', `  ✓ Found Mila's reply to ${testEmail.cpKey}: "${subject.slice(0, 60)}"`)
   }
 
-  // Wait for Gmail to process the sent emails
-  log('R2:execute', `Executed ${executed.filter(e => e.success).length}/${replyActions.length} actions. Waiting 3s...`)
-  await new Promise(r => setTimeout(r, 3000))
-
-  return executed
+  log('scan', `Found ${replies.size} Mila replies out of ${ALL_TEST_SENDERS.length} CPs`)
+  return replies
 }
 
-// ─── Round 3: Inject CP follow-up responses ─────────────────────────────────
+// ─── Generate tailored CP response using AI ─────────────────────────────────
 
-async function injectCPResponses(
+async function generateTailoredCPResponse(
+  cpKey: string,
+  milaReplyBody: string,
+  originalEmail: TestEmail
+): Promise<string> {
+  const profile = CP_RESPONSE_PROFILES[cpKey]
+  if (!profile) return ''
+
+  const prompt = [
+    `You are ${profile.persona}.`,
+    `Context: ${profile.context}`,
+    '',
+    `You originally sent this email:`,
+    `"${originalEmail.body}"`,
+    '',
+    `You received this reply from the real estate agent's assistant (Mila):`,
+    `"${milaReplyBody}"`,
+    '',
+    `Write a realistic follow-up email response.`,
+    profile.guidance,
+    '',
+    `Rules:`,
+    `- Write 3-8 lines, natural and conversational`,
+    `- Reference specific details from Mila's reply`,
+    `- Sign off as ${extractName(originalEmail.from)}`,
+    `- Mix Czech and English naturally (this is Prague business)`,
+    `- Do NOT include subject line, just the body text`,
+  ].join('\n')
+
+  log('ai', `  Generating ${cpKey}'s response...`)
+  const result = await runAITask('drafting', prompt)
+  return result.trim()
+}
+
+// ─── Inject tailored CP responses ───────────────────────────────────────────
+
+async function injectTailoredCPResponses(
   userId: string,
-  injected: InjectedEmail[]
+  injected: InjectedEmail[],
+  milaReplies: Map<string, MilaReply>
 ): Promise<string[]> {
-  log('R3:respond', 'Injecting CP follow-up responses into existing threads...')
+  log('respond', 'Generating and injecting tailored CP responses...')
 
   const gmail = await getGmailClient(userId)
   const userEmail = await getUserEmail(userId)
   const responseIds: string[] = []
 
   for (const original of injected) {
-    const responseBody = CP_RESPONSES[original.cpKey]
-    if (!responseBody) {
-      log('R3:respond', `  - No follow-up defined for cpKey="${original.cpKey}", skipping`)
+    const milaReply = milaReplies.get(original.cpKey)
+    if (!milaReply) {
+      log('respond', `  - No Mila reply for ${original.cpKey}, skipping`)
       continue
     }
 
-    const rfcMessageId = `<${RUN_ID}-reply-${responseIds.length}@e2e-test.local>`
+    const originalTestEmail = ALL_TEST_SENDERS.find(e => e.cpKey === original.cpKey)
+    if (!originalTestEmail) continue
+
+    const responseBody = await generateTailoredCPResponse(
+      original.cpKey,
+      milaReply.body,
+      originalTestEmail
+    )
+
+    if (!responseBody) {
+      log('respond', `  - AI returned empty for ${original.cpKey}, skipping`)
+      continue
+    }
+
+    const rfcMessageId = `<${RUN_ID}-r2-${responseIds.length}@e2e-test.local>`
+    const references = `${original.rfcMessageId} ${milaReply.messageId}`.trim()
+
     const rfc2822 = [
       `From: ${original.from}`,
       `To: ${userEmail}`,
       `Subject: Re: ${original.subject}`,
       `Date: ${new Date().toUTCString()}`,
       `Message-ID: ${rfcMessageId}`,
-      `In-Reply-To: ${original.rfcMessageId}`,
-      `References: ${original.rfcMessageId}`,
+      `In-Reply-To: ${milaReply.messageId}`,
+      `References: ${references}`,
       'MIME-Version: 1.0',
       'Content-Type: text/plain; charset="UTF-8"',
       '',
@@ -545,34 +607,26 @@ async function injectCPResponses(
       userId: 'me',
       requestBody: {
         raw: encodeRaw(rfc2822),
-        threadId: original.threadId,
+        threadId: milaReply.threadId || original.threadId,
         labelIds: ['INBOX', 'UNREAD'],
       },
       internalDateSource: 'dateHeader',
     })
 
     const msgId = res.data.id || 'unknown'
-    const msgThread = res.data.threadId || 'unknown'
+    const sameThread = (res.data.threadId || '') === original.threadId
     responseIds.push(msgId)
 
-    const sameThread = msgThread === original.threadId
-    log('R3:respond', `  ✓ ${original.cpKey} response → ${msgId} (thread: ${msgThread}${sameThread ? ' ✓ same' : ' ✗ DIFFERENT!'})`)
+    log('respond', `  ✓ ${original.cpKey} → ${msgId} (thread: ${sameThread ? '✓ same' : '✗ DIFFERENT'})`)
   }
 
-  log('R3:respond', `Injected ${responseIds.length} CP responses. Waiting 3s for Gmail indexing...`)
+  log('respond', `Injected ${responseIds.length} tailored CP responses. Waiting 3s...`)
   await new Promise(r => setTimeout(r, 3000))
 
   return responseIds
 }
 
 // ─── Instant notification ────────────────────────────────────────────────────
-
-interface InstantNotifyResult {
-  success: boolean
-  sent: number
-  failed: number
-  timestamp: string
-}
 
 async function runInstantNotify(): Promise<InstantNotifyResult> {
   log('instant', 'Triggering instant notification poll...')
@@ -616,7 +670,6 @@ async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise
   const gmail = await getGmailClient(userId)
   const deletedIds = new Set<string>()
 
-  // Phase 1: Permanently delete specific tracked message IDs (fast path for normal flow)
   if (messageIds?.length) {
     for (const id of messageIds) {
       try {
@@ -631,17 +684,10 @@ async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise
     }
   }
 
-  // Phase 2: Search-based cleanup catches sent replies, other runs, etc.
-  // Uses includeSpamTrash to also find messages already in Trash from previous runs.
-  // Permanently deletes (not just trash) so re-running cleanup actually removes them.
-  //
-  // Gmail {a b} = OR. We search for:
-  //   1. E2E-TEST marker (injected emails + CP responses)
-  //   2. Emails from/to test CP addresses (Mila's sent replies)
   const cpFromTo = TEST_CP_EMAILS.map(e => `from:${e} to:${e}`).join(' ')
   const searchQueries = [
-    `${TEST_MARKER}`,                  // Broad: "E2E-TEST" anywhere in message
-    `{${cpFromTo}}`,                   // Emails from OR to any test CP address
+    `${TEST_MARKER}`,
+    `{${cpFromTo}}`,
   ]
 
   for (const q of searchQueries) {
@@ -677,15 +723,14 @@ async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise
   return deletedIds.size
 }
 
-
 // ─── Main ────────────────────────────────────────────────────────────────────
 
 async function main() {
   const multiRound = !flags.has('--single-round')
 
   console.log('═══════════════════════════════════════════════════════')
-  console.log('  Mila E2E Pipeline Test')
-  console.log(`  Mode: ${multiRound ? 'Multi-Round Conversation' : 'Single Round'}`)
+  console.log('  Mila E2E Pipeline Test — Interactive')
+  console.log(`  Mode: ${multiRound ? 'Multi-Round Interactive' : 'Single Round'}`)
   console.log('═══════════════════════════════════════════════════════')
   console.log(`  User:     ${USER_ID}`)
   console.log(`  Target:   ${BASE_URL}`)
@@ -694,37 +739,34 @@ async function main() {
   console.log('═══════════════════════════════════════════════════════')
   console.log()
 
-  // Preflight checks
   if (!API_KEY) fail('preflight', 'MILA_USER_API_KEY not set in .env.local')
   if (!CRON_SECRET) fail('preflight', 'CRON_SECRET not set in .env.local')
-  if (multiRound && !process.env.NEXTAUTH_SECRET) {
+  if (!process.env.NEXTAUTH_SECRET) {
     fail('preflight', 'NEXTAUTH_SECRET not set in .env.local (needed for action tokens)')
   }
 
-  // Cleanup-only mode (emails only — use scripts/cleanup-test-calendar.ts for calendar)
   if (flags.has('--cleanup-only')) {
     await cleanupTestEmails(USER_ID)
     log('done', 'Cleanup complete (run scripts/cleanup-test-calendar.ts to clean calendar events)')
     return
   }
 
-  // Track all Gmail message IDs for cleanup
   const allGmailIds: string[] = []
   const allChecks: CheckResult[] = []
 
   try {
     // ═══════════════════════════════════════════════════════════════════════
-    // ROUND 1: Inject CP emails → Run agent → Verify ingestion + actions
+    // ROUND 1: Inject ALL emails → Run agent → Instant notify
     // ═══════════════════════════════════════════════════════════════════════
     console.log()
-    console.log('─── Round 1: Initial CP Emails ────────────────────────')
+    console.log('─── Round 1: Inject Emails & Run Agent ────────────────')
 
     let injected: InjectedEmail[] = []
     if (!flags.has('--skip-inject')) {
-      injected = await injectTestEmails(USER_ID)
+      injected = await injectEmails(USER_ID, ALL_TEST_SENDERS)
       allGmailIds.push(...injected.map(e => e.gmailId))
     } else {
-      log('R1:inject', 'Skipped (--skip-inject)')
+      log('inject', 'Skipped (--skip-inject)')
     }
 
     const r1 = await runAgent(USER_ID, 'R1')
@@ -736,8 +778,8 @@ async function main() {
     if (!flags.has('--skip-inject')) {
       r1Checks.push({
         name: 'R1: Emails ingested',
-        pass: r1.emailsIngested >= TEST_EMAILS.length,
-        detail: `${r1.emailsIngested} >= ${TEST_EMAILS.length} expected`,
+        pass: r1.emailsIngested >= ALL_TEST_SENDERS.length,
+        detail: `${r1.emailsIngested} >= ${ALL_TEST_SENDERS.length} expected`,
       })
     }
     r1Checks.push({
@@ -756,59 +798,33 @@ async function main() {
       detail: `${r1.actionsGenerated} actions`,
     })
 
-    console.log()
-    printChecks(r1Checks)
-    allChecks.push(...r1Checks)
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // INSTANT NOTIFY: Inject high-priority email → agent → notify → verify
-    // ═══════════════════════════════════════════════════════════════════════
-    console.log()
-    console.log('─── Instant Notify: High-Priority Email ────────────────')
-
-    // Step 1: Inject a purpose-built high-priority email (45M CZK, deadline tomorrow)
-    let urgentEmail: InjectedEmail | null = null
+    // Check for urgent actions
+    const highPriority = (r1.actions || []).filter(a => a.urgency >= 9)
     if (!flags.has('--skip-inject')) {
-      urgentEmail = await injectHighPriorityEmail(USER_ID)
-      allGmailIds.push(urgentEmail.gmailId)
-    } else {
-      log('instant:inject', 'Skipped (--skip-inject)')
-    }
-
-    // Step 2: Run agent to ingest the urgent email
-    const instantAgent = await runAgent(USER_ID, 'instant')
-
-    // Step 3: Verify the agent produced an urgent action (urgency >= 9)
-    // Instant-notify uses urgency (AI-assessed pressure), NOT priority_score.
-    const highPriority = (instantAgent.actions || []).filter(a => a.urgency >= 9)
-    log('instant', `${highPriority.length}/${(instantAgent.actions || []).length} actions have urgency >= 9`)
-    for (const a of highPriority) {
-      log('instant', `  ⚡ [${a.action_type}] urgency=${a.urgency} score=${a.priority_score}: ${a.intent_cs || a.rationale}`)
-    }
-
-    const instantChecks: CheckResult[] = []
-
-    if (!flags.has('--skip-inject')) {
-      instantChecks.push({
-        name: 'Instant: Urgent email ingested',
-        pass: instantAgent.emailsIngested > 0,
-        detail: `${instantAgent.emailsIngested} email(s) ingested`,
-      })
-      instantChecks.push({
-        name: 'Instant: Action generated for urgent email',
-        pass: instantAgent.actionsGenerated > 0,
-        detail: `${instantAgent.actionsGenerated} action(s) generated`,
-      })
-      instantChecks.push({
-        name: 'Instant: At least one action has urgency >= 9',
+      r1Checks.push({
+        name: 'R1: At least one action has urgency >= 9',
         pass: highPriority.length > 0,
         detail: `${highPriority.length} action(s) with urgency >= 9`,
       })
     }
 
-    // Step 4: Run instant-notify — should pick up the high-priority action
+    console.log()
+    printChecks(r1Checks)
+    allChecks.push(...r1Checks)
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // INSTANT NOTIFY
+    // ═══════════════════════════════════════════════════════════════════════
+    console.log()
+    console.log('─── Instant Notify ────────────────────────────────────')
+
+    for (const a of highPriority) {
+      log('instant', `  ⚡ [${a.action_type}] urgency=${a.urgency} score=${a.priority_score}: ${a.intent_cs || a.rationale}`)
+    }
+
     const notifyResult = await runInstantNotify()
 
+    const instantChecks: CheckResult[] = []
     instantChecks.push({
       name: 'Instant: Endpoint returned success',
       pass: notifyResult.success === true,
@@ -819,7 +835,6 @@ async function main() {
       pass: notifyResult.failed === 0,
       detail: `failed=${notifyResult.failed}`,
     })
-
     if (highPriority.length > 0) {
       instantChecks.push({
         name: 'Instant: High-priority actions notified',
@@ -828,85 +843,84 @@ async function main() {
       })
     }
 
+    // Idempotency check
+    log('instant', 'Re-polling to verify no double-send...')
+    const notifyResult2 = await runInstantNotify()
+    instantChecks.push({
+      name: 'Instant: No double-send on re-poll',
+      pass: notifyResult2.sent === 0,
+      detail: `sent=${notifyResult2.sent} on re-poll (should be 0)`,
+    })
+
     console.log()
     printChecks(instantChecks)
     allChecks.push(...instantChecks)
 
-    // Step 5: Run instant-notify again — should NOT re-send (idempotency)
-    log('instant', 'Running instant-notify again to verify no double-send...')
-    const notifyResult2 = await runInstantNotify()
-    const idempotencyCheck: CheckResult = {
-      name: 'Instant: No double-send on re-poll',
-      pass: notifyResult2.sent === 0,
-      detail: `sent=${notifyResult2.sent} on re-poll (should be 0)`,
-    }
+    // ═══════════════════════════════════════════════════════════════════════
+    // INTERACTIVE PAUSE 1: User interacts with Round 1 actions
+    // ═══════════════════════════════════════════════════════════════════════
     console.log()
-    printChecks([idempotencyCheck])
-    allChecks.push(idempotencyCheck)
+    console.log('─── Your Turn: Interact with Actions ──────────────────')
+    printActionUrls(r1.actions || [], USER_ID)
+
+    await waitForKeypress('  ⏎  Press Enter when you\'re done interacting...\n')
 
     // ═══════════════════════════════════════════════════════════════════════
-    // ROUND 2: Execute REPLY actions (Mila sends emails back to CPs)
+    // ROUND 2: Scan Mila's replies → tailored CP responses → agent
     // ═══════════════════════════════════════════════════════════════════════
-    if (multiRound && r1.actions?.length > 0 && injected.length > 0) {
+    if (multiRound && injected.length > 0) {
       console.log()
-      console.log('─── Round 2: Execute Actions (Mila Replies) ───────────')
+      console.log('─── Round 2: Reading Mila\'s Replies ───────────────────')
 
-      const executed = await executeReplyActions(USER_ID, r1.actions, injected)
+      const milaReplies = await scanMilaReplies(USER_ID)
 
-      const r2Checks: CheckResult[] = []
-      const successCount = executed.filter(e => e.success).length
-      r2Checks.push({
-        name: 'R2: Actions executed',
-        pass: successCount > 0,
-        detail: `${successCount}/${executed.length} succeeded`,
-      })
+      if (milaReplies.size === 0) {
+        log('scan', 'No Mila replies found — skipping CP response round')
+      } else {
+        console.log()
+        console.log('─── Generating Tailored CP Responses ──────────────────')
 
-      console.log()
-      printChecks(r2Checks)
-      allChecks.push(...r2Checks)
+        const cpResponseIds = await injectTailoredCPResponses(USER_ID, injected, milaReplies)
+        allGmailIds.push(...cpResponseIds)
 
-      // ═══════════════════════════════════════════════════════════════════
-      // ROUND 3: CPs respond back → Run agent → Verify threading
-      // ═══════════════════════════════════════════════════════════════════
-      console.log()
-      console.log('─── Round 3: CP Follow-Up Responses ────────────────────')
+        const r2 = await runAgent(USER_ID, 'R2')
 
-      const responseIds = await injectCPResponses(USER_ID, injected)
-      allGmailIds.push(...responseIds)
+        const r2Checks: CheckResult[] = []
+        r2Checks.push({
+          name: 'R2: Follow-up emails ingested',
+          pass: r2.emailsIngested >= cpResponseIds.length,
+          detail: `${r2.emailsIngested} >= ${cpResponseIds.length} expected`,
+        })
+        r2Checks.push({
+          name: 'R2: Messages processed',
+          pass: r2.messagesProcessed > 0,
+          detail: `${r2.messagesProcessed} messages`,
+        })
+        r2Checks.push({
+          name: 'R2: Conversations updated (threading)',
+          pass: r2.conversationsUpdated > 0,
+          detail: `${r2.conversationsUpdated} conversations (should reuse existing)`,
+        })
+        r2Checks.push({
+          name: 'R2: New actions generated',
+          pass: r2.actionsGenerated > 0,
+          detail: `${r2.actionsGenerated} actions from follow-up messages`,
+        })
 
-      const r3 = await runAgent(USER_ID, 'R3')
+        console.log()
+        printChecks(r2Checks)
+        allChecks.push(...r2Checks)
 
-      log('R3:verify', 'Checking Round 3 results...')
-      const r3Checks: CheckResult[] = []
-
-      r3Checks.push({
-        name: 'R3: Follow-up emails ingested',
-        pass: r3.emailsIngested >= responseIds.length,
-        detail: `${r3.emailsIngested} >= ${responseIds.length} expected`,
-      })
-      r3Checks.push({
-        name: 'R3: Messages processed',
-        pass: r3.messagesProcessed > 0,
-        detail: `${r3.messagesProcessed} messages`,
-      })
-      r3Checks.push({
-        name: 'R3: Conversations updated (threading)',
-        pass: r3.conversationsUpdated > 0,
-        detail: `${r3.conversationsUpdated} conversations (should reuse existing)`,
-      })
-      r3Checks.push({
-        name: 'R3: New actions generated',
-        pass: r3.actionsGenerated > 0,
-        detail: `${r3.actionsGenerated} actions from follow-up messages`,
-      })
-
-      console.log()
-      printChecks(r3Checks)
-      allChecks.push(...r3Checks)
-
+        // Interactive pause 2
+        if (r2.actions?.length > 0) {
+          console.log()
+          console.log('─── Your Turn: Round 2 Actions ────────────────────────')
+          printActionUrls(r2.actions, USER_ID)
+          await waitForKeypress('  ⏎  Press Enter when you\'re done with Round 2...\n')
+        }
+      }
     } else if (multiRound) {
-      log('R2', 'Skipped — no REPLY actions or no injected emails from Round 1')
-      log('R3', 'Skipped — depends on Round 2')
+      log('R2', 'Skipped — no injected emails from Round 1')
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -950,7 +964,6 @@ async function main() {
     if (!allPassed) process.exit(1)
 
   } catch (error) {
-    // Attempt cleanup even on failure
     log('cleanup', 'Cleaning up test emails after failure (calendar events preserved)...')
     await cleanupTestEmails(USER_ID, allGmailIds.length > 0 ? allGmailIds : undefined).catch(() => {})
     throw error
