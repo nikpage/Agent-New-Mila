@@ -6,9 +6,11 @@ import { Button } from '@/components/ui/Button'
 import { theme } from '@/config/theme'
 import type { ActionProposal } from '@/lib/supabase/types'
 
+export type MeetingType = 'address' | 'online' | 'phone'
+
 export interface EditFormProps {
   action: ActionProposal
-  onSubmit: (data: { notes: string; dynamicFields: Record<string, string>; isOnline?: boolean }) => Promise<void>
+  onSubmit: (data: { notes: string; dynamicFields: Record<string, string>; meetingType?: MeetingType }) => Promise<void>
   onCancel: () => void
 }
 
@@ -22,7 +24,9 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
   const payload = action.payload as Record<string, unknown> | null
   const payloadLocation = (payload?.location as string) || ''
   const locationPartial = !!payload?.location_partial
-  const [isOnline, setIsOnline] = useState(!!payload?.is_online)
+  const [meetingType, setMeetingType] = useState<MeetingType>(
+    (payload?.meeting_type as MeetingType) || (payload?.is_online ? 'online' : 'address')
+  )
 
   // Fixed key for the always-present address input on SCHEDULE cards
   const ADDRESS_FIELD_KEY = 'Adresa schůzky'
@@ -50,7 +54,7 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
     e.preventDefault()
     setLoading(true)
     try {
-      await onSubmit({ notes, dynamicFields, isOnline: isSchedule ? isOnline : undefined })
+      await onSubmit({ notes, dynamicFields, meetingType: isSchedule ? meetingType : undefined })
     } finally {
       setLoading(false)
     }
@@ -105,43 +109,64 @@ export function EditForm({ action, onSubmit, onCancel }: EditFormProps) {
         </div>
       )}
 
-      {/* Online checkbox for SCHEDULE actions */}
+      {/* Meeting type selector for SCHEDULE actions */}
       {isSchedule && (
-        <label style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: theme.spacing.sm,
-          cursor: 'pointer',
-          fontSize: theme.typography.sizes.sm,
-          color: theme.colors.text,
-        }}>
-          <input
-            type="checkbox"
-            checked={isOnline}
-            onChange={e => setIsOnline(e.target.checked)}
-            style={{ width: '18px', height: '18px', accentColor: theme.colors.primary, cursor: 'pointer' }}
-          />
-          <span style={{ fontWeight: isOnline ? theme.typography.weights.medium : theme.typography.weights.normal }}>
-            Online schůzka (Google Meet)
-          </span>
-        </label>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.xs }}>
+          <p style={{
+            fontSize: theme.typography.sizes.xs,
+            fontWeight: theme.typography.weights.medium,
+            color: theme.colors.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+            margin: 0,
+          }}>
+            Typ schůzky
+          </p>
+          <div style={{ display: 'flex', gap: theme.spacing.sm }}>
+            {([
+              { value: 'address' as MeetingType, label: 'Osobně' },
+              { value: 'online' as MeetingType, label: 'Online (Meet)' },
+              { value: 'phone' as MeetingType, label: 'Telefonát' },
+            ]).map(opt => (
+              <label key={opt.value} style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: 'pointer',
+                fontSize: theme.typography.sizes.sm,
+                color: theme.colors.text,
+                fontWeight: meetingType === opt.value ? theme.typography.weights.medium : theme.typography.weights.normal,
+              }}>
+                <input
+                  type="radio"
+                  name="meetingType"
+                  value={opt.value}
+                  checked={meetingType === opt.value}
+                  onChange={() => setMeetingType(opt.value)}
+                  style={{ width: '16px', height: '16px', accentColor: theme.colors.primary, cursor: 'pointer' }}
+                />
+                {opt.label}
+              </label>
+            ))}
+          </div>
+        </div>
       )}
 
-      {/* Address field — ALWAYS shown for SCHEDULE actions, disabled when Online is checked */}
+      {/* Address field — ALWAYS shown for SCHEDULE actions, disabled when not in-person */}
       {isSchedule && (
         <div>
           <Input
             label={ADDRESS_FIELD_KEY}
-            value={isOnline ? '' : (dynamicFields[ADDRESS_FIELD_KEY] || '')}
+            value={meetingType !== 'address' ? '' : (dynamicFields[ADDRESS_FIELD_KEY] || '')}
             onChange={e => setDynamicFields({ ...dynamicFields, [ADDRESS_FIELD_KEY]: e.target.value })}
-            disabled={isOnline}
-            placeholder={isOnline ? '' : 'např. Dykova 17, Praha 2'}
-            style={isOnline ? { opacity: 0.4 } : locationPartial && !dynamicFields[ADDRESS_FIELD_KEY] ? {
+            disabled={meetingType !== 'address'}
+            placeholder={meetingType !== 'address' ? '' : 'např. Dykova 17, Praha 2'}
+            style={meetingType !== 'address' ? { opacity: 0.4 } : locationPartial && !dynamicFields[ADDRESS_FIELD_KEY] ? {
               borderColor: theme.colors.warning,
               backgroundColor: theme.colors.warningBg,
             } : undefined}
           />
-          {locationPartial && !isOnline && !dynamicFields[ADDRESS_FIELD_KEY] && (
+          {locationPartial && meetingType === 'address' && !dynamicFields[ADDRESS_FIELD_KEY] && (
             <p style={{
               fontSize: theme.typography.sizes.xs,
               color: theme.colors.warning,

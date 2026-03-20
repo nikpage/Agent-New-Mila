@@ -123,7 +123,7 @@ export async function PUT(
   try {
     const { id: actionId } = await params
     const body = await request.json()
-    const { token, subject, body: draftBody, to, notes, dynamicFields, isOnline } = body
+    const { token, subject, body: draftBody, to, notes, dynamicFields, isOnline, meetingType } = body
 
     if (!token) {
       return NextResponse.json({ error: 'Missing token' }, { status: 401 })
@@ -196,6 +196,10 @@ export async function PUT(
         payloadUpdates.is_online = isOnline
       }
 
+      if (meetingType && action.action_type === 'SCHEDULE') {
+        payloadUpdates.meeting_type = meetingType
+      }
+
       if (to) {
         payloadUpdates.editedTo = to
       }
@@ -213,6 +217,10 @@ export async function PUT(
 
       if (typeof isOnline === 'boolean' && action.action_type === 'SCHEDULE') {
         payloadUpdates.is_online = isOnline
+      }
+
+      if (meetingType && action.action_type === 'SCHEDULE') {
+        payloadUpdates.meeting_type = meetingType
       }
 
       if (to) {

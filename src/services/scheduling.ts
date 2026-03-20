@@ -839,7 +839,11 @@ export async function optimizeScheduleActions(
     const payload = action.payload as Record<string, unknown> | null
     const cpAvailability = (payload?.cp_availability as string) || null
     const suggestedTime = (payload?.suggestedTime as string) || null
-    const meetingLocation = (payload?.suggestedLocation as string) || (payload?.location as string) || null
+    const payloadMeetingType = (payload?.meeting_type as string) || 'address'
+    // Phone and online meetings don't need a physical location — skip travel buffer
+    const meetingLocation = (payloadMeetingType === 'phone' || payloadMeetingType === 'online')
+      ? null
+      : (payload?.suggestedLocation as string) || (payload?.location as string) || null
     const duration = (payload?.duration as number) || settings.default_meeting_duration
 
     // If CP stated a specific time, parse it as Prague local time.
@@ -1050,7 +1054,11 @@ export async function scheduleSingleAction(
 
   const cpAvailability = (payload?.cp_availability as string) || null
   const suggestedTime = (payload?.suggestedTime as string) || null
-  const meetingLocation = (payload?.suggestedLocation as string) || (payload?.location as string) || null
+  const singleMeetingType = (payload?.meeting_type as string) || 'address'
+  // Phone and online meetings don't need a physical location — skip travel buffer
+  const meetingLocation = (singleMeetingType === 'phone' || singleMeetingType === 'online')
+    ? null
+    : (payload?.suggestedLocation as string) || (payload?.location as string) || null
   const duration = (payload?.duration as number) || settings.default_meeting_duration
 
   // Parse CP-stated time (same timezone logic as batch optimizer)
@@ -1220,6 +1228,7 @@ async function updateActionWithHold(
     end: hold.end_time,
     location: meetingLocation || null,
     is_online: false,
+    meeting_type: (payload.meeting_type as string) || 'address',
     conflicts: holdResult.conflicts?.map(c => ({
       event_id: c.existingEvent.id,
       event_title: c.existingEvent.title,

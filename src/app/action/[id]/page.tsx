@@ -392,16 +392,21 @@ function DirectExecuteView({ actionId, token }: { actionId: string; token: strin
         const location = payload?.location as string | null
         const locationPartial = !!payload?.location_partial
         const isOnline = !!payload?.is_online
+        const mt = (payload?.meeting_type as string) || (isOnline ? 'online' : 'address')
+        const cpPhone = payload?.cp_phone as string | null
         return (
           <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.sm}`, fontSize: theme.typography.sizes.sm }}>
-            <span style={{ color: theme.colors.textMuted }}>Místo: </span>
-            {isOnline
-              ? <span style={{ color: theme.colors.success, fontWeight: 500 }}>Online (Google Meet)</span>
-              : location
-                ? locationPartial
-                  ? <span style={{ color: theme.colors.warning, fontWeight: 500 }}>{location} — ⚠ upřesněte přes UPRAVIT</span>
-                  : <span style={{ color: theme.colors.text }}>{location}</span>
-                : <span style={{ color: theme.colors.accent }}>Chybí</span>
+            {mt === 'online'
+              ? <><span style={{ color: theme.colors.textMuted }}>Typ: </span><span style={{ color: theme.colors.success, fontWeight: 500 }}>Online (Google Meet)</span></>
+              : mt === 'phone'
+                ? <><span style={{ color: theme.colors.textMuted }}>Typ: </span><span style={{ color: theme.colors.success, fontWeight: 500 }}>Telefonát</span>{cpPhone && <><br/><span style={{ color: theme.colors.textMuted }}>Tel: </span><span style={{ color: theme.colors.text }}>{cpPhone}</span></>}</>
+                : <><span style={{ color: theme.colors.textMuted }}>Místo: </span>
+                    {location
+                      ? locationPartial
+                        ? <span style={{ color: theme.colors.warning, fontWeight: 500 }}>{location} — ⚠ upřesněte přes UPRAVIT</span>
+                        : <span style={{ color: theme.colors.text }}>{location}</span>
+                      : <span style={{ color: theme.colors.accent }}>Chybí</span>
+                    }</>
             }
           </div>
         )
@@ -526,13 +531,12 @@ function CompletedScheduleView({ actionId, token, actionData }: { actionId: stri
           </div>
         )}
         <div style={{ fontSize: theme.typography.sizes.sm }}>
-          <span style={{ color: theme.colors.textMuted }}>Místo: </span>
-          {isOnline
-            ? <span style={{ color: theme.colors.success, fontWeight: 500 }}>Online (Google Meet)</span>
-            : location
-              ? <span style={{ color: theme.colors.text }}>{location}</span>
-              : <span style={{ color: theme.colors.textMuted }}>Neuvedeno</span>
-          }
+          {(() => {
+            const mt = (payload?.meeting_type as string) || (isOnline ? 'online' : 'address')
+            if (mt === 'online') return <><span style={{ color: theme.colors.textMuted }}>Typ: </span><span style={{ color: theme.colors.success, fontWeight: 500 }}>Online (Google Meet)</span></>
+            if (mt === 'phone') return <><span style={{ color: theme.colors.textMuted }}>Typ: </span><span style={{ color: theme.colors.success, fontWeight: 500 }}>Telefonát</span></>
+            return <><span style={{ color: theme.colors.textMuted }}>Místo: </span>{location ? <span style={{ color: theme.colors.text }}>{location}</span> : <span style={{ color: theme.colors.textMuted }}>Neuvedeno</span>}</>
+          })()}
         </div>
       </div>
 
@@ -639,11 +643,13 @@ function DetailView({ actionId, token, initialDetailOpen }: { actionId: string; 
     setSuccess({ show: true, message: 'Hotovo!', subMessage: 'Akce byla provedena.' })
   }
 
-  async function handleEdit(editData: { notes: string; dynamicFields?: Record<string, string>; isOnline?: boolean }) {
+  async function handleEdit(editData: { notes: string; dynamicFields?: Record<string, string>; meetingType?: string }) {
+    // Send both meetingType and derived isOnline for backward compatibility
+    const isOnline = editData.meetingType === 'online' ? true : editData.meetingType ? false : undefined
     const response = await fetch(`/api/action/${actionId}/draft`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, notes: editData.notes, dynamicFields: editData.dynamicFields, isOnline: editData.isOnline }),
+      body: JSON.stringify({ token, notes: editData.notes, dynamicFields: editData.dynamicFields, isOnline, meetingType: editData.meetingType }),
     })
     if (!response.ok) {
       const errorData = await response.json()

@@ -193,6 +193,8 @@ export type ProposedAction = {
   suggestedLocation?: string | null
   locationConfidence?: 'high' | 'low' | null
   suggestedTime?: string | null
+  meetingType?: 'address' | 'online' | 'phone'
+  cpPhone?: string | null
 }
 
 export async function proposeAction(
@@ -313,7 +315,9 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
-  "suggestedLocation": "Physical address WHERE PEOPLE WILL MEET — the meeting venue, NOT the property or deal subject. Priority: (1) explicit venue ('meet at Dykova 17', 'come to our office'), (2) CP's office address from signature IF meeting is at their place, (3) user's office address (see system context) if CP says 'at your office' or 'come to you', (4) the property address ONLY if the meeting is literally at the property (e.g. a viewing/inspection). Addresses in email signatures are the SENDER's company address — do not confuse with meeting venue. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. null if no meeting venue clues exist.",
+  "meetingType": "'address' for in-person meetings (viewings, office meetings, notary). 'online' for video calls (Google Meet). 'phone' for phone calls — when the conversation suggests a quick call, phone discussion, or someone says 'zavolám vám' / 'můžeme si zavolat' / 'call me'. Default to 'address' for SCHEDULE actions unless the conversation clearly indicates a call or video meeting.",
+  "cpPhone": "Counterparty's phone number if found in the conversation (from signature, message text, or WhatsApp). Format: international with + prefix (e.g. '+420123456789'). null if not found. Important for phone meetings.",
+  "suggestedLocation": "Physical address WHERE PEOPLE WILL MEET — the meeting venue, NOT the property or deal subject. Only relevant when meetingType is 'address'. Priority: (1) explicit venue ('meet at Dykova 17', 'come to our office'), (2) CP's office address from signature IF meeting is at their place, (3) user's office address (see system context) if CP says 'at your office' or 'come to you', (4) the property address ONLY if the meeting is literally at the property (e.g. a viewing/inspection). Addresses in email signatures are the SENDER's company address — do not confuse with meeting venue. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. null if no meeting venue clues exist or meetingType is not 'address'.",
   "locationConfidence": "'high' if venue is explicitly stated or clearly implied ('meet at your office', 'come to Dykova 17'). 'low' if inferring from weak signals (signature address without meeting-place context). null if suggestedLocation is null.",
   "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). If the enriched messages contain 'Navrhovaný čas' with a specific day+time, you MUST convert it to ISO 8601 and put it here. Do NOT leave null when a specific time is stated. null ONLY if no specific time mentioned.",
   "cpAvailability": "Free-text string describing when the CP said they're available (e.g. 'Tuesday afternoon', 'next week except Wednesday'). null if not mentioned."

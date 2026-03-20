@@ -227,13 +227,15 @@ function generateBriefEmailHtml(
       const payload = action.payload as Record<string, unknown> | null
       const payloadLocation = payload?.location as string | null
       const isOnline = !!payload?.is_online
+      const meetingType = (payload?.meeting_type as 'address' | 'online' | 'phone') || (isOnline ? 'online' : 'address')
       const locationPartial = !!payload?.location_partial
       let needsInput = false
       if (action.action_type === 'SCHEDULE') {
         const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
         const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
         const hasHold = !!payload?.hold_event_id
-        const hasUnfilledLocation = !isOnline && (
+        const needsPhysicalLocation = meetingType === 'address'
+        const hasUnfilledLocation = needsPhysicalLocation && (
           !payloadLocation
             ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
             : locationPartial
@@ -257,6 +259,8 @@ function generateBriefEmailHtml(
         location,
         locationPartial,
         isOnline,
+        meetingType,
+        cpPhone: (payload?.cp_phone as string) || null,
       })
     }).join('')}
   </div>
@@ -477,13 +481,15 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
       const payload = action.payload as Record<string, unknown> | null
       const payloadLocation = payload?.location as string | null
       const isOnline = !!payload?.is_online
+      const meetingType = (payload?.meeting_type as 'address' | 'online' | 'phone') || (isOnline ? 'online' : 'address')
       const locationPartial = !!payload?.location_partial
       let needsInput = false
       if (action.action_type === 'SCHEDULE') {
         const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
         const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
         const hasHold = !!payload?.hold_event_id
-        const hasUnfilledLocation = !isOnline && (
+        const needsPhysicalLocation = meetingType === 'address'
+        const hasUnfilledLocation = needsPhysicalLocation && (
           !payloadLocation
             ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
             : locationPartial
@@ -507,6 +513,8 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
         location,
         locationPartial,
         isOnline,
+        meetingType,
+        cpPhone: (payload?.cp_phone as string) || null,
       })
     }).join('')}
   </div>

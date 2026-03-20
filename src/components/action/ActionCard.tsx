@@ -107,6 +107,7 @@ export function ActionCard({
   const payloadLocation = actionPayload?.location as string | null
   const locationPartial = !!actionPayload?.location_partial
   const isOnline = !!actionPayload?.is_online
+  const meetingType = (actionPayload?.meeting_type as 'address' | 'online' | 'phone') || (isOnline ? 'online' : 'address')
   const hasHold = !!actionPayload?.hold_event_id
 
   // Determine if UDĚLAT should be disabled:
@@ -116,7 +117,8 @@ export function ActionCard({
   if (action.action_type === 'SCHEDULE') {
     const missingInfoFields = (action.missing_info as { label: string; value: string | null }[] | null) || []
     const hasUnfilledFields = missingInfoFields.length > 0 && missingInfoFields.some(f => f.value === null || f.value === '')
-    const hasUnfilledLocation = !isOnline && (
+    const needsPhysicalLocation = meetingType === 'address'
+    const hasUnfilledLocation = needsPhysicalLocation && (
       !payloadLocation
         ? missingInfoFields.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
         : locationPartial

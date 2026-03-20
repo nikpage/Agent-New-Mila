@@ -163,35 +163,51 @@ export async function POST(
         const holdStart = payload?.start as string | undefined
         const holdEnd = payload?.end as string | undefined
         const isOnline = !!payload?.is_online
-        const loc = isOnline ? undefined : (payload?.location as string | undefined)
+        const meetingType = (payload?.meeting_type as 'address' | 'online' | 'phone') || (isOnline ? 'online' : 'address')
+        const isRemote = meetingType === 'online' || meetingType === 'phone'
+        const loc = isRemote ? undefined : (payload?.location as string | undefined)
+        const cpPhone = (payload?.cp_phone as string) || null
         const userNotes = (payload?.userNotes as string) || ''
 
         const tz = settings.timezone || 'Europe/Prague'
         const formatTime = (date: Date) => date.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
         const formatDate = (date: Date) => date.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
 
-        // Determine Title: Location OR "HOVOR - CP Name" for online
-        let finalTitle = `HOVOR - ${cp.name || cp.primary_identifier}`
-        if (!isOnline && loc && loc.trim().length > 0) {
+        // Determine Title based on meeting type
+        const cpDisplayName = cp.name || cp.primary_identifier
+        let finalTitle: string
+        if (meetingType === 'phone') {
+          finalTitle = `TELEFONÁT - ${cpDisplayName}`
+        } else if (meetingType === 'online') {
+          finalTitle = `HOVOR - ${cpDisplayName}`
+        } else if (loc && loc.trim().length > 0) {
           finalTitle = loc
+        } else {
+          finalTitle = `Schůzka - ${cpDisplayName}`
         }
 
         const conversation = await getConversationById(action.conversation_id)
         const startDate = holdStart ? new Date(holdStart) : new Date()
         const endDate = holdEnd ? new Date(holdEnd) : new Date()
 
+        // Build phone-specific description prefix
+        const phoneInfo = meetingType === 'phone' && cpPhone
+          ? `Tel: ${cpPhone}\n\n`
+          : ''
+
         // Generate agenda text — goes into calendar invite description (not a separate email)
         const draft = await generateFinalDraft(
           conversation?.summary_json,
-          `Potvrzuji termín schůzky: ${formatDate(startDate)}, ${formatTime(startDate)} - ${formatTime(endDate)}.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
+          `Potvrzuji termín ${meetingType === 'phone' ? 'telefonátu' : 'schůzky'}: ${formatDate(startDate)}, ${formatTime(startDate)} - ${formatTime(endDate)}.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
           settings,
           userNotes || undefined,
           undefined,
-          cp.name || cp.primary_identifier
+          cpDisplayName
         )
-        const agendaText = draft.body
+        const agendaText = phoneInfo + draft.body
 
         // Confirm hold event in DB + GCal (adds CP as attendee, Google sends invite)
+        // Phone calls don't get Google Meet — only online meetings do
         await confirmSlot(
           action.user_id,
           holdEventId,
@@ -199,7 +215,7 @@ export async function POST(
           loc,
           finalTitle,
           agendaText,
-          isOnline
+          meetingType === 'online' // only create Google Meet for online, not phone
         )
 
         await completeAction(actionId)

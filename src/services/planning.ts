@@ -152,15 +152,20 @@ export async function generateActionProposal(
       // No holds created here — prevents race conditions from parallel planning.
       let schedulingPayload: Record<string, unknown> = {}
       if (proposal.actionType === 'SCHEDULE') {
+        const proposedMeetingType = proposal.meetingType || 'address'
+        const isRemoteMeeting = proposedMeetingType === 'phone' || proposedMeetingType === 'online'
+
         let meetingLocation: string | undefined
-        if (proposal.suggestedLocation) {
-          meetingLocation = proposal.suggestedLocation
-        } else if (cp.locations) {
-          const locations = cp.locations as unknown
-          if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
-            meetingLocation = locations[0]
-          } else if (typeof locations === 'string') {
-            meetingLocation = locations
+        if (!isRemoteMeeting) {
+          if (proposal.suggestedLocation) {
+            meetingLocation = proposal.suggestedLocation
+          } else if (cp.locations) {
+            const locations = cp.locations as unknown
+            if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
+              meetingLocation = locations[0]
+            } else if (typeof locations === 'string') {
+              meetingLocation = locations
+            }
           }
         }
 
@@ -182,7 +187,8 @@ export async function generateActionProposal(
           locationPartial = true
         }
 
-        if (!meetingLocation) {
+        // Only ask for address if this is an in-person meeting
+        if (!isRemoteMeeting && !meetingLocation) {
           // No location found at all — inject a missing_info field asking the user.
           // The 'adresa' keyword in the label is what EditForm uses to render it as a location field.
           const hasAddressField = proposal.missingInfo?.some(f => f.label.toLowerCase().includes('adresa'))
@@ -200,6 +206,9 @@ export async function generateActionProposal(
           location_partial: locationPartial,
           cp_availability: (proposal as Record<string, unknown>).cpAvailability as string || null,
           duration: settings.default_meeting_duration,
+          meeting_type: proposedMeetingType,
+          is_online: proposedMeetingType === 'online',
+          cp_phone: proposal.cpPhone || null,
         }
       }
 

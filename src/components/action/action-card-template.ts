@@ -43,6 +43,8 @@ export interface ActionCardEmailParams {
   location?: string | null
   locationPartial?: boolean
   isOnline?: boolean
+  meetingType?: 'address' | 'online' | 'phone'
+  cpPhone?: string | null
 }
 
 /**
@@ -80,7 +82,9 @@ function formatIntentHtml(text: string): string {
 }
 
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
-  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline } = params
+  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone } = params
+  // Resolve effective meeting type: use meetingType if set, fall back to isOnline for backward compat
+  const effectiveMeetingType = meetingType || (isOnline ? 'online' : 'address')
 
   const typeLabel = TYPE_LABEL[actionType] || actionType
   const typeVariant = TYPE_VARIANT[actionType] || 'default'
@@ -119,16 +123,18 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
       </div>
 
       ${actionType === 'SCHEDULE' ? `
-      <!-- LOCATION -->
+      <!-- LOCATION / MEETING TYPE -->
       <div style="padding: 0 24px 12px 24px; font-size: 14px;">
-        <span style="color: ${theme.colors.textMuted};">Místo: </span>
-        ${isOnline
-          ? `<span style="color: ${theme.colors.success}; font-weight: 500;">Online (Google Meet)</span>`
-          : location
-            ? locationPartial
-              ? `<span style="color: ${theme.colors.warning}; font-weight: 500;">${location} — ⚠ upřesněte přes UPRAVIT</span>`
-              : `<span style="color: ${theme.colors.text};">${location}</span>`
-            : `<span style="color: ${theme.colors.accent};">Chybí — doplňte přes UPRAVIT</span>`
+        ${effectiveMeetingType === 'online'
+          ? `<span style="color: ${theme.colors.textMuted};">Typ: </span><span style="color: ${theme.colors.success}; font-weight: 500;">Online (Google Meet)</span>`
+          : effectiveMeetingType === 'phone'
+            ? `<span style="color: ${theme.colors.textMuted};">Typ: </span><span style="color: ${theme.colors.success}; font-weight: 500;">Telefonát</span>${cpPhone ? `<br/><span style="color: ${theme.colors.textMuted};">Tel: </span><span style="color: ${theme.colors.text};">${cpPhone}</span>` : ''}`
+            : `<span style="color: ${theme.colors.textMuted};">Místo: </span>${location
+                ? locationPartial
+                  ? `<span style="color: ${theme.colors.warning}; font-weight: 500;">${location} — ⚠ upřesněte přes UPRAVIT</span>`
+                  : `<span style="color: ${theme.colors.text};">${location}</span>`
+                : `<span style="color: ${theme.colors.accent};">Chybí — doplňte přes UPRAVIT</span>`
+              }`
         }
       </div>
       ` : ''}
