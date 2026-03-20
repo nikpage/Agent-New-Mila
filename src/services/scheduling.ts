@@ -655,37 +655,10 @@ export async function proposeMeeting(
       return blockSlotForProposal(userId, cpId, preferredSlot, duration, location)
     }
 
-    // CP-stated time conflicts — book anyway, report conflict
-    const holdResult = await blockSlotForProposal(userId, cpId, preferredSlot, duration, location)
-    const slotConflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
-
-    if (slotConflicts.length > 0) {
-      const conflictInfos: ConflictInfo[] = slotConflicts.map(existing => {
-        const isImmovable = existing.weight == null || existing.weight >= 100
-        return {
-          existingEvent: existing,
-          existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
-          newScore: 0, // caller computes final priority score
-          recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
-        }
-      })
-
-      const hasImmovableConflict = conflictInfos.some(
-        c => c.recommendation === 'suggest_alternate'
-      )
-
-      return {
-        success: holdResult.success,
-        holdEvent: holdResult.holdEvent,
-        gcalEventId: holdResult.gcalEventId,
-        conflicts: conflictInfos,
-        error: hasImmovableConflict
-          ? `Requested time conflicts with immovable event: ${slotConflicts.map(c => c.title || 'existing event').join(', ')}`
-          : `Requested time conflicts with: ${slotConflicts.map(c => c.title || 'existing event').join(', ')}`,
-      }
-    }
-
-    return holdResult
+    // Preferred time conflicts — do NOT blindly double-book.
+    // Fall through to normal slot selection (picks nearest free slot).
+    // The caller's intent/rationale still references the CP's preferred time,
+    // so the user sees what was requested vs. what Mila actually booked.
   }
 
   // No preferred date — pick first free slot (already GCal-validated)
@@ -937,24 +910,28 @@ export async function optimizeScheduleActions(
             continue
           }
         } else if (isSlotAvailable(preferredSlot)) {
-          // Preferred time conflicts with calendar — CP stated it, so book anyway
-          // but report the conflict so the user knows.
-          const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
-          if (holdResult.success && holdResult.holdEvent) {
-            // We don't have the specific conflicting event details from findFreeSlots,
-            // but we know there IS a conflict because the slot isn't free.
-            // Use findAllConflicts to get the details for reporting.
-            const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
-            if (conflicts.length > 0) {
-              const conflictInfos: ConflictInfo[] = conflicts.map(existing => {
-                const isImmovable = existing.weight == null || existing.weight >= 100
-                return {
-                  existingEvent: existing,
-                  existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
-                  newScore: action.priority_score ?? 0,
-                  recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
-                }
-              })
+          // Preferred time conflicts with an existing calendar event.
+          // Do NOT double-book — find conflicts and decide:
+          // - If ALL conflicts are low-weight and new meeting is higher priority → book anyway (suggest moving existing)
+          // - Otherwise → fall through to normal slot selection (find nearest free slot)
+          const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
+          const newScore = action.priority_score ?? 0
+
+          const allConflictsMovable = conflicts.length > 0 && conflicts.every(existing => {
+            const w = existing.weight ?? 7 // user events default weight = 7
+            return w < 100 && newScore > calculateEventScore({ weight: w })
+          })
+
+          if (allConflictsMovable) {
+            // New meeting outprioritizes all conflicts — book and suggest moving existing events
+            const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+            if (holdResult.success && holdResult.holdEvent) {
+              const conflictInfos: ConflictInfo[] = conflicts.map(existing => ({
+                existingEvent: existing,
+                existingScore: calculateEventScore({ weight: existing.weight ?? 7 }),
+                newScore,
+                recommendation: 'move_existing' as const,
+              }))
               holdResult.conflicts = conflictInfos
               for (const conflict of conflicts) {
                 result.moveSuggestions.push({
@@ -963,13 +940,15 @@ export async function optimizeScheduleActions(
                   reason: `CP stated specific time: ${suggestedTime}`,
                 })
               }
+              await updateActionWithHold(action, holdResult, meetingLocation, settings)
+              result.optimized++
+              result.holds.push(holdResult.holdEvent)
+              bookedRanges.push(bookedRangeForHold(preferredDate, preferredEnd, holdResult))
+              continue
             }
-            await updateActionWithHold(action, holdResult, meetingLocation, settings)
-            result.optimized++
-            result.holds.push(holdResult.holdEvent)
-            bookedRanges.push(bookedRangeForHold(preferredDate, preferredEnd, holdResult))
-            continue
           }
+          // Conflict too strong — fall through to normal slot selection
+          // (finds nearest free slot that doesn't conflict)
         }
         // Preferred slot failed batch check (another action already booked it) —
         // fall through to normal slot selection below.
@@ -1121,20 +1100,24 @@ export async function scheduleSingleAction(
         return result
       }
     } else {
-      // CP stated time conflicts — book anyway but report conflict
-      const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
-      if (holdResult.success && holdResult.holdEvent) {
-        const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
-        if (conflicts.length > 0) {
-          const conflictInfos: ConflictInfo[] = conflicts.map(existing => {
-            const isImmovable = existing.weight == null || existing.weight >= 100
-            return {
-              existingEvent: existing,
-              existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
-              newScore: action.priority_score ?? 0,
-              recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
-            }
-          })
+      // Preferred time conflicts — only override if new meeting outprioritizes ALL conflicts
+      const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
+      const newScore = action.priority_score ?? 0
+
+      const allConflictsMovable = conflicts.length > 0 && conflicts.every(existing => {
+        const w = existing.weight ?? 7
+        return w < 100 && newScore > calculateEventScore({ weight: w })
+      })
+
+      if (allConflictsMovable) {
+        const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+        if (holdResult.success && holdResult.holdEvent) {
+          const conflictInfos: ConflictInfo[] = conflicts.map(existing => ({
+            existingEvent: existing,
+            existingScore: calculateEventScore({ weight: existing.weight ?? 7 }),
+            newScore,
+            recommendation: 'move_existing' as const,
+          }))
           holdResult.conflicts = conflictInfos
           for (const conflict of conflicts) {
             result.moveSuggestions.push({
@@ -1143,12 +1126,13 @@ export async function scheduleSingleAction(
               reason: `CP stated specific time: ${suggestedTime}`,
             })
           }
+          await updateActionWithHold(action, holdResult, meetingLocation, settings)
+          result.optimized++
+          result.holds.push(holdResult.holdEvent)
+          return result
         }
-        await updateActionWithHold(action, holdResult, meetingLocation, settings)
-        result.optimized++
-        result.holds.push(holdResult.holdEvent)
-        return result
       }
+      // Conflict too strong — fall through to normal slot selection
     }
   }
 

@@ -927,14 +927,14 @@ describe('Scheduling — Preferred Time Constraint', () => {
     }))
   })
 
-  it('when preferredDate conflicts with movable event (W<100), books hold AND returns move suggestion', async () => {
+  it('when preferredDate conflicts with movable event (W<100), falls through to nearest free slot', async () => {
     const { proposeMeeting } = await import('./scheduling')
 
     // Google Calendar says 9:00 is NOT free (not in free slots)
     mockFindFreeSlots.mockResolvedValue([
       { start: new Date('2026-03-11T10:00:00'), end: new Date('2026-03-11T10:30:00') },
     ])
-    // findAllConflicts returns the conflicting event for reporting
+    // findAllConflicts returns the conflicting event
     mockFindConflicts.mockResolvedValue([{
       id: 'existing-1',
       title: 'Team standup',
@@ -945,23 +945,21 @@ describe('Scheduling — Preferred Time Constraint', () => {
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
     mockCreateHoldEvent.mockResolvedValue({
       id: 'hold-1', status: 'tentative',
-      start_time: '2026-03-11T09:00:00Z', end_time: '2026-03-11T09:30:00Z',
+      start_time: '2026-03-11T10:00:00Z', end_time: '2026-03-11T10:30:00Z',
     })
 
     const preferredDate = new Date('2026-03-11T09:00:00')
     const result = await proposeMeeting('user-1', 'cp-1', 30, 'Notářská kancelář Praha 2', preferredDate)
 
-    // Hold is created at the stated time (CP hard constraint)
+    // Hold is created at the FREE slot (10:00), NOT at the conflicted 9:00
+    expect(result.success).toBe(true)
     expect(result.holdEvent).toBeDefined()
-    expect(mockCreateHoldEvent).toHaveBeenCalledTimes(1)
-    // Conflict info returned with move_existing recommendation
-    expect(result.conflicts).toBeDefined()
-    expect(result.conflicts!.length).toBe(1)
-    expect(result.conflicts![0].existingEvent.title).toBe('Team standup')
-    expect(result.conflicts![0].recommendation).toBe('move_existing')
+    expect(mockCreateTentativeCalendarEvent).toHaveBeenCalledWith('user-1', expect.objectContaining({
+      startTime: new Date('2026-03-11T10:00:00'),
+    }))
   })
 
-  it('when preferredDate conflicts with immovable event (W=100), books hold AND returns suggest_alternate', async () => {
+  it('when preferredDate conflicts with immovable event (W=100), falls through to nearest free slot', async () => {
     const { proposeMeeting } = await import('./scheduling')
 
     // 9:00 is NOT free on Google Calendar
@@ -978,21 +976,21 @@ describe('Scheduling — Preferred Time Constraint', () => {
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
     mockCreateHoldEvent.mockResolvedValue({
       id: 'hold-1', status: 'tentative',
-      start_time: '2026-03-11T09:00:00Z', end_time: '2026-03-11T09:30:00Z',
+      start_time: '2026-03-11T10:00:00Z', end_time: '2026-03-11T10:30:00Z',
     })
 
     const preferredDate = new Date('2026-03-11T09:00:00')
     const result = await proposeMeeting('user-1', 'cp-1', 30, 'Notářská kancelář Praha 2', preferredDate)
 
-    // Hold still created (consistent process)
+    // Immovable conflict — Mila picks the free slot instead, does NOT double-book
+    expect(result.success).toBe(true)
     expect(result.holdEvent).toBeDefined()
-    // Conflict flagged as immovable
-    expect(result.conflicts!.length).toBe(1)
-    expect(result.conflicts![0].recommendation).toBe('suggest_alternate')
-    expect(result.error).toContain('immovable')
+    expect(mockCreateTentativeCalendarEvent).toHaveBeenCalledWith('user-1', expect.objectContaining({
+      startTime: new Date('2026-03-11T10:00:00'),
+    }))
   })
 
-  it('when preferredDate conflicts with null-weight event, treats as immovable', async () => {
+  it('when preferredDate conflicts with null-weight event, falls through to nearest free slot', async () => {
     const { proposeMeeting } = await import('./scheduling')
 
     // 9:00 is NOT free on Google Calendar
@@ -1009,14 +1007,18 @@ describe('Scheduling — Preferred Time Constraint', () => {
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
     mockCreateHoldEvent.mockResolvedValue({
       id: 'hold-1', status: 'tentative',
-      start_time: '2026-03-11T09:00:00Z', end_time: '2026-03-11T09:30:00Z',
+      start_time: '2026-03-11T10:00:00Z', end_time: '2026-03-11T10:30:00Z',
     })
 
     const preferredDate = new Date('2026-03-11T09:00:00')
     const result = await proposeMeeting('user-1', 'cp-1', 30, undefined, preferredDate)
 
-    expect(result.conflicts![0].recommendation).toBe('suggest_alternate')
-    expect(result.conflicts![0].existingScore).toBe(Infinity)
+    // Null-weight event = unknown priority, don't override — pick free slot
+    expect(result.success).toBe(true)
+    expect(result.holdEvent).toBeDefined()
+    expect(mockCreateTentativeCalendarEvent).toHaveBeenCalledWith('user-1', expect.objectContaining({
+      startTime: new Date('2026-03-11T10:00:00'),
+    }))
   })
 
   it('without preferredDate, uses findBestSlots (existing behavior unchanged)', async () => {
@@ -1036,12 +1038,10 @@ describe('Scheduling — Preferred Time Constraint', () => {
     expect(mockFindFreeSlots).toHaveBeenCalled()
   })
 
-  it('the notary bug: stated 9:00 AM with conflict must NOT silently book 10:35', async () => {
-    // This is the exact bug: email says "notary at 9:00 AM", calendar has
-    // conflict at 9:00 (morning meeting 8:30-9:30). Old code didn't check GCal
-    // and silently booked at 9:00 without reporting the conflict.
-    // New code: findBestSlots checks GCal, sees 9:00 isn't free, books anyway
-    // (CP hard constraint) but flags the conflict.
+  it('the notary bug: stated 9:00 AM with conflict picks nearest free slot instead of double-booking', async () => {
+    // Bug: email says "notary at 9:00 AM", calendar has conflict at 9:00.
+    // Old code: booked at 9:00 ON TOP of existing event.
+    // Fixed: Mila respects existing events and picks 10:35 (first free slot).
     const { proposeMeeting } = await import('./scheduling')
 
     // Google Calendar shows 9:00 is NOT free (morning meeting blocks it)
@@ -1049,7 +1049,6 @@ describe('Scheduling — Preferred Time Constraint', () => {
     mockFindFreeSlots.mockResolvedValue([
       { start: new Date('2026-03-11T10:35:00'), end: new Date('2026-03-11T11:05:00') },
     ])
-    // findAllConflicts returns the actual conflicting event for reporting
     mockFindConflicts.mockResolvedValue([{
       id: 'morning-meeting',
       title: 'Interní porada',
@@ -1060,19 +1059,16 @@ describe('Scheduling — Preferred Time Constraint', () => {
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-notary' })
     mockCreateHoldEvent.mockResolvedValue({
       id: 'hold-notary', status: 'tentative',
-      start_time: '2026-03-11T09:00:00Z', end_time: '2026-03-11T09:30:00Z',
+      start_time: '2026-03-11T10:35:00Z', end_time: '2026-03-11T11:05:00Z',
     })
 
     const notaryTime = new Date('2026-03-11T09:00:00')
     const result = await proposeMeeting('user-1', 'cp-1', 30, 'Notářská kancelář Praha 2', notaryTime)
 
-    // Hold booked at 9:00 (the stated time), NOT 10:35
+    // Hold booked at 10:35 (first free slot), NOT at the conflicted 9:00
+    expect(result.success).toBe(true)
     expect(mockCreateTentativeCalendarEvent).toHaveBeenCalledWith('user-1', expect.objectContaining({
-      startTime: notaryTime,
+      startTime: new Date('2026-03-11T10:35:00'),
     }))
-    // Conflict surfaced — user sees it
-    expect(result.conflicts!.length).toBe(1)
-    expect(result.conflicts![0].existingEvent.title).toBe('Interní porada')
-    expect(result.conflicts![0].recommendation).toBe('move_existing') // W=3, movable
   })
 })
