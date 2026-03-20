@@ -426,6 +426,34 @@ function DirectExecuteView({ actionId, token }: { actionId: string; token: strin
         )
       })()}
 
+      {/* Conflict warning banner */}
+      {action.action_type === 'SCHEDULE' && (() => {
+        const payload = action.payload as Record<string, unknown> | null
+        const conflicts = payload?.conflicts as { event_title: string; recommendation: string }[] | undefined
+        if (!conflicts || conflicts.length === 0) return null
+        return (
+          <div style={{
+            margin: `0 ${theme.spacing.lg} ${theme.spacing.sm}`,
+            padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+            backgroundColor: '#fef2f2',
+            border: '2px solid #dc2626',
+            borderRadius: '8px',
+          }}>
+            <div style={{ fontSize: theme.typography.sizes.sm, fontWeight: 700, color: '#dc2626', marginBottom: '6px' }}>
+              ⚠ KOLIZE V KALENDÁŘI
+            </div>
+            {conflicts.map((c, i) => (
+              <div key={i} style={{ fontSize: theme.typography.sizes.sm, color: '#991b1b', marginBottom: '4px' }}>
+                <strong>{c.event_title}</strong> — {c.recommendation === 'move_existing' ? 'Mila navrhuje přesunout' : 'nelze přesunout'}
+              </div>
+            ))}
+            <div style={{ fontSize: theme.typography.sizes.xs, color: '#991b1b', marginTop: '6px' }}>
+              Zkontrolujte přes UPRAVIT nebo tento termín odmítněte.
+            </div>
+          </div>
+        )
+      })()}
+
       <div style={{
         padding: `${theme.spacing.md} ${theme.spacing.lg}`,
         display: 'flex',

@@ -46,6 +46,7 @@ export interface ActionCardEmailParams {
   meetingType?: 'address' | 'online' | 'phone'
   cpPhone?: string | null
   slotText?: string | null
+  conflicts?: { event_title: string; recommendation: 'move_existing' | 'suggest_alternate' }[]
 }
 
 /**
@@ -83,7 +84,7 @@ function formatIntentHtml(text: string): string {
 }
 
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
-  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone, slotText } = params
+  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone, slotText, conflicts } = params
   // Resolve effective meeting type: use meetingType if set, fall back to isOnline for backward compat
   const effectiveMeetingType = meetingType || (isOnline ? 'online' : 'address')
 
@@ -138,6 +139,19 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
                 : `<span style="color: ${theme.colors.accent};">Chybí — doplňte přes UPRAVIT</span>`
               }`
         }
+      </div>
+      ` : ''}
+
+      ${conflicts && conflicts.length > 0 ? `
+      <!-- CONFLICT WARNING -->
+      <div style="margin: 0 24px 12px 24px; padding: 12px 16px; background-color: #fef2f2; border: 2px solid #dc2626; border-radius: 8px;">
+        <div style="font-size: 14px; font-weight: 700; color: #dc2626; margin-bottom: 6px;">⚠ KOLIZE V KALENDÁŘI</div>
+        ${conflicts.map(c =>
+          `<div style="font-size: 14px; color: #991b1b; margin-bottom: 4px;">
+            <strong>${c.event_title}</strong> — ${c.recommendation === 'move_existing' ? 'Mila navrhuje přesunout' : 'nelze přesunout'}
+          </div>`
+        ).join('')}
+        <div style="font-size: 13px; color: #991b1b; margin-top: 6px;">Zkontrolujte přes UPRAVIT nebo tento termín odmítněte.</div>
       </div>
       ` : ''}
 

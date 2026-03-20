@@ -278,6 +278,7 @@ function generateBriefEmailHtml(
         meetingType,
         cpPhone: (payload?.cp_phone as string) || null,
         slotText,
+        conflicts: (payload?.conflicts as { event_title: string; recommendation: 'move_existing' | 'suggest_alternate' }[]) || undefined,
       })
     }).join('')}
   </div>
@@ -549,6 +550,7 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
         meetingType,
         cpPhone: (payload?.cp_phone as string) || null,
         slotText,
+        conflicts: (payload?.conflicts as { event_title: string; recommendation: 'move_existing' | 'suggest_alternate' }[]) || undefined,
       })
     }).join('')}
   </div>
