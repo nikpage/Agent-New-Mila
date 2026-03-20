@@ -308,28 +308,19 @@ export async function sendInstantNotifications(
 
   console.log(`[InstantNotify] ${actions.length} high-priority action(s)`)
 
-  // Schedule urgent SCHEDULE actions in parallel with per-action timeout.
-  // Non-urgent SCHEDULE actions wait for AM/PM brief batch optimizer.
-  const SINGLE_ACTION_TIMEOUT = 25_000 // 25s per action — leaves headroom within 60s route limit
+  // Schedule urgent SCHEDULE actions SEQUENTIALLY — each creates a hold on GCal,
+  // and the next one must see it to avoid double-booking the same slot.
+  // No timeout — a half-finished state (hold on GCal, no payload update) is worse than slow.
   const urgentScheduleActions = actions.filter(a => a.action_type === 'SCHEDULE')
-  if (urgentScheduleActions.length > 0) {
-    const scheduleResults = await Promise.allSettled(
-      urgentScheduleActions.map(action =>
-        Promise.race([
-          scheduleSingleAction(action),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`scheduleSingleAction timed out after ${SINGLE_ACTION_TIMEOUT}ms`)), SINGLE_ACTION_TIMEOUT)
-          ),
-        ]).then(result => {
-          if (result.optimized > 0 || result.moveSuggestions.length > 0) {
-            console.log(`[InstantNotify] Action ${action.id}: scheduled — ${result.moveSuggestions.length} conflicts`)
-          }
-        }).catch(err => {
-          console.error(`[InstantNotify] Action ${action.id}: scheduling failed, continuing:`, err)
-        })
-      )
-    )
-    console.log(`[InstantNotify] Scheduling complete: ${scheduleResults.filter(r => r.status === 'fulfilled').length}/${urgentScheduleActions.length} succeeded`)
+  for (const action of urgentScheduleActions) {
+    try {
+      const scheduleResult = await scheduleSingleAction(action)
+      if (scheduleResult.optimized > 0 || scheduleResult.moveSuggestions.length > 0) {
+        console.log(`[InstantNotify] Action ${action.id}: scheduled — ${scheduleResult.moveSuggestions.length} conflicts`)
+      }
+    } catch (scheduleError) {
+      console.error(`[InstantNotify] Action ${action.id}: scheduling failed, continuing:`, scheduleError)
+    }
   }
 
   // Re-fetch actions after scheduling (holds may have been created, payloads updated)
