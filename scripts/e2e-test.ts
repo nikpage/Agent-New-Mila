@@ -83,6 +83,156 @@ interface TestEmail {
   body: string
 }
 
+/**
+ * History emails are injected BEFORE the main test emails to give Mila
+ * realistic conversation context. They form a thread via In-Reply-To headers.
+ * direction: 'inbound' = CP → user, 'outbound' = user → CP
+ */
+interface HistoryEmail {
+  cpKey: string
+  direction: 'inbound' | 'outbound'
+  from: string
+  to: string
+  subject: string
+  body: string
+  /** Days ago this email was "sent" (for realistic Date headers) */
+  daysAgo: number
+}
+
+// ─── Eva Negotiation History (Thread 1: Lease negotiation) ───────────────────
+// Realistic back-and-forth about office space at Sokolovská, Karlín.
+// This gives Mila context: the address is Sokolovská 46/51, Praha 8 — NOT
+// Eva's signature address (Ďáblická). The negotiation settled at 450 CZK/m2, 3yr.
+
+const EVA_EMAIL = 'ainikpage+dvorakova.eva@gmail.com'
+const EVA_FROM = 'Eva Dvorakova <ainikpage+dvorakova.eva@gmail.com>'
+// USER_EMAIL is resolved at runtime from Gmail profile
+
+const EVA_NEGOTIATION_SUBJECT = `[${RUN_ID}] Karlin office space — Sokolovská`
+
+const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
+  {
+    cpKey: 'eva',
+    direction: 'inbound',
+    from: EVA_FROM,
+    subject: EVA_NEGOTIATION_SUBJECT,
+    daysAgo: 12,
+    body: [
+      'Dobrý den,',
+      '',
+      'I found your listing for office space in Karlín on Sokolovská.',
+      'We are looking for approx 200m2 for our company Dvorak & Partners s.r.o.',
+      '',
+      'Could you send us the details — floor plan, price per m2, and available lease terms?',
+      '',
+      'Děkuji,',
+      'Eva Dvořáková',
+      'Dvorak & Partners s.r.o.',
+      'Ďáblická, 182 00 Ďáblice, Czechia',
+    ].join('\n'),
+  },
+  {
+    cpKey: 'eva',
+    direction: 'outbound',
+    from: '', // filled at runtime with user's email
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 11,
+    body: [
+      'Dobrý den paní Dvořáková,',
+      '',
+      'The office is at Sokolovská 46/51, Praha 8 — 3rd floor, 200m2 open plan with',
+      '2 meeting rooms. Recently renovated, AC, fiber internet ready.',
+      '',
+      'Price: 465 CZK/m2/month + service charges.',
+      'Minimum lease: 1 year.',
+      '',
+      'Happy to arrange a viewing anytime this week.',
+      '',
+      'S pozdravem',
+    ].join('\n'),
+  },
+  {
+    cpKey: 'eva',
+    direction: 'inbound',
+    from: EVA_FROM,
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 9,
+    body: [
+      'Děkuji za informace.',
+      '',
+      'The space looks good. However, 465 CZK/m2 is above our budget.',
+      'We can offer 440 CZK/m2/month with a 10-year lease commitment.',
+      'A longer lease should justify a lower rate.',
+      '',
+      'We viewed the space yesterday and it fits our needs.',
+      '',
+      'Eva Dvořáková',
+      'Dvorak & Partners s.r.o.',
+    ].join('\n'),
+  },
+  {
+    cpKey: 'eva',
+    direction: 'outbound',
+    from: '', // filled at runtime
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 7,
+    body: [
+      'Paní Dvořáková,',
+      '',
+      'Thank you for the offer. I spoke with the property owner.',
+      '',
+      'We can meet at 450 CZK/m2/month, but minimum 3-year lease.',
+      '10 years is too long a commitment for the owner at a reduced rate.',
+      '',
+      'This is the best we can do. Let me know if this works for you.',
+      '',
+      'S pozdravem',
+    ].join('\n'),
+  },
+  {
+    cpKey: 'eva',
+    direction: 'inbound',
+    from: EVA_FROM,
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 5,
+    body: [
+      'Dobrý den,',
+      '',
+      'After discussing with our board, we accept 450 CZK/m2/month for 3 years.',
+      'This works for us.',
+      '',
+      'When can we arrange the contract signing? We need to move in by mid-April.',
+      '',
+      'Děkuji,',
+      'Eva Dvořáková',
+    ].join('\n'),
+  },
+  {
+    cpKey: 'eva',
+    direction: 'outbound',
+    from: '', // filled at runtime
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 4,
+    body: [
+      'Výborně, paní Dvořáková!',
+      '',
+      'I will have the lease contract prepared. Our lawyer will send the draft',
+      'for your review within 2 business days.',
+      '',
+      'Once both sides approve the text, we can schedule the signing.',
+      'Mid-April move-in should be no problem.',
+      '',
+      'S pozdravem',
+    ].join('\n'),
+  },
+]
+
+// ─── Eva Finalization Email (Thread 2: New thread — assumes deal is done) ────
+// Separate thread from the negotiation. Eva assumes agreement, wants to
+// finalize signing details "around 9 or 10" — this is a loose time hint,
+// not a hard constraint. Given the context, Mila should suggest a CALL
+// (not face-to-face) to finalize details, scheduled between user's meetings.
+
 const TEST_EMAILS: TestEmail[] = [
   {
     cpKey: 'bob',
@@ -102,18 +252,22 @@ const TEST_EMAILS: TestEmail[] = [
   },
   {
     cpKey: 'eva',
-    from: 'Eva Dvorakova <ainikpage+dvorakova.eva@gmail.com>',
-    subject: `[${RUN_ID}] Follow-up on Karlin office lease`,
+    from: EVA_FROM,
+    subject: `[${RUN_ID}] Contract signing — Sokolovská office`,
     body: [
-      'Dobry den,',
+      'Dobrý den,',
       '',
-      'We spoke last week about the office space in Karlin, 200m2.',
-      'Our company is ready to sign a 3-year lease at 450 CZK/m2/month.',
+      'Following up on our agreement for the Karlín office at 450 CZK/m2, 3 years.',
+      'Our lawyer reviewed the draft and we are ready to sign.',
       '',
-      'Can we finalize the contract tomorrow morning at around 9 or 10? We need to move in by April.',
+      'Can we finalize the contract tomorrow morning at around 9 or 10?',
+      'A quick call would work — we just need to confirm the final details',
+      'before the signing appointment.',
       '',
-      'Dekuji,',
-      'Eva Dvorakova',
+      'We need to move in by April so time is tight.',
+      '',
+      'Děkuji,',
+      'Eva Dvořáková',
       'Dvorak & Partners s.r.o.',
       'Ďáblická, 182 00 Ďáblice, Czechia',
     ].join('\n'),
@@ -176,8 +330,8 @@ const CP_RESPONSE_PROFILES: Record<string, { persona: string; context: string; g
   },
   eva: {
     persona: 'Eva Dvorakova, representing Dvorak & Partners s.r.o.',
-    context: 'Negotiating a 3-year lease for 200m2 office in Karlin at 450 CZK/m2/month. Need to move in by April.',
-    guidance: 'Confirm 450 CZK/m2 is your final offer. If a meeting was proposed, agree. Ask about 3 dedicated parking spots for COO, CFO, and company car.',
+    context: 'Lease deal is done: 450 CZK/m2, 3yr, Sokolovská 46/51 Karlín. Need to sign contract and move in by April. You asked for a call "around 9 or 10" to finalize details before signing.',
+    guidance: 'If Mila proposed a call time, confirm it. Ask about 3 dedicated parking spots for COO, CFO, and company car. Ask when the actual signing appointment at the office will be.',
   },
   martin: {
     persona: 'Martin Kral, handling the Smichov property purchase',
@@ -407,6 +561,88 @@ async function injectEmails(userId: string, emails: TestEmail[]): Promise<Inject
   await new Promise(r => setTimeout(r, 3000))
 
   return injected
+}
+
+// ─── Inject history emails (backfill conversation context) ──────────────────
+
+/**
+ * Inject a multi-round email thread to give Mila conversation history.
+ * Uses In-Reply-To and References headers so Gmail groups them into a thread.
+ * Both inbound (CP → user) and outbound (user → CP) messages are injected.
+ */
+async function injectHistoryThread(
+  userId: string,
+  historyEmails: Omit<HistoryEmail, 'to'>[],
+  label: string
+): Promise<string[]> {
+  log('history', `Injecting ${historyEmails.length} history emails for "${label}"...`)
+
+  const gmail = await getGmailClient(userId)
+  const userEmail = await getUserEmail(userId)
+  const gmailIds: string[] = []
+  const messageIds: string[] = []
+  let threadId: string | undefined
+
+  for (let i = 0; i < historyEmails.length; i++) {
+    const email = historyEmails[i]
+    const rfcMessageId = `<${RUN_ID}-history-${label}-${i}@e2e-test.local>`
+    messageIds.push(rfcMessageId)
+
+    const fromAddr = email.direction === 'outbound' ? userEmail : email.from
+    const toAddr = email.direction === 'outbound' ? extractEmail(email.from) : userEmail
+
+    // Backdate the email
+    const sendDate = new Date()
+    sendDate.setDate(sendDate.getDate() - email.daysAgo)
+
+    const headers: string[] = [
+      `From: ${fromAddr}`,
+      `To: ${toAddr}`,
+      `Subject: ${email.subject}`,
+      `Date: ${sendDate.toUTCString()}`,
+      `Message-ID: ${rfcMessageId}`,
+    ]
+
+    // Threading headers — reference all previous messages in the thread
+    if (i > 0) {
+      headers.push(`In-Reply-To: ${messageIds[i - 1]}`)
+      headers.push(`References: ${messageIds.join(' ')}`)
+    }
+
+    headers.push(
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset="UTF-8"'
+    )
+
+    const rfc2822 = [...headers, '', email.body].join('\r\n')
+
+    // For outbound emails, put them in SENT; for inbound, put in INBOX
+    const labelIds = email.direction === 'outbound' ? ['SENT'] : ['INBOX']
+
+    const res = await gmail.users.messages.insert({
+      userId: 'me',
+      requestBody: {
+        raw: encodeRaw(rfc2822),
+        labelIds,
+        ...(threadId ? { threadId } : {}),
+      },
+      internalDateSource: 'dateHeader',
+    })
+
+    const msgId = res.data.id || 'unknown'
+    gmailIds.push(msgId)
+
+    // Capture threadId from first message so subsequent ones join the same thread
+    if (!threadId && res.data.threadId) {
+      threadId = res.data.threadId
+    }
+
+    const arrow = email.direction === 'outbound' ? '→' : '←'
+    log('history', `  ${arrow} [${email.daysAgo}d ago] ${email.subject.replace(`[${RUN_ID}] `, '').slice(0, 50)} → ${msgId}`)
+  }
+
+  log('history', `Injected ${gmailIds.length} history emails into thread ${threadId || '(new)'}`)
+  return gmailIds
 }
 
 // ─── Run agent pipeline ─────────────────────────────────────────────────────
@@ -780,6 +1016,31 @@ async function main() {
 
     let injected: InjectedEmail[] = []
     if (!flags.has('--skip-inject')) {
+      // ── Phase 0: Inject conversation history (backfill) ──────────────
+      // Eva's negotiation thread gives Mila context about the Sokolovská
+      // address and the agreed 450 CZK/m2 terms — before the "current" email arrives.
+      console.log()
+      console.log('─── Phase 0: Injecting Conversation History ────────────')
+
+      const evaHistoryIds = await injectHistoryThread(
+        USER_ID,
+        EVA_NEGOTIATION_HISTORY,
+        'eva-negotiation'
+      )
+      allGmailIds.push(...evaHistoryIds)
+
+      // Run agent once to process history — creates conversations + context
+      log('history', 'Running agent to process history emails...')
+      const historyRun = await runAgent(USER_ID, 'H0')
+      log('history', `History processed: ${historyRun.emailsIngested} emails, ${historyRun.conversationsUpdated} conversations`)
+
+      // Brief pause for Gmail indexing before Round 1 emails
+      await new Promise(r => setTimeout(r, 2000))
+
+      console.log()
+      console.log('─── Phase 1: Injecting Current Emails ─────────────────')
+
+      // ── Phase 1: Inject "current" emails (the ones that trigger actions) ──
       injected = await injectEmails(USER_ID, ALL_TEST_SENDERS)
       allGmailIds.push(...injected.map(e => e.gmailId))
     } else {
