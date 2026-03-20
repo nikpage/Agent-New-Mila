@@ -24,6 +24,7 @@ export {
   proposeMeeting,
   proposeMeetingMultipleCPs,
   optimizeScheduleActions,
+  scheduleSingleAction,
   acceptInvitation,
   declineInvitation,
   formatSlotsForDisplay,
