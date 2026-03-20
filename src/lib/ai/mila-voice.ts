@@ -56,6 +56,7 @@ RULES:
 - Output in CZECH. Plain text only. No markdown.
 - Address user as "vy" (you). Never "uživatel".
 - intent_cs: Combine the business stakes with the scheduling details. A human assistant wouldn't just say "I blocked a slot" — she'd say "Novotný needs signature by 5pm or the deal falls through. I blocked 9:00 at the notary."
+- Do NOT include the slot date/time separately (no "Termín: ..." line). The time is displayed by the card template. You can reference the time naturally in the narrative (e.g. "Rezervovala jsem hovor v 9:30") but do NOT repeat it as a standalone line.
 - missingInfo: array of questions. Each has "label" (full question in Czech) and "value": null.
 ${scheduling.locationStatus === 'missing' ? '- Location is missing — include a question about meeting location.' : ''}
 ${scheduling.locationStatus === 'partial' ? '- Location unverified — include a question to clarify.' : ''}

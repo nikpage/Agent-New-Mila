@@ -359,7 +359,9 @@ function DirectExecuteView({ actionId, token }: { actionId: string; token: strin
   if (!actionData) return <ErrorDisplay message="Akce nenalezena" />
 
   const { action, cp, conversation } = actionData
-  const intent = action.intent_cs || action.rationale_cs || action.rationale || ''
+  const rawIntent = action.intent_cs || action.rationale_cs || action.rationale || ''
+  // Strip "Termín: ..." line — the template renders slot time separately from payload
+  const intent = rawIntent.replace(/\n*Termín:.*$/m, '').trim()
   const cpName = cp.name || cp.primary_identifier
   const typeLabel = action.action_type === 'SCHEDULE' ? 'Schůzka' : 'Úkol'
   const isCompleted = action.status === 'completed'
@@ -394,12 +396,24 @@ function DirectExecuteView({ actionId, token }: { actionId: string; token: strin
         const isOnline = !!payload?.is_online
         const mt = (payload?.meeting_type as string) || (isOnline ? 'online' : 'address')
         const cpPhone = payload?.cp_phone as string | null
+        // Build slot text from hold start/end
+        let cardSlotText: string | null = null
+        if (payload?.start && payload?.end) {
+          const tz = 'Europe/Prague'
+          const s = new Date(payload.start as string)
+          const e = new Date(payload.end as string)
+          const dateStr = s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
+          const startStr = s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+          const endStr = e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+          cardSlotText = `${dateStr}, ${startStr} - ${endStr}`
+        }
         return (
           <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.sm}`, fontSize: theme.typography.sizes.sm }}>
+            {cardSlotText && <><span style={{ color: theme.colors.textMuted }}>Termín: </span><span style={{ color: theme.colors.text, fontWeight: 500 }}>{cardSlotText}</span><br/></>}
             {mt === 'online'
               ? <><span style={{ color: theme.colors.textMuted }}>Typ: </span><span style={{ color: theme.colors.success, fontWeight: 500 }}>Online (Google Meet)</span></>
               : mt === 'phone'
-                ? <><span style={{ color: theme.colors.textMuted }}>Typ: </span><span style={{ color: theme.colors.success, fontWeight: 500 }}>Telefonát</span>{cpPhone && <><br/><span style={{ color: theme.colors.textMuted }}>Tel: </span><span style={{ color: theme.colors.text }}>{cpPhone}</span></>}</>
+                ? <><span style={{ color: theme.colors.textMuted }}>Typ: </span><span style={{ color: theme.colors.success, fontWeight: 500 }}>Telefonát</span>{cpPhone && <><br/><span style={{ color: theme.colors.textMuted }}>Tel: </span><span style={{ color: theme.colors.text, fontWeight: 500 }}>{cpPhone}</span></>}</>
                 : <><span style={{ color: theme.colors.textMuted }}>Místo: </span>
                     {location
                       ? locationPartial

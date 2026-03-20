@@ -1236,16 +1236,15 @@ async function updateActionWithHold(
     })),
   }
 
-  // Fallback intent with slot text appended (used if AI call fails or times out)
-  const fallbackIntent = (action.intent_cs || '') + '\n\nTermín: ' + slotText
-
+  // Persist hold data + original intent to DB FIRST (safety against timeout).
+  // Slot time is rendered by the email template from payload.start/end — NOT in intent_cs.
   await updateAction(action.id, {
-    intent_cs: fallbackIntent,
+    intent_cs: action.intent_cs || '',
     payload: holdPayload,
   })
 
   // Now try to rewrite intent_cs via mila-voice — optional beautification.
-  // If this times out, the hold data and fallback intent are already persisted above.
+  // If this times out, the hold data and original intent are already persisted above.
   try {
     const voiceResult = await generateSchedulingIntent(
       action.intent_cs || action.rationale_cs || '',
@@ -1264,12 +1263,7 @@ async function updateActionWithHold(
       '',
       settings
     )
-    let intentCs = voiceResult.intent_cs
-
-    // Safety net: if AI dropped the hold time, force-include
-    if (!intentCs.includes(startStr)) {
-      intentCs = intentCs + '\n\nTermín: ' + slotText
-    }
+    const intentCs = voiceResult.intent_cs
 
     await updateAction(action.id, {
       intent_cs: intentCs,
@@ -1277,7 +1271,7 @@ async function updateActionWithHold(
     })
   } catch (voiceError) {
     console.error('[optimizer] generateSchedulingIntent failed, fallback intent already persisted:', voiceError)
-    // No action needed — fallbackIntent + holdPayload already written above
+    // No action needed — original intent + holdPayload already written above
   }
 }
 

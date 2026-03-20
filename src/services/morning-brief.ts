@@ -243,13 +243,29 @@ function generateBriefEmailHtml(
         needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
       }
       const location = payloadLocation || null
+      // Build slotText from hold start/end if present
+      let slotText: string | null = null
+      if (action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
+        const tz = 'Europe/Prague'
+        const s = new Date(payload.start as string)
+        const e = new Date(payload.end as string)
+        const dateStr = s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
+        const startStr = s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+        const endStr = e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+        slotText = `${dateStr}, ${startStr} - ${endStr}`
+      }
+      // Strip any "Termín: ..." line from intent — template renders it separately
+      let intentText = action.intent_cs || action.rationale_cs || action.rationale
+      if (slotText) {
+        intentText = intentText.replace(/\n*Termín:.*$/m, '').trim()
+      }
       return getActionCardEmailHtml({
         cpName,
         cpRole,
         topic,
         actionType: action.action_type,
         urgency: action.urgency,
-        intent: action.intent_cs || action.rationale_cs || action.rationale,
+        intent: intentText,
         actionUrl,
         editUrl,
         executeUrl,
@@ -261,6 +277,7 @@ function generateBriefEmailHtml(
         isOnline,
         meetingType,
         cpPhone: (payload?.cp_phone as string) || null,
+        slotText,
       })
     }).join('')}
   </div>
@@ -497,13 +514,29 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
         needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
       }
       const location = payloadLocation || null
+      // Build slotText from hold start/end if present
+      let slotText: string | null = null
+      if (action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
+        const tz = 'Europe/Prague'
+        const s = new Date(payload.start as string)
+        const e = new Date(payload.end as string)
+        const dateStr = s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
+        const startStr = s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+        const endStr = e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+        slotText = `${dateStr}, ${startStr} - ${endStr}`
+      }
+      // Strip any "Termín: ..." line from intent — template renders it separately
+      let intentText = action.intent_cs || action.rationale_cs || action.rationale
+      if (slotText) {
+        intentText = intentText.replace(/\n*Termín:.*$/m, '').trim()
+      }
       return getActionCardEmailHtml({
         cpName,
         cpRole,
         topic,
         actionType: action.action_type,
         urgency: action.urgency,
-        intent: action.intent_cs || action.rationale_cs || action.rationale,
+        intent: intentText,
         actionUrl,
         editUrl,
         executeUrl,
@@ -515,6 +548,7 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
         isOnline,
         meetingType,
         cpPhone: (payload?.cp_phone as string) || null,
+        slotText,
       })
     }).join('')}
   </div>

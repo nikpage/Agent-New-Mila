@@ -45,6 +45,7 @@ export interface ActionCardEmailParams {
   isOnline?: boolean
   meetingType?: 'address' | 'online' | 'phone'
   cpPhone?: string | null
+  slotText?: string | null
 }
 
 /**
@@ -82,7 +83,7 @@ function formatIntentHtml(text: string): string {
 }
 
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
-  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone } = params
+  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone, slotText } = params
   // Resolve effective meeting type: use meetingType if set, fall back to isOnline for backward compat
   const effectiveMeetingType = meetingType || (isOnline ? 'online' : 'address')
 
@@ -123,12 +124,13 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
       </div>
 
       ${actionType === 'SCHEDULE' ? `
-      <!-- LOCATION / MEETING TYPE -->
+      <!-- SCHEDULE METADATA: slot, meeting type, location/phone -->
       <div style="padding: 0 24px 12px 24px; font-size: 14px;">
+        ${slotText ? `<span style="color: ${theme.colors.textMuted};">Termín: </span><span style="color: ${theme.colors.text}; font-weight: 500;">${slotText}</span><br/>` : ''}
         ${effectiveMeetingType === 'online'
           ? `<span style="color: ${theme.colors.textMuted};">Typ: </span><span style="color: ${theme.colors.success}; font-weight: 500;">Online (Google Meet)</span>`
           : effectiveMeetingType === 'phone'
-            ? `<span style="color: ${theme.colors.textMuted};">Typ: </span><span style="color: ${theme.colors.success}; font-weight: 500;">Telefonát</span>${cpPhone ? `<br/><span style="color: ${theme.colors.textMuted};">Tel: </span><span style="color: ${theme.colors.text};">${cpPhone}</span>` : ''}`
+            ? `<span style="color: ${theme.colors.textMuted};">Typ: </span><span style="color: ${theme.colors.success}; font-weight: 500;">Telefonát</span>${cpPhone ? `<br/><span style="color: ${theme.colors.textMuted};">Tel: </span><span style="color: ${theme.colors.text}; font-weight: 500;">${cpPhone}</span>` : ''}`
             : `<span style="color: ${theme.colors.textMuted};">Místo: </span>${location
                 ? locationPartial
                   ? `<span style="color: ${theme.colors.warning}; font-weight: 500;">${location} — ⚠ upřesněte přes UPRAVIT</span>`

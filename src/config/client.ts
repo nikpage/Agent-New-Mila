@@ -167,6 +167,12 @@ export function getAISystemPrompt(settings: UserSettings): string {
   if (settings.lawyer_notary) lines.push(`User's lawyer/notary: ${settings.lawyer_notary}`)
 
   lines.push('')
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const workingDaysList = settings.working_days.map(d => dayNames[d]).join(', ')
+  lines.push(`Working hours: ${settings.working_hours_start}:00–${settings.working_hours_end}:00, days: ${workingDaysList}`)
+  lines.push(`Timezone: ${settings.timezone}`)
+
+  lines.push('')
   lines.push(`High-value signals: ${settings.high_value_signals.join(', ')}`)
   lines.push(`Language: ${settings.ai_language === 'cs' ? 'Czech' : settings.ai_language}`)
   lines.push(`Tone with counterparties: ${settings.ai_tone_cp}`)
