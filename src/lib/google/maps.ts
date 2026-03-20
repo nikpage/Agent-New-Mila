@@ -44,7 +44,8 @@ export async function getTravelTime(
 
   try {
     const response = await fetch(
-      `https://maps.googleapis.com/maps/api/distancematrix/json?${params.toString()}`
+      `https://maps.googleapis.com/maps/api/distancematrix/json?${params.toString()}`,
+      { signal: AbortSignal.timeout(8_000) }
     )
 
     if (!response.ok) {
