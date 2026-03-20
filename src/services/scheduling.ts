@@ -1209,8 +1209,34 @@ async function updateActionWithHold(
     recommendation: c.recommendation,
   }))
 
-  // Rewrite intent_cs via mila-voice so the action card matches the hold
-  let intentCs = action.intent_cs || ''
+  // CRITICAL: Persist hold data to DB FIRST, before the AI call.
+  // If the Vercel timeout kills us during generateSchedulingIntent,
+  // the action card still has hold_event_id, location, start, end.
+  const holdPayload = {
+    ...payload,
+    hold_event_id: hold.id,
+    gcal_event_id: holdResult.gcalEventId || null,
+    start: hold.start_time,
+    end: hold.end_time,
+    location: meetingLocation || null,
+    is_online: false,
+    conflicts: holdResult.conflicts?.map(c => ({
+      event_id: c.existingEvent.id,
+      event_title: c.existingEvent.title,
+      recommendation: c.recommendation,
+    })),
+  }
+
+  // Fallback intent with slot text appended (used if AI call fails or times out)
+  const fallbackIntent = (action.intent_cs || '') + '\n\nTermín: ' + slotText
+
+  await updateAction(action.id, {
+    intent_cs: fallbackIntent,
+    payload: holdPayload,
+  })
+
+  // Now try to rewrite intent_cs via mila-voice — optional beautification.
+  // If this times out, the hold data and fallback intent are already persisted above.
   try {
     const voiceResult = await generateSchedulingIntent(
       action.intent_cs || action.rationale_cs || '',
@@ -1229,36 +1255,21 @@ async function updateActionWithHold(
       '',
       settings
     )
-    intentCs = voiceResult.intent_cs
+    let intentCs = voiceResult.intent_cs
 
     // Safety net: if AI dropped the hold time, force-include
     if (!intentCs.includes(startStr)) {
       intentCs = intentCs + '\n\nTermín: ' + slotText
     }
-  } catch (voiceError) {
-    console.error('[optimizer] generateSchedulingIntent failed, keeping original intent:', voiceError)
-    // Append slot text to original intent as fallback
-    intentCs = (action.intent_cs || '') + '\n\nTermín: ' + slotText
-  }
 
-  // Update the action record in DB
-  await updateAction(action.id, {
-    intent_cs: intentCs,
-    payload: {
-      ...payload,
-      hold_event_id: hold.id,
-      gcal_event_id: holdResult.gcalEventId || null,
-      start: hold.start_time,
-      end: hold.end_time,
-      location: meetingLocation || null,
-      is_online: false,
-      conflicts: holdResult.conflicts?.map(c => ({
-        event_id: c.existingEvent.id,
-        event_title: c.existingEvent.title,
-        recommendation: c.recommendation,
-      })),
-    },
-  })
+    await updateAction(action.id, {
+      intent_cs: intentCs,
+      payload: holdPayload,
+    })
+  } catch (voiceError) {
+    console.error('[optimizer] generateSchedulingIntent failed, fallback intent already persisted:', voiceError)
+    // No action needed — fallbackIntent + holdPayload already written above
+  }
 }
 
 /**
