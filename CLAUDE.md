@@ -570,7 +570,7 @@ Actions with urgency >= 9 get an immediate email notification (same action card 
 - **Polling**: Global QStash schedule (`*/5 * * * *`) hits `/api/cron/instant-notify` every 5 minutes
 - **Query**: `getHighPriorityUnnotifiedActions(urgencyThreshold)` — finds urgency >= threshold, status = 'pending', last_notified_at IS NULL, queued_for_brief = true
 - **Grouping**: One email per **conversation** — multiple urgent actions from the same conversation go in one email. Different conversations → separate emails. Never merges across conversations.
-- **Schedule optimizer**: Runs per-user BEFORE rendering cards (same as briefs) — creates holds, resolves conflicts. Re-fetches actions after optimization so hold data is reflected in cards.
+- **Schedule optimizer**: Uses `scheduleSingleAction()` per urgent SCHEDULE action (NOT the batch `optimizeScheduleActions()` used by briefs). Re-fetches actions after scheduling so hold data is reflected in cards.
 - **Send**: `sendInstantNotifications()` groups actions by conversation, sends one email per conversation, batches at concurrency 10
 - **Re-inclusion in brief**: `markActionsInstantNotified()` sets last_notified_at but keeps queued_for_brief = true — if the user doesn't act, the action still appears in the next AM/PM brief
 - **No double-send**: last_notified_at IS NULL filter prevents re-sending on subsequent polls
