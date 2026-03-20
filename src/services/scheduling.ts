@@ -115,6 +115,7 @@ export interface SlotProposal {
 export interface SchedulingResult {
   success: boolean
   holdEvent?: Event
+  travelBufferEvent?: Event
   gcalEventId?: string
   conflicts?: ConflictInfo[]
   error?: string
@@ -297,9 +298,22 @@ export async function blockSlotForProposal(
       weight: weight ?? undefined,
     })
 
+    // Book travel buffer NOW — a hold without travel blocked is a hold the user can't reach.
+    // Travel buffer is re-created at confirmation (confirmSlot cleans up and recalculates).
+    let travelBufferEvent: Event | undefined
+    if (location && localEvent) {
+      try {
+        const buffer = await bookTravelBuffer(userId, localEvent, location)
+        travelBufferEvent = buffer || undefined
+      } catch (error) {
+        console.error('[blockSlotForProposal] Travel buffer failed (hold still valid):', error)
+      }
+    }
+
     return {
       success: true,
       holdEvent: localEvent,
+      travelBufferEvent,
       gcalEventId: gcalEvent.id,
     }
   } catch (error) {
@@ -370,9 +384,16 @@ export async function confirmSlot(
     }
   }
 
-  // Book travel buffer if location is provided
+  // Clean up tentative travel buffer from hold phase, then re-create for confirmed event.
+  // Origin location may have changed since the hold was created (other meetings moved),
+  // so we always recalculate rather than keeping the tentative one.
   let travelBuffer: Event | undefined
   if (location || confirmedEvent.location) {
+    try {
+      await cleanupTravelBuffers(confirmedEventId)
+    } catch (error) {
+      console.error('Failed to clean up tentative travel buffers:', error)
+    }
     try {
       const buffer = await bookTravelBuffer(
         userId,
@@ -739,8 +760,16 @@ export async function optimizeScheduleActions(
   // Get all free slots for the next 14 days (enough to schedule all meetings)
   const allSlots = await findBestSlots(userId, settings.default_meeting_duration, 50)
 
-  // Track booked time ranges (respects buffer on both sides)
+  // Track booked time ranges INCLUDING travel buffers (respects buffer on both sides)
   const bookedRanges: { start: Date; end: Date }[] = []
+
+  // Compute the full blocked range: travel buffer start → meeting end
+  function bookedRangeForHold(meetingStart: Date, meetingEnd: Date, holdResult: SchedulingResult): { start: Date; end: Date } {
+    const rangeStart = holdResult.travelBufferEvent?.start_time
+      ? new Date(holdResult.travelBufferEvent.start_time)
+      : meetingStart
+    return { start: rangeStart, end: meetingEnd }
+  }
 
   function isSlotAvailable(slot: SlotProposal): boolean {
     for (const booked of bookedRanges) {
@@ -837,20 +866,10 @@ export async function optimizeScheduleActions(
       const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
       const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
 
-      // Reject preferred times outside working days (e.g. Saturday/Sunday)
-      // and outside working hours — even if CP stated them explicitly.
-      const preferredHour = preferredDate.getHours() + preferredDate.getMinutes() / 60
-      const endHour = preferredEnd.getHours() + preferredEnd.getMinutes() / 60
-      if (!isWorkingDay(preferredDate, settings.working_days)
-        || preferredHour < settings.working_hours_start
-        || endHour > settings.working_hours_end) {
-        // CP stated a time outside working bounds — fall through to normal
-        // slot selection which only returns working-day/hours slots.
-        preferredDate = undefined
-      }
-
-      // If preferred date was rejected (outside working bounds), skip to normal slot selection.
-      if (preferredDate) {
+      // CP stated a specific time — respect it even if outside working hours/days.
+      // If CP says "Saturday at 9 for the viewing", the user needs to know.
+      // The action card surfaces the non-standard time; the user decides.
+      {
         // Check if preferred time falls within a known free slot from Google Calendar.
         // allSlots are GCal-sourced with buffer — if the preferred time isn't in there,
         // it conflicts with something real on the calendar.
@@ -880,7 +899,7 @@ export async function optimizeScheduleActions(
             await updateActionWithHold(action, holdResult, meetingLocation, settings)
             result.optimized++
             result.holds.push(holdResult.holdEvent)
-            bookedRanges.push({ start: preferredDate, end: preferredEnd })
+            bookedRanges.push(bookedRangeForHold(preferredDate, preferredEnd, holdResult))
             continue
           }
         } else if (isSlotAvailable(preferredSlot)) {
@@ -914,7 +933,7 @@ export async function optimizeScheduleActions(
             await updateActionWithHold(action, holdResult, meetingLocation, settings)
             result.optimized++
             result.holds.push(holdResult.holdEvent)
-            bookedRanges.push({ start: preferredDate, end: preferredEnd })
+            bookedRanges.push(bookedRangeForHold(preferredDate, preferredEnd, holdResult))
             continue
           }
         }
@@ -964,7 +983,7 @@ export async function optimizeScheduleActions(
         await updateActionWithHold(action, holdResult, meetingLocation, settings)
         result.optimized++
         result.holds.push(holdResult.holdEvent)
-        bookedRanges.push({ start: slot.start, end: slot.end })
+        bookedRanges.push(bookedRangeForHold(slot.start, slot.end, holdResult))
         scheduled = true
         break
       }
@@ -1036,17 +1055,9 @@ export async function scheduleSingleAction(
     }
   }
 
-  // If CP stated a specific time, try that first — but reject times outside working bounds
-  if (preferredDate) {
-    const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
-    const preferredHour = preferredDate.getHours() + preferredDate.getMinutes() / 60
-    const endHour = preferredEnd.getHours() + preferredEnd.getMinutes() / 60
-    if (!isWorkingDay(preferredDate, settings.working_days)
-      || preferredHour < settings.working_hours_start
-      || endHour > settings.working_hours_end) {
-      preferredDate = undefined
-    }
-  }
+  // CP stated a specific time — respect it even if outside working hours/days.
+  // If CP says "Saturday at 9 for the viewing", the user needs to know.
+  // The action card surfaces the non-standard time; the user decides.
 
   if (preferredDate) {
     const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)

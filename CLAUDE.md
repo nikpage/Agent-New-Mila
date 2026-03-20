@@ -392,12 +392,12 @@ When a brief or instant notification is being prepared, Mila pre-optimizes ALL u
 
 1. Collects all pending, unsent SCHEDULE actions
 2. Optimizes slot selection across all new meetings using these criteria (in priority order):
-   - **CP availability** — stated or inferred from conversation (e.g. "I can only do Tuesday afternoon")
+   - **CP availability** — stated or inferred from conversation (e.g. "I can only do Tuesday afternoon"). **CP-stated times are always respected**, even outside working hours/days. If CP says "Saturday at 9 for the viewing," Mila books it and surfaces it to the user — never silently rejects it. Default slot search (no CP preference) uses working hours/days normally.
    - **User availability** — free slots in the user's calendar (working hours, no conflicts)
    - **Travel optimization** — avoid crossing town twice; cluster meetings geographically when possible while respecting criteria above
    - **Conflict resolution (last resort)** — Mila first tries to schedule without moving existing events. Not accepting a meeting due to time conflict is acceptable in most cases. However, if a new meeting has high priority AND the conversation indicates the CP can only meet at a specific conflicted time, Mila suggests moving the conflicting event — even if it has high weight. The user always has the final call; Mila only suggests, never auto-moves
 3. Picks THE optimal slot for each meeting — one slot per meeting, not multiple options
-4. Creates a tentative hold event for each chosen slot (prevents double-booking while user reviews)
+4. Creates a tentative hold event + travel buffer for each chosen slot (prevents double-booking while user reviews)
 5. Presents a single batch schedule card in the brief, grouped by day
    - Each sub-card shows: suggested time, CP name, location, deal value, and Mila's reasoning for that slot
    - Standard CTAs per sub-card (UDĚLAT / UPRAVIT / UDĚLÁM SÁM) plus a batch "UDĚLAT VŠE" button
@@ -420,9 +420,12 @@ When a brief or instant notification is being prepared, Mila pre-optimizes ALL u
 - **Same Location / Online**: 0 min buffer.
 - **Different Location**: Queries Google Maps API for estimated travel time + adds a flat 10 min safety buffer (for parking/walking to the door).
 - Creates travel buffer events linked via parent_event_id
+- **Travel buffer is created at hold time** — `blockSlotForProposal()` calls `bookTravelBuffer()` immediately. A hold without travel blocked is a hold the user can't reach. The batch optimizer's `bookedRanges` includes travel buffer start → meeting end so subsequent meetings don't get scheduled in the travel gap.
+- At confirmation (`confirmSlot`), tentative travel buffers are cleaned up and recalculated (origin may have changed since hold creation).
 
 ### Hold Events
 - One hold per meeting — the optimal slot Mila chose
+- Includes a travel buffer event (linked via parent_event_id) blocking the travel time before the meeting
 - Prevents double-booking between brief generation and user action
 - Short-lived: approved → becomes confirmed event. Rejected/edited → cleared
 - If user doesn't act by next brief, the hold remains and the brief nudges again
