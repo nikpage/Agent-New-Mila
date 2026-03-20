@@ -269,7 +269,7 @@ export async function findFreeSlots(
   date: Date,
   durationMinutes: number,
   workingHoursStart: number = 9,
-  workingHoursEnd: number = 18,
+  workingHoursEnd: number = 17,
   bufferMinutes: number = 0
 ): Promise<{ start: Date; end: Date }[]> {
   const events = await getEventsForDay(userId, date)

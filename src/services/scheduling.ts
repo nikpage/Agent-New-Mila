@@ -837,75 +837,90 @@ export async function optimizeScheduleActions(
       const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
       const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
 
-      // Check if preferred time falls within a known free slot from Google Calendar.
-      // allSlots are GCal-sourced with buffer — if the preferred time isn't in there,
-      // it conflicts with something real on the calendar.
-      preferredSlotIsFree = allSlots.some(free =>
-        free.start.getTime() <= preferredDate!.getTime() &&
-        free.end.getTime() >= preferredEnd.getTime()
-      )
+      // Reject preferred times outside working days (e.g. Saturday/Sunday)
+      // and outside working hours — even if CP stated them explicitly.
+      const preferredHour = preferredDate.getHours() + preferredDate.getMinutes() / 60
+      const endHour = preferredEnd.getHours() + preferredEnd.getMinutes() / 60
+      if (!isWorkingDay(preferredDate, settings.working_days)
+        || preferredHour < settings.working_hours_start
+        || endHour > settings.working_hours_end) {
+        // CP stated a time outside working bounds — fall through to normal
+        // slot selection which only returns working-day/hours slots.
+        preferredDate = undefined
+      }
 
-      // allSlots may not cover the preferred date's day (e.g. if it's today and
-      // allSlots started from tomorrow). Fetch that day's free slots directly.
-      if (!preferredSlotIsFree) {
-        const daySlots = await findFreeSlots(
-          userId, preferredDate, duration,
-          settings.working_hours_start, settings.working_hours_end,
-          settings.meeting_buffer_minutes
-        )
-        preferredSlotIsFree = daySlots.some(free =>
+      // If preferred date was rejected (outside working bounds), skip to normal slot selection.
+      if (preferredDate) {
+        // Check if preferred time falls within a known free slot from Google Calendar.
+        // allSlots are GCal-sourced with buffer — if the preferred time isn't in there,
+        // it conflicts with something real on the calendar.
+        preferredSlotIsFree = allSlots.some(free =>
           free.start.getTime() <= preferredDate!.getTime() &&
           free.end.getTime() >= preferredEnd.getTime()
         )
-      }
 
-      if (preferredSlotIsFree && isSlotAvailable(preferredSlot)) {
-        // Preferred time is genuinely free — use it directly
-        const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
-        if (holdResult.success && holdResult.holdEvent) {
-          await updateActionWithHold(action, holdResult, meetingLocation, settings)
-          result.optimized++
-          result.holds.push(holdResult.holdEvent)
-          bookedRanges.push({ start: preferredDate, end: preferredEnd })
-          continue
+        // allSlots may not cover the preferred date's day (e.g. if it's today and
+        // allSlots started from tomorrow). Fetch that day's free slots directly.
+        if (!preferredSlotIsFree) {
+          const daySlots = await findFreeSlots(
+            userId, preferredDate, duration,
+            settings.working_hours_start, settings.working_hours_end,
+            settings.meeting_buffer_minutes
+          )
+          preferredSlotIsFree = daySlots.some(free =>
+            free.start.getTime() <= preferredDate!.getTime() &&
+            free.end.getTime() >= preferredEnd.getTime()
+          )
         }
-      } else if (isSlotAvailable(preferredSlot)) {
-        // Preferred time conflicts with calendar — CP stated it, so book anyway
-        // but report the conflict so the user knows.
-        const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
-        if (holdResult.success && holdResult.holdEvent) {
-          // We don't have the specific conflicting event details from findFreeSlots,
-          // but we know there IS a conflict because the slot isn't free.
-          // Use findAllConflicts to get the details for reporting.
-          const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
-          if (conflicts.length > 0) {
-            const conflictInfos: ConflictInfo[] = conflicts.map(existing => {
-              const isImmovable = existing.weight == null || existing.weight >= 100
-              return {
-                existingEvent: existing,
-                existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
-                newScore: action.priority_score ?? 0,
-                recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
-              }
-            })
-            holdResult.conflicts = conflictInfos
-            for (const conflict of conflicts) {
-              result.moveSuggestions.push({
-                existingEventId: conflict.id,
-                existingWeight: conflict.weight,
-                reason: `CP stated specific time: ${suggestedTime}`,
-              })
-            }
+
+        if (preferredSlotIsFree && isSlotAvailable(preferredSlot)) {
+          // Preferred time is genuinely free — use it directly
+          const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+          if (holdResult.success && holdResult.holdEvent) {
+            await updateActionWithHold(action, holdResult, meetingLocation, settings)
+            result.optimized++
+            result.holds.push(holdResult.holdEvent)
+            bookedRanges.push({ start: preferredDate, end: preferredEnd })
+            continue
           }
-          await updateActionWithHold(action, holdResult, meetingLocation, settings)
-          result.optimized++
-          result.holds.push(holdResult.holdEvent)
-          bookedRanges.push({ start: preferredDate, end: preferredEnd })
-          continue
+        } else if (isSlotAvailable(preferredSlot)) {
+          // Preferred time conflicts with calendar — CP stated it, so book anyway
+          // but report the conflict so the user knows.
+          const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+          if (holdResult.success && holdResult.holdEvent) {
+            // We don't have the specific conflicting event details from findFreeSlots,
+            // but we know there IS a conflict because the slot isn't free.
+            // Use findAllConflicts to get the details for reporting.
+            const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
+            if (conflicts.length > 0) {
+              const conflictInfos: ConflictInfo[] = conflicts.map(existing => {
+                const isImmovable = existing.weight == null || existing.weight >= 100
+                return {
+                  existingEvent: existing,
+                  existingScore: existing.weight != null ? calculateEventScore({ weight: existing.weight }) : Infinity,
+                  newScore: action.priority_score ?? 0,
+                  recommendation: isImmovable ? 'suggest_alternate' as const : 'move_existing' as const,
+                }
+              })
+              holdResult.conflicts = conflictInfos
+              for (const conflict of conflicts) {
+                result.moveSuggestions.push({
+                  existingEventId: conflict.id,
+                  existingWeight: conflict.weight,
+                  reason: `CP stated specific time: ${suggestedTime}`,
+                })
+              }
+            }
+            await updateActionWithHold(action, holdResult, meetingLocation, settings)
+            result.optimized++
+            result.holds.push(holdResult.holdEvent)
+            bookedRanges.push({ start: preferredDate, end: preferredEnd })
+            continue
+          }
         }
+        // Preferred slot failed batch check (another action already booked it) —
+        // fall through to normal slot selection below.
       }
-      // Preferred slot failed batch check (another action already booked it) —
-      // fall through to normal slot selection below.
     }
 
     // Normal path: pick from GCal-validated free slots
@@ -1021,7 +1036,18 @@ export async function scheduleSingleAction(
     }
   }
 
-  // If CP stated a specific time, try that first
+  // If CP stated a specific time, try that first — but reject times outside working bounds
+  if (preferredDate) {
+    const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
+    const preferredHour = preferredDate.getHours() + preferredDate.getMinutes() / 60
+    const endHour = preferredEnd.getHours() + preferredEnd.getMinutes() / 60
+    if (!isWorkingDay(preferredDate, settings.working_days)
+      || preferredHour < settings.working_hours_start
+      || endHour > settings.working_hours_end) {
+      preferredDate = undefined
+    }
+  }
+
   if (preferredDate) {
     const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
     const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
