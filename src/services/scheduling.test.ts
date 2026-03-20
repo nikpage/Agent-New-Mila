@@ -59,6 +59,7 @@ const mockConfirmEvent = vi.fn()
 const mockCancelEventWithCleanup = vi.fn()
 const mockCleanupBlockGroup = vi.fn().mockResolvedValue({ deletedIds: [], deletedGoogleEventIds: [] })
 const mockCleanupTravelBuffers = vi.fn()
+const mockGetTravelBuffers = vi.fn().mockResolvedValue([])
 const mockGetEventsByBlockGroup = vi.fn()
 const mockGetLastEventLocation = vi.fn().mockResolvedValue(null)
 
@@ -76,6 +77,7 @@ vi.mock('@/lib/db/events', async () => {
     cancelEventWithCleanup: (...args: unknown[]) => mockCancelEventWithCleanup(...args),
     cleanupBlockGroup: (...args: unknown[]) => mockCleanupBlockGroup(...args),
     cleanupTravelBuffers: (...args: unknown[]) => mockCleanupTravelBuffers(...args),
+    getTravelBuffers: (...args: unknown[]) => mockGetTravelBuffers(...args),
     getEventsByBlockGroup: (...args: unknown[]) => mockGetEventsByBlockGroup(...args),
     calculateEventScore: realCalcEventScore,
     getLastEventLocation: (...args: unknown[]) => mockGetLastEventLocation(...args),

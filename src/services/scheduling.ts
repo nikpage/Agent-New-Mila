@@ -35,6 +35,7 @@ import {
   confirmEvent,
   cancelEventWithCleanup,
   cleanupTravelBuffers,
+  getTravelBuffers,
   calculateEventScore,
   getLastEventLocation,
 } from '@/lib/db/events'
@@ -390,6 +391,14 @@ export async function confirmSlot(
   let travelBuffer: Event | undefined
   if (location || confirmedEvent.location) {
     try {
+      const oldBuffers = await getTravelBuffers(confirmedEventId)
+      for (const buf of oldBuffers) {
+        if (buf.google_event_id) {
+          await deleteCalendarEvent(userId, buf.google_event_id, 'none').catch(e =>
+            console.error('Failed to delete old travel buffer from GCal:', e)
+          )
+        }
+      }
       await cleanupTravelBuffers(confirmedEventId)
     } catch (error) {
       console.error('Failed to clean up tentative travel buffers:', error)
@@ -419,10 +428,23 @@ export async function rejectSlot(
   const event = await getEventById(eventId)
   if (!event) return
 
-  // Delete from local DB
+  // Clean up travel buffer first — from GCal AND DB
+  const travelBuffers = await getTravelBuffers(eventId)
+  for (const buffer of travelBuffers) {
+    if (buffer.google_event_id) {
+      try {
+        await deleteCalendarEvent(userId, buffer.google_event_id, 'none')
+      } catch (error) {
+        console.error('Failed to delete travel buffer from GCal:', error)
+      }
+    }
+  }
+  await cleanupTravelBuffers(eventId)
+
+  // Delete hold from local DB
   await deleteEvent(eventId)
 
-  // Delete from Google Calendar
+  // Delete hold from Google Calendar
   if (event.google_event_id) {
     try {
       await deleteCalendarEvent(userId, event.google_event_id, 'none')
@@ -572,7 +594,15 @@ export async function handleEventMoved(
   newEnd: Date,
   location?: string
 ): Promise<Event | null> {
-  // Clean up old travel buffers
+  // Clean up old travel buffers — GCal + DB
+  const oldBuffers = await getTravelBuffers(eventId)
+  for (const buf of oldBuffers) {
+    if (buf.google_event_id) {
+      await deleteCalendarEvent(userId, buf.google_event_id, 'none').catch(e =>
+        console.error('Failed to delete old travel buffer from GCal:', e)
+      )
+    }
+  }
   await cleanupTravelBuffers(eventId)
 
   // Update the event
