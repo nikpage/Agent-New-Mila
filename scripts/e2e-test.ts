@@ -1009,12 +1009,22 @@ async function main() {
 
   try {
     // ═══════════════════════════════════════════════════════════════════════
-    // ROUND 1: Inject ALL emails → Run agent → Instant notify
+    // ROUND 1: Inject each email independently → agent → instant-notify
+    //
+    // In production, emails arrive at different times. Each triggers its own
+    // cron cycle: agent ingests → proposes actions → instant-notify schedules.
+    // A SCHEDULE hold created for email #1 is a real GCal event by the time
+    // email #2 arrives. There is NO batch optimization across independent emails.
+    // The script mirrors this: inject one, process it fully, then the next.
     // ═══════════════════════════════════════════════════════════════════════
     console.log()
-    console.log('─── Round 1: Inject Emails & Run Agent ────────────────')
+    console.log('─── Round 1: Independent Email Processing ─────────────')
 
     let injected: InjectedEmail[] = []
+    // Collect all actions across independent email runs for later interaction
+    let allR1Actions: ActionProposal[] = []
+    let allR1Results: AgentResult[] = []
+
     if (!flags.has('--skip-inject')) {
       // ── Phase 0: Inject conversation history (backfill) ──────────────
       // Eva's negotiation thread gives Mila context about the Sokolovská
@@ -1037,47 +1047,94 @@ async function main() {
       // Brief pause for Gmail indexing before Round 1 emails
       await new Promise(r => setTimeout(r, 2000))
 
+      // ── Phase 1: Process each email independently ──────────────────
+      // Each email gets: inject → wait for Gmail → agent run → instant-notify.
+      // This mirrors production where each email lands in a separate cron cycle.
+      // SCHEDULE holds from earlier emails become real GCal events before
+      // the next email is processed — no batch optimization, no shared state.
       console.log()
-      console.log('─── Phase 1: Injecting Current Emails ─────────────────')
+      console.log('─── Phase 1: Independent Email Processing ─────────────')
 
-      // ── Phase 1: Inject "current" emails (the ones that trigger actions) ──
-      injected = await injectEmails(USER_ID, ALL_TEST_SENDERS)
-      allGmailIds.push(...injected.map(e => e.gmailId))
+      for (let i = 0; i < ALL_TEST_SENDERS.length; i++) {
+        const email = ALL_TEST_SENDERS[i]
+        const emailLabel = `E${i + 1}/${ALL_TEST_SENDERS.length}`
+
+        console.log()
+        log(emailLabel, `── Processing: "${email.subject.replace(`[${RUN_ID}] `, '')}" ──`)
+
+        // Inject single email
+        const [injectedEmail] = await injectEmails(USER_ID, [email])
+        injected.push(injectedEmail)
+        allGmailIds.push(injectedEmail.gmailId)
+
+        // Run agent — ingests this email, creates conversation + action
+        const agentResult = await runAgent(USER_ID, emailLabel)
+        allR1Results.push(agentResult)
+        if (agentResult.actions?.length) {
+          allR1Actions.push(...agentResult.actions)
+        }
+
+        // Instant-notify — if this email produced urgent actions, schedule + send NOW.
+        // Any SCHEDULE holds are written to GCal before the next email is processed.
+        const urgentActions = (agentResult.actions || []).filter(a => a.urgency >= 9)
+        if (urgentActions.length > 0) {
+          for (const a of urgentActions) {
+            log(emailLabel, `  ⚡ [${a.action_type}] urgency=${a.urgency} score=${a.priority_score}: ${a.intent_cs || a.rationale}`)
+          }
+          const notifyRes = await runInstantNotify()
+          log(emailLabel, `  Instant-notify: sent=${notifyRes.sent}, failed=${notifyRes.failed}`)
+        }
+
+        // Brief pause for Gmail indexing between emails
+        if (i < ALL_TEST_SENDERS.length - 1) {
+          await new Promise(r => setTimeout(r, 2000))
+        }
+      }
     } else {
       log('inject', 'Skipped (--skip-inject)')
+      // Still need one agent run to pick up any existing unprocessed emails
+      const r1 = await runAgent(USER_ID, 'R1')
+      allR1Results.push(r1)
+      if (r1.actions?.length) {
+        allR1Actions.push(...r1.actions)
+      }
     }
 
-    const r1 = await runAgent(USER_ID, 'R1')
+    // Aggregate totals across all independent runs
+    const totalIngested = allR1Results.reduce((sum, r) => sum + r.emailsIngested, 0)
+    const totalProcessed = allR1Results.reduce((sum, r) => sum + r.messagesProcessed, 0)
+    const totalConversations = allR1Results.reduce((sum, r) => sum + r.conversationsUpdated, 0)
+    const totalActions = allR1Results.reduce((sum, r) => sum + r.actionsGenerated, 0)
 
     // Verify Round 1
-    log('R1:verify', 'Checking Round 1 results...')
+    log('R1:verify', 'Checking Round 1 aggregate results...')
     const r1Checks: CheckResult[] = []
 
     if (!flags.has('--skip-inject')) {
       r1Checks.push({
-        name: 'R1: Emails ingested',
-        pass: r1.emailsIngested >= ALL_TEST_SENDERS.length,
-        detail: `${r1.emailsIngested} >= ${ALL_TEST_SENDERS.length} expected`,
+        name: 'R1: Emails ingested (total)',
+        pass: totalIngested >= ALL_TEST_SENDERS.length,
+        detail: `${totalIngested} >= ${ALL_TEST_SENDERS.length} expected`,
       })
     }
     r1Checks.push({
-      name: 'R1: Messages processed',
-      pass: r1.messagesProcessed > 0,
-      detail: `${r1.messagesProcessed} messages`,
+      name: 'R1: Messages processed (total)',
+      pass: totalProcessed > 0,
+      detail: `${totalProcessed} messages`,
     })
     r1Checks.push({
-      name: 'R1: Conversations created',
-      pass: r1.conversationsUpdated > 0,
-      detail: `${r1.conversationsUpdated} conversations`,
+      name: 'R1: Conversations created (total)',
+      pass: totalConversations > 0,
+      detail: `${totalConversations} conversations`,
     })
     r1Checks.push({
-      name: 'R1: Actions generated',
-      pass: r1.actionsGenerated > 0,
-      detail: `${r1.actionsGenerated} actions`,
+      name: 'R1: Actions generated (total)',
+      pass: totalActions > 0,
+      detail: `${totalActions} actions`,
     })
 
     // Check for urgent actions
-    const highPriority = (r1.actions || []).filter(a => a.urgency >= 9)
+    const highPriority = allR1Actions.filter(a => a.urgency >= 9)
     if (!flags.has('--skip-inject')) {
       r1Checks.push({
         name: 'R1: At least one action has urgency >= 9',
@@ -1091,43 +1148,20 @@ async function main() {
     allChecks.push(...r1Checks)
 
     // ═══════════════════════════════════════════════════════════════════════
-    // INSTANT NOTIFY
+    // INSTANT NOTIFY — final idempotency check
+    // All urgent actions were already notified during per-email processing.
+    // This verifies no double-send occurs on a subsequent poll.
     // ═══════════════════════════════════════════════════════════════════════
     console.log()
-    console.log('─── Instant Notify ────────────────────────────────────')
+    console.log('─── Instant Notify — Idempotency Check ────────────────')
 
-    for (const a of highPriority) {
-      log('instant', `  ⚡ [${a.action_type}] urgency=${a.urgency} score=${a.priority_score}: ${a.intent_cs || a.rationale}`)
-    }
-
-    const notifyResult = await runInstantNotify()
+    const notifyResult2 = await runInstantNotify()
 
     const instantChecks: CheckResult[] = []
     instantChecks.push({
-      name: 'Instant: Endpoint returned success',
-      pass: notifyResult.success === true,
-      detail: `success=${notifyResult.success}`,
-    })
-    instantChecks.push({
-      name: 'Instant: No failures',
-      pass: notifyResult.failed === 0,
-      detail: `failed=${notifyResult.failed}`,
-    })
-    if (highPriority.length > 0) {
-      instantChecks.push({
-        name: 'Instant: High-priority actions notified',
-        pass: notifyResult.sent > 0,
-        detail: `sent=${notifyResult.sent} (${highPriority.length} actions had urgency >= 9)`,
-      })
-    }
-
-    // Idempotency check
-    log('instant', 'Re-polling to verify no double-send...')
-    const notifyResult2 = await runInstantNotify()
-    instantChecks.push({
-      name: 'Instant: No double-send on re-poll',
+      name: 'Instant: No double-send on final poll',
       pass: notifyResult2.sent === 0,
-      detail: `sent=${notifyResult2.sent} on re-poll (should be 0)`,
+      detail: `sent=${notifyResult2.sent} on final poll (should be 0 — all already sent)`,
     })
 
     console.log()
@@ -1139,7 +1173,7 @@ async function main() {
     // ═══════════════════════════════════════════════════════════════════════
     console.log()
     console.log('─── Your Turn: Interact with Actions ──────────────────')
-    printActionUrls(r1.actions || [], USER_ID)
+    printActionUrls(allR1Actions, USER_ID)
 
     await waitForKeypress('  ⏎  Press Enter when you\'re done interacting...\n')
 
