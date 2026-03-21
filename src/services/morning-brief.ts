@@ -7,9 +7,10 @@ import { getPendingActionsForBrief, markActionsNotified, getHighPriorityUnnotifi
 import { getUserById, getUsersDueBrief, getUserSettings } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
-import { getEventsForToday } from '@/lib/db/events'
+import { getEventsForToday, getUpcomingEvents } from '@/lib/db/events'
+import { getTodosDueToday, getOverdueTodos } from '@/lib/db/todos'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
-import { generateBriefIntro, generateUrgentIntro } from '@/lib/ai/mila-voice'
+import { generateBriefIntro, generateQuietBriefIntro, generateUrgentIntro } from '@/lib/ai/mila-voice'
 import { optimizeScheduleActions, scheduleSingleAction } from '@/services/scheduling'
 import { generateActionToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template';
@@ -60,13 +61,73 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     const actions = await getPendingActionsForBrief(userId)
     console.log(`[Brief] User ${user.email || userId}: ${actions.length} pending actions`)
 
+    const events = await getEventsForToday(userId, user.email_timezone)
+    console.log(`[Brief] User ${user.email || userId}: ${events.length} events today`)
+
+    // ─── Quiet brief: no pending actions ──────────────────────────────────────
     if (actions.length === 0) {
-      console.log(`[Brief] User ${user.email || userId}: nothing to send`)
+      console.log(`[Brief] User ${user.email || userId}: no actions — sending quiet brief`)
+      const settings = await getUserSettings(userId)
+      const [upcomingEvents, todosToday, overdueTodos] = await Promise.all([
+        getUpcomingEvents(userId, 3),
+        getTodosDueToday(userId),
+        getOverdueTodos(userId),
+      ])
+      const allTodos = [...overdueTodos, ...todosToday]
+        .filter((t, i, arr) => arr.findIndex(x => x.id === t.id) === i)
+
+      const eventItems = events.map(e => ({
+        title: e.title || 'Event',
+        time: new Date(e.start_time).toLocaleTimeString('en-US', {
+          hour: 'numeric', minute: '2-digit', timeZone: user.email_timezone,
+        }),
+      }))
+
+      const todoItems = allTodos.slice(0, 5).map(t => ({
+        title: t.description,
+        due: t.due_date ? new Date(t.due_date).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'long' }) : undefined,
+      }))
+
+      let quietGreeting: string, quietSubject: string, quietBody: string
+      try {
+        const intro = await generateQuietBriefIntro(briefType, eventItems, todoItems, settings)
+        quietGreeting = intro.greeting
+        quietSubject = intro.subject
+        quietBody = intro.body
+      } catch (err) {
+        console.error(`[Brief] Quiet brief intro generation failed for ${userId}:`, err)
+        quietGreeting = briefType === 'morning' ? 'Hezké ráno' : 'Hezké odpoledne'
+        quietSubject = 'Mila: Vše v pořádku'
+        quietBody = 'Žádné nové akce ke zpracování. Užijte si klidný den.'
+      }
+
+      const upcomingNonToday = upcomingEvents.filter(e => {
+        const eventDate = new Date(e.start_time).toDateString()
+        const todayDate = new Date().toDateString()
+        return eventDate !== todayDate
+      })
+
+      const htmlContent = generateQuietBriefEmailHtml(
+        quietGreeting, quietBody, eventItems,
+        upcomingNonToday.slice(0, 5).map(e => ({
+          title: e.title || 'Event',
+          date: new Date(e.start_time).toLocaleDateString('cs-CZ', {
+            weekday: 'long', day: 'numeric', month: 'long', timeZone: user.email_timezone,
+          }),
+          time: new Date(e.start_time).toLocaleTimeString('cs-CZ', {
+            hour: '2-digit', minute: '2-digit', hour12: false, timeZone: user.email_timezone,
+          }),
+        })),
+        todoItems
+      )
+      const textContent = `${quietGreeting}\n\n${quietBody}`
+      const userEmail = await getUserEmail(userId)
+      await sendEmail(userId, { to: userEmail, subject: quietSubject, body: textContent, htmlBody: htmlContent })
+      console.log(`[Brief] User ${user.email || userId}: quiet ${briefType} brief sent`)
       return true
     }
 
-    const events = await getEventsForToday(userId, user.email_timezone)
-    console.log(`[Brief] User ${user.email || userId}: ${events.length} events today`)
+    // ─── Normal brief: has pending actions ────────────────────────────────────
     const briefActions: BriefAction[] = []
 
     for (const action of actions) {
@@ -301,6 +362,75 @@ function generateBriefEmailText(greeting: string, headline: string, actions: Bri
     text += `------------------------------------------\n\n`;
   }
   return text;
+}
+
+// ─── Quiet Brief (no actions) ────────────────────────────────────────────────
+
+function generateQuietBriefEmailHtml(
+  greeting: string,
+  body: string,
+  todayEvents: { title: string; time: string }[],
+  upcomingEvents: { title: string; date: string; time: string }[],
+  todos: { title: string; due?: string }[]
+): string {
+  const eventRows = todayEvents.map(e =>
+    `<tr><td style="padding: 6px 12px; color: ${theme.colors.textMuted}; font-size: 14px; white-space: nowrap; vertical-align: top;">${e.time}</td><td style="padding: 6px 12px; font-size: 14px; color: ${theme.colors.text};">${e.title}</td></tr>`
+  ).join('')
+
+  const upcomingRows = upcomingEvents.map(e =>
+    `<tr><td style="padding: 6px 12px; color: ${theme.colors.textMuted}; font-size: 14px; white-space: nowrap; vertical-align: top;">${e.date}</td><td style="padding: 6px 12px; font-size: 14px; color: ${theme.colors.text};">${e.time} — ${e.title}</td></tr>`
+  ).join('')
+
+  const todoRows = todos.map(t =>
+    `<tr><td style="padding: 6px 12px; font-size: 14px; color: ${theme.colors.text};">☐ ${t.title}</td><td style="padding: 6px 12px; color: ${theme.colors.textMuted}; font-size: 13px; white-space: nowrap;">${t.due || ''}</td></tr>`
+  ).join('')
+
+  const hasSections = todayEvents.length > 0 || upcomingEvents.length > 0 || todos.length > 0
+
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin: 0; padding: 0; background-color: ${theme.colors.background}; font-family: 'Inter', system-ui, sans-serif; color: ${theme.colors.text};">
+  <div style="max-width: 600px; margin: 0 auto; padding: 40px 20px;">
+    <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">${greeting}</h1>
+    <p style="color: ${theme.colors.text}; font-size: 16px; line-height: 1.6; margin-bottom: 32px;">${body}</p>
+
+    ${todayEvents.length > 0 ? `
+    <div style="margin-bottom: 24px;">
+      <h2 style="font-size: 16px; font-weight: 600; color: ${theme.colors.textMuted}; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Dnešní program</h2>
+      <div style="background-color: ${theme.colors.surface}; border: 1px solid ${theme.colors.border}; border-radius: 8px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">${eventRows}</table>
+      </div>
+    </div>
+    ` : ''}
+
+    ${upcomingEvents.length > 0 ? `
+    <div style="margin-bottom: 24px;">
+      <h2 style="font-size: 16px; font-weight: 600; color: ${theme.colors.textMuted}; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Nadcházející dny</h2>
+      <div style="background-color: ${theme.colors.surface}; border: 1px solid ${theme.colors.border}; border-radius: 8px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">${upcomingRows}</table>
+      </div>
+    </div>
+    ` : ''}
+
+    ${todos.length > 0 ? `
+    <div style="margin-bottom: 24px;">
+      <h2 style="font-size: 16px; font-weight: 600; color: ${theme.colors.textMuted}; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Úkoly</h2>
+      <div style="background-color: ${theme.colors.surface}; border: 1px solid ${theme.colors.border}; border-radius: 8px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">${todoRows}</table>
+      </div>
+    </div>
+    ` : ''}
+
+    ${!hasSections ? `
+    <div style="text-align: center; padding: 32px 0; color: ${theme.colors.textMuted}; font-size: 14px;">
+      Žádné schůzky, žádné úkoly. Klidný den.
+    </div>
+    ` : ''}
+  </div>
+</body>
+</html>`.trim()
 }
 
 // ─── Instant High-Priority Notifications ────────────────────────────────────
