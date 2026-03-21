@@ -155,6 +155,17 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     }
     console.log(`[Agent] Steps 2/2.1/2.5 completed in ${(parallelMs / 1000).toFixed(1)}s`)
 
+    // Re-purge user-as-CP rows: ingestion may have re-created the user as a CP
+    // (e.g. from calendar attendees or email headers containing the user's address).
+    try {
+      const purged = await purgeUserAsCp(userId)
+      if (purged > 0) {
+        console.warn(`[Agent] Post-ingestion purge: removed ${purged} self-CP row(s)`)
+      }
+    } catch (purgeError) {
+      console.error('[Agent] Post-ingestion purge error:', purgeError)
+    }
+
     // Step 3: Get all unprocessed messages (including newly ingested + WhatsApp)
     // Steps 3-5 depend on each other but are isolated from steps 2/2.5/6
     try {

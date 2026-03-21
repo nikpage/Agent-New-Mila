@@ -134,9 +134,12 @@ async function syncGoogleEventToLocal(
     .limit(1)
   const isNewEvent = !existingEvents || existingEvents.length === 0
 
-  // Find CP from attendees (if any)
+  // Find CP from attendees (if any), but NOT for personal events.
+  // Personal events (doctor, kids' concert, etc.) should block time without
+  // creating counterparty records from personal contacts.
+  const isPersonal = isPersonalEvent(gcalEvent.summary || '', settings)
   let cpId: string | null = null
-  if (gcalEvent.attendees && gcalEvent.attendees.length > 0) {
+  if (!isPersonal && gcalEvent.attendees && gcalEvent.attendees.length > 0) {
     // Find the first non-user attendee
     const user = await getUserById(userId)
     const userEmailLower = user?.email?.toLowerCase()
@@ -162,7 +165,7 @@ async function syncGoogleEventToLocal(
   // If the event already exists locally (matched by google_event_id + user_id),
   // it will be updated with the latest values from Google Calendar.
   // If it's new, a fresh record is created with google_event_id set.
-  const isNonPersonal = !isPersonalEvent(gcalEvent.summary || '', settings)
+  const isNonPersonal = !isPersonal
   await upsertEventByGoogleId(gcalEvent.id, userId, {
     cp_id: cpId,
     title: gcalEvent.summary,
@@ -178,7 +181,7 @@ async function syncGoogleEventToLocal(
 
   // For NEW non-personal events WITH a counterparty: create a ToDo to set weight.
   // Solo events (no attendees besides user) are internal blocks — no todo needed.
-  if (isNewEvent && !isPersonalEvent(gcalEvent.summary || '', settings) && cpId) {
+  if (isNewEvent && isNonPersonal && cpId) {
     try {
       const dateStr = gcalEvent.startTime.toLocaleDateString('cs-CZ', {
         day: 'numeric',

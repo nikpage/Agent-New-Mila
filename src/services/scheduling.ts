@@ -825,6 +825,21 @@ export async function optimizeScheduleActions(
 
   for (const action of sortedActions) {
     const payload = action.payload as Record<string, unknown> | null
+
+    // Already has a hold — don't double-book by creating another one.
+    // This prevents the instant-notify → brief pipeline from booking twice.
+    if (payload?.hold_event_id) {
+      console.log(`[optimizer] Action ${action.id} already has hold ${payload.hold_event_id} — skipping`)
+      // Still track the existing hold's time range so subsequent actions don't overlap
+      if (payload.start && payload.end) {
+        bookedRanges.push({
+          start: new Date(payload.start as string),
+          end: new Date(payload.end as string),
+        })
+      }
+      continue
+    }
+
     const cpAvailability = (payload?.cp_availability as string) || null
     const suggestedTime = (payload?.suggestedTime as string) || null
     const payloadMeetingType = (payload?.meeting_type as string) || 'address'
@@ -1045,6 +1060,13 @@ export async function scheduleSingleAction(
   }
 
   if (action.action_type !== 'SCHEDULE') return result
+
+  // Already has a hold — don't double-book by creating another one.
+  // This prevents the instant-notify → brief pipeline from booking twice.
+  if (payload?.hold_event_id) {
+    console.log(`[scheduleSingleAction] Action ${action.id} already has hold ${payload.hold_event_id} — skipping`)
+    return result
+  }
 
   const cpAvailability = (payload?.cp_availability as string) || null
   const suggestedTime = (payload?.suggestedTime as string) || null
