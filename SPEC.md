@@ -86,6 +86,16 @@ Each brief contains:
   - What Mila proposes to do (intent)
   - Priority score
   - One-click APPROVE and EDIT buttons (HMAC-signed links)
+- **"Done" section**: Actions completed/approved in the last 24 hours — shows what Mila already handled (CP name, action type, topic)
+
+### Quiet Brief
+When there are zero pending action proposals, Mila sends a streamlined "quiet brief" instead of an empty email. The quiet brief keeps the user oriented without unnecessary noise:
+- AI-generated greeting and body text (warm, "all clear" tone via `generateQuietBriefIntro()`)
+- **Today's schedule** — calendar events for the day
+- **Upcoming days** — next 5 events beyond today
+- **Todos** — up to 5 pending/overdue tasks with due dates
+- If no events, no todos, and no actions: "Žádné schůzky, žádné úkoly. Klidný den."
+- Fallback on AI failure: hardcoded Czech defaults ("Mila: Vše v pořádku")
 
 ### Instant High-Priority Notifications
 Actions with urgency >= 9 trigger an immediate email notification — the same action card format as briefs, sent within 5 minutes of action creation. Polled every 5 minutes via QStash (`/api/cron/instant-notify`).
@@ -320,6 +330,7 @@ All text Mila produces — both user-facing and CP-facing — is generated throu
 - Scheduling intent (slot details, conflicts, location woven into AI's original intent_cs)
 - Lead follow-up intent/rationale (cooling/cold/dead — AI-generated, not templates)
 - Brief intro (greeting, subject line, headline — AI-generated per brief)
+- Quiet brief intro (greeting, subject, body — AI-generated when no pending actions; receives today's events + todos for context)
 - Urgent notification intro (subject, header, body — AI-generated per notification)
 
 **Mila → CP** (tone: settings.ai_tone_cp):

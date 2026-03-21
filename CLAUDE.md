@@ -197,7 +197,7 @@ Instead of reading these files, use this index:
 | counterparties.ts | normalizeGmailAddress, isSameGmailAddress, purgeUserAsCp, getCPById, getCPByIdentifier, getCPsForUser, upsertCP, findOrCreateCP, updateCP, blacklistCP, getCPState, updateCPState |
 | conversations.ts | getConversationById, getConversationsForUser, createConversation, updateConversation, updateConversationSummary, incrementMessageCount, getMessagesForConversation, getRecentMessages, addParticipant, getParticipants, findConversationByExternalThread |
 | messages.ts | getMessageById, getMessageByExternalId, messageExists, createMessage, createMessages, updateMessage, getMessagesInRange, getUnprocessedMessages, assignMessageToConversation, getLatestMessageFromCP, countMessagesInConversation |
-| actions.ts | getActionById, getActionsForUser, getPendingActionsForBrief, createAction, updateAction, updateActionStatus, approveAction, completeAction, dismissAction, dismissAllPendingActions, updateActionDraft, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, calculatePriorityScore, getActionsForConversation, hasPendingAction |
+| actions.ts | getActionById, getActionsForUser, getPendingActionsForBrief, getRecentlyCompletedActions, createAction, updateAction, updateActionStatus, approveAction, completeAction, dismissAction, dismissAllPendingActions, updateActionDraft, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, calculatePriorityScore, getActionsForConversation, hasPendingAction |
 | todos.ts | getTodoById, getTodosForUser, getPendingTodos, createTodo, updateTodo, completeTodo, deleteTodo, getTodosForThread, getOverdueTodos, getTodosDueToday |
 | events.ts | getEventById, getEventsInRange, getEventsForToday, getUpcomingEvents, createEvent, updateEvent, deleteEvent, findConflicts, getLastEventLocation, getEventsWithCP, findAvailableSlots, getEventsByBlockGroup, cleanupBlockGroup, createHoldEvent, createTravelBuffer, cleanupTravelBuffers, getTravelBuffers, confirmEvent, cancelEventWithCleanup, calculateEventScore, upsertEventByGoogleId, getChildEvents |
 | embeddings.ts | saveMessageEmbedding, saveConversationEmbedding, getConversationsWithEmbeddingsByCP |
@@ -462,6 +462,7 @@ When a new meeting conflicts with existing events:
 | `generateSchedulingIntent()` | Hardcoded overwrites in planning.ts | Rewrites AI's intent_cs with scheduling details (slot, conflicts, location) baked in. Tone scales with urgency |
 | `generateLeadFollowUpIntent()` | Hardcoded templates in lead-tracking.ts | Generates intent_cs + rationale_cs for cooling/cold/dead leads |
 | `generateBriefIntro()` | Hardcoded greeting/subject in morning-brief.ts | Returns { greeting, subject, headline } for morning/afternoon briefs |
+| `generateQuietBriefIntro()` | N/A (new) | Returns { greeting, subject, body } for quiet briefs (no pending actions). Receives today's events + todos for context |
 | `generateUrgentIntro()` | Hardcoded urgent strings in morning-brief.ts | Returns { subject, header, body } for instant high-priority notifications |
 
 ### Mila → CP (uses settings.ai_tone_cp)
@@ -561,6 +562,22 @@ QSTASH_TOKEN         # Upstash QStash token for brief scheduling + bulk ingest w
 - Schedule IDs stored in user settings for cleanup
 - Requires QSTASH_TOKEN env var
 - The `/api/cron/morning-brief` endpoint still exists as the target for QStash HTTP calls
+
+### Quiet Brief
+When a user has zero pending action proposals, Mila sends a streamlined quiet brief instead of skipping the email:
+- Triggered by `actions.length === 0` in `sendMorningBrief()`
+- Fetches today's events (`getEventsForToday`), upcoming events (`getUpcomingEvents`, 3 days), todos (`getTodosDueToday` + `getOverdueTodos`)
+- AI-generated greeting/subject/body via `generateQuietBriefIntro()` (drafting stage)
+- Rendered by `generateQuietBriefEmailHtml()` — themed HTML with sections: "Dnešní program", "Nadcházející dny", "Úkoly"
+- Fallback on AI failure: "Hezké ráno/odpoledne" + "Mila: Vše v pořádku"
+- Limits: 5 upcoming events, 5 todos (overdue + today, deduplicated by ID)
+
+### "Done" Section (Completed Actions)
+Both normal and quiet briefs show what Mila already handled:
+- `getRecentlyCompletedActions(userId, since)` fetches actions completed/approved in the last 24 hours
+- Each item enriched with CP name, topic, action type, intent
+- Normal brief: rendered as a "Co už Mila vyřídila" section below action cards (green left border)
+- Quiet brief: completed items enriched above the quiet/normal fork so both paths share the data
 
 ### Parallelized Sending
 - `sendAllMorningBriefs()` processes users in batches of 10 (BRIEF_CONCURRENCY)
