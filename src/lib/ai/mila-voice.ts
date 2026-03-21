@@ -179,6 +179,55 @@ Respond with ONLY valid JSON:
 }
 
 /**
+ * Generate a "quiet brief" — sent when there are no pending actions.
+ * AI-generated, warm, mentions upcoming events/todos if any.
+ * Stage: drafting (gemini-2.5-flash → claude-sonnet)
+ */
+export async function generateQuietBriefIntro(
+  briefType: 'morning' | 'afternoon',
+  events: { title: string; time: string }[],
+  todos: { title: string; due?: string }[],
+  settings: UserSettings
+): Promise<{ greeting: string; subject: string; body: string }> {
+  const eventsText = events.length > 0
+    ? events.map(e => `${e.time}: ${e.title}`).join('\n')
+    : 'No meetings scheduled'
+  const todosText = todos.length > 0
+    ? todos.map(t => `${t.title}${t.due ? ` (due: ${t.due})` : ''}`).join('\n')
+    : 'No pending todos'
+
+  const prompt = `You are Mila writing a ${briefType} brief email. There are NO pending action proposals — the inbox is clear. Write a warm, short "all clear" email.
+
+TONE: ${settings.ai_tone_user}
+
+TODAY'S SCHEDULE:
+${eventsText}
+
+UPCOMING TODOS:
+${todosText}
+
+RULES:
+- Output in CZECH. Plain text only. No markdown.
+- Address user as "vy" (you). Never "uživatel".
+- greeting: a natural ${briefType === 'morning' ? 'morning' : 'afternoon'} greeting.
+- subject: concise email subject — convey "nothing urgent" positively. No fake urgency.
+- body: 3-5 sentences. Start with a positive note that the inbox is clear. Then briefly mention today's schedule if there are meetings, or upcoming todos if any. End on an encouraging note. Keep it human and warm — not a form template.
+- Do NOT invent fake tasks or actions. Only reference the schedule and todos provided above.
+
+Respond with ONLY valid JSON:
+{
+  "greeting": "...",
+  "subject": "...",
+  "body": "..."
+}`
+
+  const text = await runAITask('drafting', prompt)
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('Failed to parse quiet brief intro')
+  return JSON.parse(jsonMatch[0])
+}
+
+/**
  * Generate urgent notification intro (subject, header, body).
  * Stage: drafting (gemini-2.5-flash → claude-sonnet)
  */
