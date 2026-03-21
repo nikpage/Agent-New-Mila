@@ -643,6 +643,235 @@ function CompletedScheduleView({ actionId, token, actionData }: { actionId: stri
   )
 }
 
+// ─── Conflict Resolve View (for ?do=resolve_conflict) ───────────────────────
+// Shows conflict details, editable draft (if applicable), confirm button.
+
+function ConflictResolveView({ actionId, token }: { actionId: string; token: string }) {
+  const searchParams = useSearchParams()
+  const resolutionAction = searchParams.get('action') || ''
+  const conflictIdx = searchParams.get('conflict_idx') || '0'
+
+  const [loading, setLoading] = useState(true)
+  const [executing, setExecuting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<SuccessState>({ show: false, message: '' })
+
+  const [resolutionData, setResolutionData] = useState<{
+    action: string
+    conflict: { event_title: string; event_start: string; event_end: string }
+    draft: { subject: string; body: string } | null
+    summary: string
+    existingEvent: { title: string; time: string; cpName: string | null; hasGuests: boolean }
+    altSlot: { time: string; start: string; end: string } | null
+  } | null>(null)
+
+  const [draftSubject, setDraftSubject] = useState('')
+  const [draftBody, setDraftBody] = useState('')
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch(
+          `/api/action/${actionId}/resolve-conflict?token=${token}&action=${resolutionAction}&conflict_idx=${conflictIdx}`
+        )
+        if (!res.ok) {
+          const err = await res.json()
+          if (err.resolved) {
+            setSuccess({ show: true, message: 'Kolize vyřešena', subMessage: 'Konflikt již byl vyřešen.' })
+            setLoading(false)
+            return
+          }
+          throw new Error(err.error || 'Failed to load conflict details')
+        }
+        const data = await res.json()
+        setResolutionData(data)
+        if (data.draft) {
+          setDraftSubject(data.draft.subject)
+          setDraftBody(data.draft.body)
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load')
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [actionId, token, resolutionAction, conflictIdx])
+
+  async function handleConfirm() {
+    setExecuting(true)
+    try {
+      const res = await fetch(`/api/action/${actionId}/resolve-conflict`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          action: resolutionAction,
+          conflict_idx: parseInt(conflictIdx, 10),
+          edited_draft: resolutionData?.draft ? { subject: draftSubject, body: draftBody } : undefined,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || 'Failed to resolve conflict')
+      }
+      const result = await res.json()
+
+      if (resolutionAction === 'move_new') {
+        setSuccess({
+          show: true,
+          message: 'Nový termín nalezen',
+          subMessage: result.newSlot
+            ? `Schůzka přesunuta. Zkontrolujte nový termín v kartě.`
+            : 'Schůzka byla přesunuta na jiný termín.',
+        })
+      } else {
+        setSuccess({
+          show: true,
+          message: resolutionAction === 'reschedule_existing' ? 'Přesunuto a potvrzeno!' : 'Zrušeno a potvrzeno!',
+          subMessage: resolutionAction === 'reschedule_existing'
+            ? 'Stávající schůzka přesunuta, nová potvrzena.'
+            : 'Stávající schůzka zrušena, nová potvrzena.',
+        })
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to resolve')
+      setExecuting(false)
+    }
+  }
+
+  if (success.show) {
+    return <SuccessOverlay message={success.message} subMessage={success.subMessage} />
+  }
+  if (loading) return <Spinner message="Načítání konfliktu..." />
+  if (error) return <ErrorDisplay message={error} />
+  if (!resolutionData) return <ErrorDisplay message="Data nenalezena" />
+
+  const actionLabel = resolutionAction === 'reschedule_existing'
+    ? 'Přesunout stávající'
+    : resolutionAction === 'cancel_existing'
+      ? 'Zrušit stávající'
+      : 'Přesunout novou schůzku'
+
+  return (
+    <Card style={{ width: '100%', maxWidth: '672px', margin: '0 auto' }}>
+      <div style={{ padding: `${theme.spacing.lg} ${theme.spacing.lg} ${theme.spacing.sm}` }}>
+        <p style={{
+          fontSize: theme.typography.sizes.xs,
+          fontWeight: theme.typography.weights.medium,
+          color: '#dc2626',
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+        }}>
+          Řešení kolize
+        </p>
+        <h2 style={{
+          fontSize: theme.typography.sizes.lg,
+          fontWeight: theme.typography.weights.semibold,
+          color: theme.colors.text,
+          marginTop: theme.spacing.xs,
+        }}>
+          {actionLabel}
+        </h2>
+      </div>
+
+      {/* Summary of what will happen */}
+      <div style={{
+        padding: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
+        fontSize: theme.typography.sizes.base,
+        color: theme.colors.text,
+        lineHeight: '1.625',
+      }}>
+        {resolutionData.summary}
+      </div>
+
+      {/* Existing event info */}
+      <div style={{
+        margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
+        padding: theme.spacing.md,
+        backgroundColor: '#fef2f2',
+        borderRadius: theme.borderRadius.md,
+        border: '1px solid #fecaca',
+      }}>
+        <div style={{ fontSize: theme.typography.sizes.sm, fontWeight: 600, color: '#991b1b', marginBottom: '4px' }}>
+          Stávající schůzka
+        </div>
+        <div style={{ fontSize: theme.typography.sizes.sm, color: '#1f2937' }}>
+          <strong>{resolutionData.existingEvent.title}</strong>
+        </div>
+        <div style={{ fontSize: theme.typography.sizes.sm, color: '#6b7280' }}>
+          {resolutionData.existingEvent.time}
+        </div>
+        {resolutionData.existingEvent.cpName && (
+          <div style={{ fontSize: theme.typography.sizes.sm, color: '#6b7280' }}>
+            {resolutionData.existingEvent.cpName}
+          </div>
+        )}
+      </div>
+
+      {/* Alt slot info (for reschedule) */}
+      {resolutionData.altSlot && resolutionAction === 'reschedule_existing' && (
+        <div style={{
+          margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
+          padding: theme.spacing.md,
+          backgroundColor: theme.colors.successBg,
+          borderRadius: theme.borderRadius.md,
+          border: `1px solid ${theme.colors.success}`,
+        }}>
+          <div style={{ fontSize: theme.typography.sizes.sm, fontWeight: 600, color: theme.colors.success, marginBottom: '4px' }}>
+            Nový termín pro stávající
+          </div>
+          <div style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.text }}>
+            {resolutionData.altSlot.time}
+          </div>
+        </div>
+      )}
+
+      {/* Editable draft (only if event has guests/CP) */}
+      {resolutionData.draft && (
+        <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}`, display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
+          <div style={{
+            fontSize: theme.typography.sizes.xs,
+            fontWeight: theme.typography.weights.medium,
+            color: theme.colors.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: '0.05em',
+          }}>
+            Zpráva pro {resolutionData.existingEvent.cpName || 'účastníky'}
+          </div>
+          <Input
+            label="Předmět"
+            value={draftSubject}
+            onChange={e => setDraftSubject(e.target.value)}
+          />
+          <Textarea
+            label="Zpráva"
+            value={draftBody}
+            onChange={e => setDraftBody(e.target.value)}
+            rows={6}
+          />
+        </div>
+      )}
+
+      {/* Confirm / cancel */}
+      <div style={{
+        padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+        display: 'flex',
+        gap: theme.spacing.sm,
+        borderTop: `1px solid ${theme.colors.border}`,
+      }}>
+        <Button
+          variant="primary"
+          onClick={handleConfirm}
+          loading={executing}
+        >
+          Potvrdit
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
 // ─── Detail View (no ?do param — DETAILY link from email) ───────────────────
 // This is the only case where showing the full card makes sense.
 
@@ -788,6 +1017,11 @@ function ActionContent() {
     // No type param (old URLs) or REPLY → email draft review
     // DraftReviewView also detects non-REPLY types and redirects to DirectExecuteView
     return <DraftReviewView actionId={actionId} token={token} />
+  }
+
+  // ?do=resolve_conflict → Conflict resolution page
+  if (doAction === 'resolve_conflict') {
+    return <ConflictResolveView actionId={actionId} token={token} />
   }
 
   // ?do=todo or ?do=blacklist → Auto-execute, minimal Done page

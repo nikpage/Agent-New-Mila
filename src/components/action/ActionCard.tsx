@@ -123,7 +123,9 @@ export function ActionCard({
         ? missingInfoFields.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
         : locationPartial
     )
-    doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold)
+    // Conflicts block UDĚLAT — user MUST resolve conflict first
+    const hasConflicts = Array.isArray(actionPayload?.conflicts) && (actionPayload.conflicts as unknown[]).length > 0
+    doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold) || hasConflicts
   }
 
   const getUrgencyLabel = (urgency: number): string => {

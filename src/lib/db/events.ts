@@ -510,6 +510,35 @@ export async function upsertEventByGoogleId(
 }
 
 /**
+ * Reschedule an event — update times in DB + Google Calendar.
+ * Cleans up old travel buffers (caller must re-book if needed).
+ */
+export async function rescheduleEvent(
+  userId: string,
+  eventId: string,
+  newStart: Date,
+  newEnd: Date,
+  updateGcal: (userId: string, googleEventId: string, updates: { startTime: Date; endTime: Date }) => Promise<unknown>
+): Promise<Event> {
+  const event = await getEventById(eventId)
+  if (!event) throw new Error(`Event ${eventId} not found`)
+
+  // Update Google Calendar if linked
+  if (event.google_event_id) {
+    await updateGcal(userId, event.google_event_id, { startTime: newStart, endTime: newEnd })
+  }
+
+  // Clean up old travel buffers (they're invalid with new times)
+  await cleanupTravelBuffers(eventId)
+
+  // Update DB
+  return updateEvent(eventId, {
+    start_time: newStart.toISOString(),
+    end_time: newEnd.toISOString(),
+  })
+}
+
+/**
  * Get all events that are children of a parent event (travel buffers, etc.)
  */
 export async function getChildEvents(parentEventId: string): Promise<Event[]> {

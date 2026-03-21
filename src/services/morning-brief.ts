@@ -30,6 +30,9 @@ interface BriefAction {
   executeUrl: string
   todoUrl: string
   blacklistUrl: string
+  resolveRescheduleUrl: string | null
+  resolveCancelUrl: string | null
+  resolveMoveNewUrl: string | null
 }
 
 export type BriefType = 'morning' | 'afternoon'
@@ -87,6 +90,13 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       const todoUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`
       const blacklistUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`
 
+      // Conflict resolution URLs (only for SCHEDULE actions with conflicts)
+      const actionPayload = action.payload as Record<string, unknown> | null
+      const hasConflicts = action.action_type === 'SCHEDULE' && Array.isArray(actionPayload?.conflicts) && (actionPayload!.conflicts as unknown[]).length > 0
+      const resolveRescheduleUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=reschedule_existing&conflict_idx=0` : null
+      const resolveCancelUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=cancel_existing&conflict_idx=0` : null
+      const resolveMoveNewUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=move_new&conflict_idx=0` : null
+
       briefActions.push({
         action,
         cpName:   cp.name || cp.primary_identifier,
@@ -99,6 +109,9 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
         executeUrl,
         todoUrl,
         blacklistUrl,
+        resolveRescheduleUrl,
+        resolveCancelUrl,
+        resolveMoveNewUrl,
       })
     }
 
@@ -223,7 +236,7 @@ function generateBriefEmailHtml(
     <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">${greeting}</h1>
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
 
-    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl }) => {
+    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl }) => {
       const payload = action.payload as Record<string, unknown> | null
       const payloadLocation = payload?.location as string | null
       const isOnline = !!payload?.is_online
@@ -240,7 +253,9 @@ function generateBriefEmailHtml(
             ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
             : locationPartial
         )
-        needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
+        // Conflicts block UDĚLAT — user MUST resolve conflict first
+        const hasConflicts = Array.isArray(payload?.conflicts) && (payload.conflicts as unknown[]).length > 0
+        needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold) || hasConflicts
       }
       const location = payloadLocation || null
       // Build slotText from hold start/end if present
@@ -278,7 +293,10 @@ function generateBriefEmailHtml(
         meetingType,
         cpPhone: (payload?.cp_phone as string) || null,
         slotText,
-        conflicts: (payload?.conflicts as { event_title: string; recommendation: 'move_existing' | 'suggest_alternate' }[]) || undefined,
+        conflicts: (payload?.conflicts as import('@/components/action/action-card-template').ConflictCardData[]) || undefined,
+        resolveRescheduleUrl: resolveRescheduleUrl || undefined,
+        resolveCancelUrl: resolveCancelUrl || undefined,
+        resolveMoveNewUrl: resolveMoveNewUrl || undefined,
       })
     }).join('')}
   </div>
@@ -416,6 +434,11 @@ async function sendInstantNotificationForConversation(
       }
 
       const token = generateActionToken(action.id, userId)
+
+      // Conflict resolution URLs (only for SCHEDULE actions with conflicts)
+      const instantPayload = action.payload as Record<string, unknown> | null
+      const instantHasConflicts = action.action_type === 'SCHEDULE' && Array.isArray(instantPayload?.conflicts) && (instantPayload!.conflicts as unknown[]).length > 0
+
       briefActions.push({
         action,
         cpName: cp.name || cp.primary_identifier,
@@ -428,6 +451,9 @@ async function sendInstantNotificationForConversation(
         executeUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute&type=${action.action_type}`,
         todoUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`,
         blacklistUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`,
+        resolveRescheduleUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=reschedule_existing&conflict_idx=0` : null,
+        resolveCancelUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=cancel_existing&conflict_idx=0` : null,
+        resolveMoveNewUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=move_new&conflict_idx=0` : null,
       })
     }
 
@@ -495,7 +521,7 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
     <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">${header}</h1>
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${body}</p>
 
-    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl }) => {
+    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl }) => {
       const payload = action.payload as Record<string, unknown> | null
       const payloadLocation = payload?.location as string | null
       const isOnline = !!payload?.is_online
@@ -512,7 +538,9 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
             ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
             : locationPartial
         )
-        needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
+        // Conflicts block UDĚLAT — user MUST resolve conflict first
+        const hasConflicts = Array.isArray(payload?.conflicts) && (payload.conflicts as unknown[]).length > 0
+        needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold) || hasConflicts
       }
       const location = payloadLocation || null
       // Build slotText from hold start/end if present
@@ -550,7 +578,10 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
         meetingType,
         cpPhone: (payload?.cp_phone as string) || null,
         slotText,
-        conflicts: (payload?.conflicts as { event_title: string; recommendation: 'move_existing' | 'suggest_alternate' }[]) || undefined,
+        conflicts: (payload?.conflicts as import('@/components/action/action-card-template').ConflictCardData[]) || undefined,
+        resolveRescheduleUrl: resolveRescheduleUrl || undefined,
+        resolveCancelUrl: resolveCancelUrl || undefined,
+        resolveMoveNewUrl: resolveMoveNewUrl || undefined,
       })
     }).join('')}
   </div>

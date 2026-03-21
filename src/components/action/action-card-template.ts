@@ -5,6 +5,26 @@
 
 import { theme } from '@/config/theme'
 
+/** Enriched conflict data for rendering in action cards and conflict resolution UI */
+export interface ConflictCardData {
+  [key: string]: string | number | boolean | null | undefined
+  event_id: string
+  event_title: string
+  event_start: string          // ISO
+  event_end: string            // ISO
+  event_weight: number
+  event_score: number
+  event_cp_id: string | null
+  event_cp_name: string | null
+  event_has_guests: boolean
+  event_google_id: string | null
+  deal_context: string | null
+  recommendation: 'move_existing' | 'suggest_alternate'
+  alt_slot_start: string | null
+  alt_slot_end: string | null
+  new_event_score: number
+}
+
 // ─── Shared Constants ────────────────────────────────────────────────────────
 
 export const TYPE_LABEL: Record<string, string> = {
@@ -46,7 +66,14 @@ export interface ActionCardEmailParams {
   meetingType?: 'address' | 'online' | 'phone'
   cpPhone?: string | null
   slotText?: string | null
-  conflicts?: { event_title: string; recommendation: 'move_existing' | 'suggest_alternate' }[]
+  conflicts?: ConflictCardData[]
+  /** Resolution button URLs — constructed by morning-brief.ts */
+  resolveRescheduleUrl?: string | null
+  resolveCancelUrl?: string | null
+  resolveMoveNewUrl?: string | null
+  /** New action's intent summary (for conflict comparison display) */
+  newActionTopic?: string | null
+  newActionScore?: number | null
 }
 
 /**
@@ -84,7 +111,7 @@ function formatIntentHtml(text: string): string {
 }
 
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
-  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone, slotText, conflicts } = params
+  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone, slotText, conflicts, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl } = params
   // Resolve effective meeting type: use meetingType if set, fall back to isOnline for backward compat
   const effectiveMeetingType = meetingType || (isOnline ? 'online' : 'address')
 
@@ -143,16 +170,54 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
       ` : ''}
 
       ${conflicts && conflicts.length > 0 ? `
-      <!-- CONFLICT WARNING -->
-      <div style="margin: 0 24px 12px 24px; padding: 12px 16px; background-color: #fef2f2; border: 2px solid #dc2626; border-radius: 8px;">
-        <div style="font-size: 14px; font-weight: 700; color: #dc2626; margin-bottom: 6px;">⚠ KOLIZE V KALENDÁŘI</div>
-        ${conflicts.map(c =>
-          `<div style="font-size: 14px; color: #991b1b; margin-bottom: 4px;">
-            <strong>${c.event_title}</strong> — ${c.recommendation === 'move_existing' ? 'Mila navrhuje přesunout' : 'nelze přesunout'}
-          </div>`
-        ).join('')}
-        <div style="font-size: 13px; color: #991b1b; margin-top: 6px;">Zkontrolujte přes UPRAVIT nebo tento termín odmítněte.</div>
-      </div>
+      <!-- CONFLICT RESOLUTION -->
+      ${conflicts.map((c, idx) => {
+        const tz = 'Europe/Prague'
+        const cStart = new Date(c.event_start)
+        const cEnd = new Date(c.event_end)
+        const cTimeStr = `${cStart.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })} – ${cEnd.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })}`
+        const cDateStr = cStart.toLocaleDateString('cs-CZ', { weekday: 'short', day: 'numeric', month: 'short', timeZone: tz })
+        const altTimeStr = c.alt_slot_start ? (() => {
+          const altS = new Date(c.alt_slot_start!)
+          const altE = c.alt_slot_end ? new Date(c.alt_slot_end) : new Date(altS.getTime() + 30 * 60000)
+          return `${altS.toLocaleDateString('cs-CZ', { weekday: 'short', day: 'numeric', month: 'short', timeZone: tz })}, ${altS.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })} – ${altE.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })}`
+        })() : null
+        const recText = c.recommendation === 'move_existing'
+          ? (altTimeStr ? `Mila doporučuje: přesunout stávající na ${altTimeStr}` : 'Mila doporučuje: přesunout stávající')
+          : 'Stávající nelze přesunout — zvažte přesun nové'
+        const btnStyle = 'display: inline-block; padding: 6px 12px; border-radius: 6px; font-weight: 500; font-size: 13px; text-decoration: none; margin-right: 6px; margin-top: 6px;'
+
+        return `<div style="margin: 0 24px 12px 24px; padding: 14px 16px; background-color: #fef2f2; border: 2px solid #dc2626; border-radius: 8px;">
+        <div style="font-size: 14px; font-weight: 700; color: #dc2626; margin-bottom: 10px;">⚠ KOLIZE V KALENDÁŘI</div>
+
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 10px;">
+          <tr>
+            <td style="vertical-align: top; width: 50%; padding-right: 8px;">
+              <div style="font-size: 12px; font-weight: 700; color: #991b1b; text-transform: uppercase; margin-bottom: 4px;">Stávající</div>
+              <div style="font-size: 14px; color: #1f2937; font-weight: 600;">${c.event_title}</div>
+              <div style="font-size: 13px; color: #6b7280;">${cDateStr}, ${cTimeStr}</div>
+              ${c.event_cp_name ? `<div style="font-size: 13px; color: #6b7280;">CP: ${c.event_cp_name}</div>` : ''}
+              <div style="font-size: 12px; color: #9ca3af; margin-top: 2px;">Váha: ${c.event_weight} | Skóre: ${c.event_score}</div>
+              ${c.deal_context ? `<div style="font-size: 12px; color: #6b7280; margin-top: 4px; font-style: italic;">${c.deal_context.slice(0, 120)}${c.deal_context.length > 120 ? '…' : ''}</div>` : '<div style="font-size: 12px; color: #9ca3af; margin-top: 4px;">Žádná konverzace</div>'}
+            </td>
+            <td style="vertical-align: top; width: 50%; padding-left: 8px;">
+              <div style="font-size: 12px; font-weight: 700; color: #1e40af; text-transform: uppercase; margin-bottom: 4px;">Nová (tato)</div>
+              <div style="font-size: 14px; color: #1f2937; font-weight: 600;">${cpName} — ${topic}</div>
+              ${slotText ? `<div style="font-size: 13px; color: #6b7280;">${slotText}</div>` : ''}
+              <div style="font-size: 12px; color: #9ca3af; margin-top: 2px;">Skóre: ${c.new_event_score}</div>
+            </td>
+          </tr>
+        </table>
+
+        <div style="font-size: 13px; color: #991b1b; font-weight: 500; margin-bottom: 8px;">${recText}</div>
+
+        <div>
+          ${resolveRescheduleUrl ? `<a href="${resolveRescheduleUrl}" style="${btnStyle} background-color: #dc2626; color: white;">PŘESUNOUT STÁVAJÍCÍ</a>` : ''}
+          ${resolveCancelUrl ? `<a href="${resolveCancelUrl}" style="${btnStyle} background-color: #991b1b; color: white;">ZRUŠIT STÁVAJÍCÍ</a>` : ''}
+          ${resolveMoveNewUrl ? `<a href="${resolveMoveNewUrl}" style="${btnStyle} background-color: #1e40af; color: white;">PŘESUNOUT NOVOU</a>` : ''}
+        </div>
+      </div>`
+      }).join('')}
       ` : ''}
 
       <!-- DETAILS LINK -->
