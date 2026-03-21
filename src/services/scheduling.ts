@@ -42,7 +42,8 @@ import {
 import { getUserSettings } from '@/lib/db/users'
 import { getUserById } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
-import { calculatePriorityScore, getPendingScheduleActions, updateAction } from '@/lib/db/actions'
+import { calculatePriorityScore, getPendingScheduleActions, updateAction, getActionsForUser } from '@/lib/db/actions'
+import { getConversationById } from '@/lib/db/conversations'
 import { getTravelTime, calculateDepartureTime } from '@/lib/google/maps'
 import { isWorkingDay, getNextWorkingDay } from '@/lib/holidays'
 import { generateSchedulingIntent } from '@/lib/ai/mila-voice'
@@ -89,7 +90,8 @@ async function findAllConflicts(
     // Convert CalendarEvent to Event shape for conflict handling.
     // These are real user calendar events — treat as immovable (weight=100)
     // since Mila has no authority over events she didn't create.
-    result.push({
+    // Carry attendees as _attendees for conflict resolution draft generation.
+    const syntheticEvent = {
       id: gcalEvent.id,
       user_id: userId,
       title: gcalEvent.summary || 'Calendar event',
@@ -100,7 +102,10 @@ async function findAllConflicts(
       status: gcalEvent.status || 'confirmed',
       google_event_id: gcalEvent.id,
       created_at: new Date().toISOString(),
-    } as Event)
+    } as Event
+    // Attach attendees as non-schema property for conflict enrichment
+    ;(syntheticEvent as Record<string, unknown>)._attendees = gcalEvent.attendees || []
+    result.push(syntheticEvent)
   }
 
   return result
@@ -140,7 +145,13 @@ export interface ConflictInfo {
   existingScore: number
   newScore: number
   recommendation: 'move_existing' | 'suggest_alternate'
+  /** GCal attendees on the conflicting event (email + name), for drafting reschedule/cancel messages */
+  attendees?: { email: string; name?: string }[]
 }
+
+// Re-export ConflictCardData from action-card-template (single source of truth)
+import type { ConflictCardData } from '@/components/action/action-card-template'
+export type { ConflictCardData } from '@/components/action/action-card-template'
 
 /**
  * Find the best available slots for a meeting
@@ -542,6 +553,8 @@ export async function handleConflict(
   const conflictInfos: ConflictInfo[] = []
 
   for (const existing of conflicts) {
+    const rawAttendees = ((existing as Record<string, unknown>)._attendees as { email: string; name?: string }[]) || []
+
     // If weight is NULL, user hasn't set it — don't move this event
     if (existing.weight == null) {
       conflictInfos.push({
@@ -549,6 +562,7 @@ export async function handleConflict(
         existingScore: Infinity,
         newScore: newEventScore,
         recommendation: 'suggest_alternate',
+        attendees: rawAttendees,
       })
       continue
     }
@@ -566,6 +580,7 @@ export async function handleConflict(
       existingScore,
       newScore: newEventScore,
       recommendation,
+      attendees: rawAttendees,
     })
   }
 
@@ -1168,6 +1183,88 @@ export async function scheduleSingleAction(
 }
 
 /**
+ * Enrich conflict data with CP name, deal context, alternative slot, and guest info.
+ * This makes the conflict card actionable — user sees both sides and can resolve in one click.
+ */
+async function enrichConflictData(
+  userId: string,
+  conflictInfos: ConflictInfo[],
+  settings: UserSettings
+): Promise<ConflictCardData[]> {
+  const enriched: ConflictCardData[] = []
+
+  for (const conflict of conflictInfos) {
+    const existing = conflict.existingEvent
+    const cpId = (existing as Record<string, unknown>).cp_id as string | null || null
+    const googleEventId = (existing as Record<string, unknown>).google_event_id as string | null || null
+
+    // Get CP name
+    let cpName: string | null = null
+    if (cpId) {
+      try {
+        const cp = await getCPById(cpId)
+        cpName = cp?.name || cp?.primary_identifier || null
+      } catch { /* CP not found — ok */ }
+    }
+
+    // Get deal context from conversation (if this event was created by Mila)
+    let dealContext: string | null = null
+    if (cpId) {
+      try {
+        // Reverse lookup: find action whose hold_event_id matches this event
+        const userActions = await getActionsForUser(userId, { actionType: 'SCHEDULE' })
+        const originAction = userActions.find(a => {
+          const p = a.payload as Record<string, unknown> | null
+          return p?.hold_event_id === existing.id
+        })
+        if (originAction?.conversation_id) {
+          const conv = await getConversationById(originAction.conversation_id)
+          dealContext = conv?.summary_text || null
+        }
+      } catch { /* lookup failed — ok, deal_context stays null */ }
+    }
+
+    // Detect guests (GCal attendees, excluding the user themselves)
+    const attendees = conflict.attendees || []
+    const hasGuests = attendees.length > 0
+
+    // Find ONE alternative slot for the existing event (quick GCal scan)
+    const eventDuration = Math.round(
+      (new Date(existing.end_time).getTime() - new Date(existing.start_time).getTime()) / 60000
+    )
+    let altSlotStart: string | null = null
+    let altSlotEnd: string | null = null
+    try {
+      const altSlots = await findBestSlots(userId, eventDuration, 1)
+      if (altSlots.length > 0) {
+        altSlotStart = altSlots[0].start.toISOString()
+        altSlotEnd = altSlots[0].end.toISOString()
+      }
+    } catch { /* slot search failed — no alt slot */ }
+
+    enriched.push({
+      event_id: existing.id,
+      event_title: existing.title || 'Calendar event',
+      event_start: existing.start_time,
+      event_end: existing.end_time,
+      event_weight: existing.weight ?? 7,
+      event_score: conflict.existingScore === Infinity ? 999 : conflict.existingScore,
+      event_cp_id: cpId,
+      event_cp_name: cpName,
+      event_has_guests: hasGuests,
+      event_google_id: googleEventId,
+      deal_context: dealContext,
+      recommendation: conflict.recommendation,
+      alt_slot_start: altSlotStart,
+      alt_slot_end: altSlotEnd,
+      new_event_score: conflict.newScore,
+    })
+  }
+
+  return enriched
+}
+
+/**
  * After creating a hold, update the action record with hold info and rewrite intent_cs.
  * This ensures the action card always matches the actual hold event.
  */
@@ -1196,6 +1293,38 @@ async function updateActionWithHold(
   else if (locationPartial) locationStatus = 'partial'
   else locationStatus = 'confirmed'
 
+  // Enrich conflict data with CP name, deal context, alt slot, guest info
+  let enrichedConflicts: ConflictCardData[] | undefined
+  if (holdResult.conflicts && holdResult.conflicts.length > 0) {
+    try {
+      enrichedConflicts = await enrichConflictData(
+        action.user_id,
+        holdResult.conflicts,
+        settings
+      )
+    } catch (enrichError) {
+      console.error('[optimizer] Conflict enrichment failed, using minimal data:', enrichError)
+      // Fallback: minimal conflict data (same as before)
+      enrichedConflicts = holdResult.conflicts.map(c => ({
+        event_id: c.existingEvent.id,
+        event_title: c.existingEvent.title || 'Calendar event',
+        event_start: c.existingEvent.start_time,
+        event_end: c.existingEvent.end_time,
+        event_weight: c.existingEvent.weight ?? 7,
+        event_score: c.existingScore === Infinity ? 999 : c.existingScore,
+        event_cp_id: null,
+        event_cp_name: null,
+        event_has_guests: false,
+        event_google_id: (c.existingEvent as Record<string, unknown>).google_event_id as string | null || null,
+        deal_context: null,
+        recommendation: c.recommendation,
+        alt_slot_start: null,
+        alt_slot_end: null,
+        new_event_score: c.newScore,
+      }))
+    }
+  }
+
   const conflicts = holdResult.conflicts?.map(c => ({
     name: c.existingEvent.title || 'existing event',
     recommendation: c.recommendation,
@@ -1213,11 +1342,7 @@ async function updateActionWithHold(
     location: meetingLocation || null,
     is_online: false,
     meeting_type: (payload.meeting_type as string) || 'address',
-    conflicts: holdResult.conflicts?.map(c => ({
-      event_id: c.existingEvent.id,
-      event_title: c.existingEvent.title,
-      recommendation: c.recommendation,
-    })),
+    conflicts: enrichedConflicts,
   }
 
   // Persist hold data + original intent to DB FIRST (safety against timeout).

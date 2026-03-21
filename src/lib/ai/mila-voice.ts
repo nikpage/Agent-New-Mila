@@ -325,3 +325,61 @@ Respond with ONLY valid JSON:
 
   return JSON.parse(jsonMatch[0])
 }
+
+/**
+ * Generate a conflict resolution draft — reschedule or cancel notification to CP/guests.
+ * Only called when existing event has guests/CP that need to be informed.
+ * Stage: drafting (gemini-2.5-flash → claude-sonnet)
+ */
+export async function generateConflictResolutionDraft(
+  resolutionType: 'reschedule' | 'cancel',
+  existingEventTitle: string,
+  existingEventTime: string,
+  newTime: string | null,
+  cpName: string,
+  dealContext: string | null,
+  settings: UserSettings
+): Promise<{ subject: string; body: string }> {
+  console.log(`[AI:generateConflictResolutionDraft] ${resolutionType} for "${existingEventTitle}" → ${cpName}`)
+  const systemContext = getAISystemPrompt(settings)
+
+  const prompt = `${systemContext}
+
+You are an executive assistant writing an email on behalf of your boss to inform a counterparty about a scheduling change.
+
+TONE: ${settings.ai_tone_cp}
+Language: CZECH.
+
+RESOLUTION TYPE: ${resolutionType === 'reschedule' ? 'RESCHEDULE — the meeting is being moved to a new time' : 'CANCEL — the meeting is being cancelled'}
+
+DETAILS:
+- Event: ${existingEventTitle}
+- Original time: ${existingEventTime}
+${resolutionType === 'reschedule' && newTime ? `- New time: ${newTime}` : ''}
+- Counterparty: ${cpName}
+${dealContext ? `- Deal context: ${dealContext}` : ''}
+
+RULES:
+- Output in CZECH. Plain text only.
+- Sign off with: ${settings.ai_email_signature}
+${resolutionType === 'reschedule'
+    ? '- Politely inform about the time change, apologize for the inconvenience, confirm the new time.'
+    : '- Politely cancel the meeting, apologize, offer to reschedule if appropriate.'}
+- Keep it concise — 3-5 sentences max.
+
+Respond with ONLY valid JSON:
+{
+  "subject": "Email subject line",
+  "body": "Email body text (ready to send)"
+}`
+
+  const text = await runAITask('drafting', prompt)
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) {
+    // Fallback — never leave the user without a draft
+    return resolutionType === 'reschedule'
+      ? { subject: `Přesunutí schůzky: ${existingEventTitle}`, body: `Dobrý den,\n\nomlouvám se, ale potřebuji přesunout naši schůzku "${existingEventTitle}"${newTime ? ` na ${newTime}` : ''}.\n\nDěkuji za pochopení.\n\n${settings.ai_email_signature}` }
+      : { subject: `Zrušení schůzky: ${existingEventTitle}`, body: `Dobrý den,\n\nomlouvám se, ale musím zrušit naši schůzku "${existingEventTitle}".\n\nDěkuji za pochopení.\n\n${settings.ai_email_signature}` }
+  }
+  return JSON.parse(jsonMatch[0])
+}
