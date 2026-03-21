@@ -55,6 +55,23 @@ Last updated: 2026-03-15
 - **Fix**: Removed priority field from AI prompt, return type, and all consumers. Removed `pain_factor` from Supabase types. Numeric `priority_score` (calculatePriorityScore) unchanged.
 - **Files**: `src/lib/ai/gemini.ts`, `src/services/planning.ts`, `src/services/ingestion.ts`, `src/services/bulk-ingestion.ts`, `src/lib/supabase/types.ts`
 
+## Pre-Pilot Verification Checklist
+
+### VERIFY-001: Agent lock wiring
+- **Status**: TO VERIFY
+- **Question**: `tryAcquireUserLock`/`releaseUserLock` in `src/lib/db/locks.ts` are not called from `agent.ts` or the `/api/agent/run` route. Was the lock intentionally removed because it was blocking the agent for too long (see BUG-004 history)? Or is the wiring just missing?
+- **Risk**: Without the lock, overlapping QStash deliveries can cause duplicate agent runs → duplicate actions.
+- **Action**: Check git history for when/why the lock calls were removed. Re-wire if it was accidental, or document the decision if intentional.
+
+### VERIFY-002: Embedding failure visibility
+- **Status**: TO VERIFY
+- **Claim**: Embedding failures are supposed to be surfaced now (not silent as BUG-010 described). Verify that the fix landed — check `src/lib/embeddings/generate.ts` and callers for proper error logging/reporting.
+
+### VERIFY-003: WhatsApp group message handling
+- **Status**: TO VERIFY
+- **What**: `scripts/whatsapp-daemon.ts` line 303 has `if (jid.endsWith('@g.us')) continue` — group messages are dropped entirely. SPEC and CLAUDE.md describe group support (extract participant ID, prepend group name). The group handling code was never written.
+- **Impact**: Low for pilot (1:1 messages work), but needs to be built if pilot user uses WA group chats for deals.
+
 ## Known Issues (not yet fixed)
 
 ### BUG-008: Calendar events not linking to conversations
