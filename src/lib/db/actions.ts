@@ -89,6 +89,32 @@ export async function getPendingActionsForBrief(userId: string): Promise<ActionP
 }
 
 /**
+ * Get actions that were completed or approved since a given timestamp.
+ * Used to show a "done" section in the morning brief so the user
+ * sees what Mila already handled.
+ */
+export async function getRecentlyCompletedActions(
+  userId: string,
+  since: string
+): Promise<ActionProposal[]> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('action_proposals')
+    .select('*')
+    .eq('user_id', userId)
+    .in('status', ['approved', 'completed'])
+    .in('action_type', ['REPLY', 'SCHEDULE', 'TODO'])
+    .gte('last_notified_at', since)
+    .order('last_notified_at', { ascending: false })
+
+  if (error) {
+    throw new Error(`Failed to get recently completed actions: ${error.message}`)
+  }
+
+  return data || []
+}
+
+/**
  * Get pending unsent SCHEDULE actions for batch optimization
  * Returns only actions that haven't had invites sent yet
  */
@@ -377,21 +403,46 @@ export async function getActionsForConversation(
 }
 
 /**
- * Get the set of action_type values that already have pending status for a conversation.
+ * Get the set of action_type values that already exist for a conversation
+ * and should NOT be re-proposed.
+ *
+ * Includes:
+ *  - pending actions (not yet acted on)
+ *  - approved/completed actions created within the last 7 days
+ *    (prevents re-proposing meetings that were already confirmed,
+ *     replies already sent, etc.)
  */
 export async function getPendingActionTypes(conversationId: string): Promise<Set<string>> {
   const supabase = getSupabaseAdmin()
-  const { data, error } = await supabase
+
+  // 1. All pending actions — always block re-proposal
+  const { data: pending, error: pendingErr } = await supabase
     .from('action_proposals')
     .select('action_type')
     .eq('conversation_id', conversationId)
     .eq('status', 'pending')
 
-  if (error) {
-    throw new Error(`Failed to get pending action types: ${error.message}`)
+  if (pendingErr) {
+    throw new Error(`Failed to get pending action types: ${pendingErr.message}`)
   }
 
-  return new Set((data || []).map(r => r.action_type))
+  // 2. Recently approved/completed actions — prevent re-planning handled items
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+  const { data: recent, error: recentErr } = await supabase
+    .from('action_proposals')
+    .select('action_type')
+    .eq('conversation_id', conversationId)
+    .in('status', ['approved', 'completed'])
+    .gte('created_at', sevenDaysAgo)
+
+  if (recentErr) {
+    throw new Error(`Failed to get recent action types: ${recentErr.message}`)
+  }
+
+  const types = new Set<string>()
+  for (const r of pending || []) types.add(r.action_type)
+  for (const r of recent || []) types.add(r.action_type)
+  return types
 }
 
 /**

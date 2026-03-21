@@ -3,7 +3,7 @@
  * Generates and sends the daily morning brief email
  */
 
-import { getPendingActionsForBrief, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified } from '@/lib/db/actions'
+import { getPendingActionsForBrief, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, getRecentlyCompletedActions } from '@/lib/db/actions'
 import { getUserById, getUsersDueBrief, getUserSettings } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
@@ -61,9 +61,12 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     }
 
     const actions = await getPendingActionsForBrief(userId)
-    console.log(`[Brief] User ${user.email || userId}: ${actions.length} pending actions`)
+    // Fetch actions completed/approved in the last 24h — shows user what Mila already handled
+    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const completedActions = await getRecentlyCompletedActions(userId, twentyFourHoursAgo)
+    console.log(`[Brief] User ${user.email || userId}: ${actions.length} pending actions, ${completedActions.length} completed`)
 
-    if (actions.length === 0) {
+    if (actions.length === 0 && completedActions.length === 0) {
       console.log(`[Brief] User ${user.email || userId}: nothing to send`)
       return true
     }
@@ -115,6 +118,28 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       })
     }
 
+    // Enrich completed actions for the "done" section
+    interface CompletedBriefItem {
+      cpName: string
+      topic: string
+      actionType: string
+      intent: string
+    }
+    const completedItems: CompletedBriefItem[] = []
+    for (const action of completedActions) {
+      const [cp, conversation] = await Promise.all([
+        getCPById(action.cp_id),
+        getConversationById(action.conversation_id),
+      ])
+      if (!cp || !conversation) continue
+      completedItems.push({
+        cpName: cp.name || cp.primary_identifier,
+        topic: conversation.topic,
+        actionType: action.action_type,
+        intent: action.intent_cs || action.rationale_cs || action.rationale || '',
+      })
+    }
+
     let greeting: string
     let headline: string
     let briefSubject: string
@@ -157,9 +182,9 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
         timeZone: user.email_timezone,
       }),
       location: e.location || undefined,
-    })))
+    })), completedItems)
 
-    const textContent = generateBriefEmailText(greeting, headline, briefActions)
+    const textContent = generateBriefEmailText(greeting, headline, briefActions, completedItems)
     const userEmail = await getUserEmail(userId)
 
     await sendEmail(userId, {
@@ -223,7 +248,8 @@ function generateBriefEmailHtml(
   greeting: string,
   headline: string,
   actions: BriefAction[],
-  events: { title: string; time: string; location?: string }[]
+  events: { title: string; time: string; location?: string }[],
+  completedItems: { cpName: string; topic: string; actionType: string; intent: string }[] = []
 ): string {
   return `
 <!DOCTYPE html>
@@ -299,6 +325,19 @@ function generateBriefEmailHtml(
         resolveMoveNewUrl: resolveMoveNewUrl || undefined,
       })
     }).join('')}
+
+    ${completedItems.length > 0 ? `
+    <div style="margin-top: 40px; padding-top: 24px; border-top: 1px solid ${theme.colors.border};">
+      <h2 style="font-size: 18px; color: ${theme.colors.textMuted}; margin-bottom: 16px;">Co uz Mila vyridila</h2>
+      ${completedItems.map(item => {
+        const typeLabel = item.actionType === 'REPLY' ? 'Odpoved' : item.actionType === 'SCHEDULE' ? 'Schuzka' : 'Ukol'
+        return `
+        <div style="padding: 12px 16px; margin-bottom: 8px; background: ${theme.colors.surface}; border-radius: 8px; border-left: 3px solid ${theme.colors.success};">
+          <div style="font-size: 14px; color: ${theme.colors.text}; font-weight: 500;">${item.cpName} · ${typeLabel}</div>
+          <div style="font-size: 13px; color: ${theme.colors.textMuted}; margin-top: 4px;">${item.topic}</div>
+        </div>`
+      }).join('')}
+    </div>` : ''}
   </div>
 </body>
 </html>`.trim()
@@ -307,7 +346,12 @@ function generateBriefEmailHtml(
 /**
  * Generate plain text email content
  */
-function generateBriefEmailText(greeting: string, headline: string, actions: BriefAction[]): string {
+function generateBriefEmailText(
+  greeting: string,
+  headline: string,
+  actions: BriefAction[],
+  completedItems: { cpName: string; topic: string; actionType: string; intent: string }[] = []
+): string {
   let text = `${greeting}\n\n${headline}\n\n`;
   for (const { action, cpName, cpRole, topic, actionUrl } of actions) {
     const intent = action.intent_cs || action.rationale_cs || action.rationale;
@@ -317,6 +361,14 @@ function generateBriefEmailText(greeting: string, headline: string, actions: Bri
     text += `${intent}\n\n`;
     text += `▸ Detaily / Akce: ${actionUrl}\n`;
     text += `------------------------------------------\n\n`;
+  }
+  if (completedItems.length > 0) {
+    text += `\n=== Co uz Mila vyridila ===\n\n`;
+    for (const item of completedItems) {
+      const typeLabel = item.actionType === 'REPLY' ? 'Odpoved' : item.actionType === 'SCHEDULE' ? 'Schuzka' : 'Ukol'
+      text += `✓ ${item.cpName} · ${typeLabel}\n`;
+      text += `  ${item.topic}\n\n`;
+    }
   }
   return text;
 }
