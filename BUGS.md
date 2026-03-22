@@ -57,11 +57,12 @@ Last updated: 2026-03-15
 
 ## Pre-Pilot Verification Checklist
 
-### VERIFY-001: Agent lock wiring
-- **Status**: TO VERIFY
-- **Question**: `tryAcquireUserLock`/`releaseUserLock` in `src/lib/db/locks.ts` are not called from `agent.ts` or the `/api/agent/run` route. Was the lock intentionally removed because it was blocking the agent for too long (see BUG-004 history)? Or is the wiring just missing?
-- **Risk**: Without the lock, overlapping QStash deliveries can cause duplicate agent runs → duplicate actions.
-- **Action**: Check git history for when/why the lock calls were removed. Re-wire if it was accidental, or document the decision if intentional.
+### VERIFY-001: Agent lock — RESOLVED (drop lock, widen polling)
+- **Decision**: Drop the agent lock entirely. Change QStash agent polling from 5 minutes to 10 minutes.
+- **Rationale**: The lock solved a theoretical problem. Agent runs take 1-3 minutes; Vercel kills them at 5 minutes (`maxDuration: 300`). With 10-minute polling, even a worst-case run finishes with 5 minutes to spare — no overlap is possible. Planning-level dedup (`getPendingActionTypes` in `planning.ts:108`) provides a safety net regardless.
+- **Tradeoff**: Emails sit up to 10 minutes before Mila sees them (was 5). Urgent notifications (urgency >= 9) take up to ~15 minutes end-to-end (agent poll + instant-notify poll). Neither is "instant" — both are fine for real estate workflows.
+- **Lock code**: `src/lib/db/locks.ts` and its test can stay (no harm) or be removed later. The lock was removed from `agent.ts` in commit `1c56568` (accidentally bundled with three unrelated fixes). It will not be re-wired.
+- **Action**: Update QStash agent schedule to `*/10 * * * *` when configuring production.
 
 ### VERIFY-002: Embedding failure visibility
 - **Status**: TO VERIFY
