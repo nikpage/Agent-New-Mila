@@ -644,11 +644,27 @@ function CompletedScheduleView({ actionId, token, actionData }: { actionId: stri
 }
 
 // ─── Conflict Resolve View (for ?do=resolve_conflict) ───────────────────────
-// Shows conflict details, editable draft (if applicable), confirm button.
+// Unified conflict solver: toggle which event to move, pick slots, set duration/mode.
+
+type MeetingMode = 'address' | 'online' | 'phone'
+type TargetEvent = 'new' | 'existing'
+
+interface ConflictResolutionData {
+  action: string
+  conflict: { event_title: string; event_start: string; event_end: string }
+  draft: { subject: string; body: string } | null
+  summary: string
+  existingEvent: { title: string; time: string; cpName: string | null; hasGuests: boolean; durationMinutes?: number }
+  newEvent?: { title: string | null; durationMinutes: number | null; start: string | null; end: string | null; cpName: string | null }
+  altSlot: { time: string; start: string; end: string } | null
+  availableSlots?: { start: string; end: string; label: string; busy?: boolean }[]
+  recommendation?: 'move_existing' | 'suggest_alternate'
+}
 
 function ConflictResolveView({ actionId, token }: { actionId: string; token: string }) {
   const searchParams = useSearchParams()
-  const resolutionAction = searchParams.get('action') || ''
+  // Legacy: action param from old email buttons still works, but defaults to unified view
+  const legacyAction = searchParams.get('action') || ''
   const conflictIdx = searchParams.get('conflict_idx') || '0'
 
   const [loading, setLoading] = useState(true)
@@ -656,28 +672,40 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<SuccessState>({ show: false, message: '' })
 
-  const [resolutionData, setResolutionData] = useState<{
-    action: string
-    conflict: { event_title: string; event_start: string; event_end: string }
-    draft: { subject: string; body: string } | null
-    summary: string
-    existingEvent: { title: string; time: string; cpName: string | null; hasGuests: boolean; durationMinutes?: number }
-    newEvent?: { durationMinutes: number | null; start: string | null; end: string | null }
-    altSlot: { time: string; start: string; end: string } | null
-    availableSlots?: { start: string; end: string; label: string }[]
-  } | null>(null)
+  const [resolutionData, setResolutionData] = useState<ConflictResolutionData | null>(null)
 
+  // Which event the user is manipulating
+  const [targetEvent, setTargetEvent] = useState<TargetEvent>('new')
+  // Resolution action — derived from target + user choices
+  const [resolutionAction, setResolutionAction] = useState<string>(legacyAction || 'move_new')
+
+  // Slot picker
+  const [selectedSlot, setSelectedSlot] = useState<{ start: string; end: string } | null>(null)
+
+  // Duration slider (5-60 min, 5 min increments)
+  const [duration, setDuration] = useState<number>(30)
+
+  // Force into booked slot
+  const [forceIntoSlot, setForceIntoSlot] = useState(false)
+
+  // Meeting mode
+  const [meetingMode, setMeetingMode] = useState<MeetingMode>('address')
+  const [locationText, setLocationText] = useState('')
+
+  // Draft (for notification emails)
   const [draftSubject, setDraftSubject] = useState('')
   const [draftBody, setDraftBody] = useState('')
-  const [selectedSlot, setSelectedSlot] = useState<{ start: string; end: string } | null>(null)
-  const [newDuration, setNewDuration] = useState<number | ''>('')
-  const [existingDuration, setExistingDuration] = useState<number | ''>('')
+
+  // Fetch slots when target/duration/force changes
+  const [slotsLoading, setSlotsLoading] = useState(false)
 
   useEffect(() => {
     async function load() {
       try {
+        // Always use 'resolve' action for the unified view — backend returns all data
+        const apiAction = legacyAction || 'move_new'
         const res = await fetch(
-          `/api/action/${actionId}/resolve-conflict?token=${token}&action=${resolutionAction}&conflict_idx=${conflictIdx}`
+          `/api/action/${actionId}/resolve-conflict?token=${token}&action=${apiAction}&conflict_idx=${conflictIdx}&unified=1`
         )
         if (!res.ok) {
           const err = await res.json()
@@ -688,17 +716,27 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
           }
           throw new Error(err.error || 'Failed to load conflict details')
         }
-        const data = await res.json()
+        const data: ConflictResolutionData = await res.json()
         setResolutionData(data)
+
+        // Set initial target based on recommendation
+        if (data.recommendation === 'move_existing') {
+          setTargetEvent('existing')
+          setResolutionAction('reschedule_existing')
+        } else {
+          setTargetEvent('new')
+          setResolutionAction('move_new')
+        }
+
+        // Set initial duration from the event being moved
+        const initDuration = data.recommendation === 'move_existing'
+          ? (data.existingEvent?.durationMinutes || 30)
+          : (data.newEvent?.durationMinutes || 30)
+        setDuration(Math.min(60, Math.max(5, Math.round(initDuration / 5) * 5)))
+
         if (data.draft) {
           setDraftSubject(data.draft.subject)
           setDraftBody(data.draft.body)
-        }
-        if (data.existingEvent?.durationMinutes) {
-          setExistingDuration(data.existingEvent.durationMinutes)
-        }
-        if (data.newEvent?.durationMinutes) {
-          setNewDuration(data.newEvent.durationMinutes)
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load')
@@ -707,26 +745,75 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
       }
     }
     load()
-  }, [actionId, token, resolutionAction, conflictIdx])
+  }, [actionId, token, legacyAction, conflictIdx])
+
+  // Refetch slots when duration or forceIntoSlot changes
+  const prevFetchRef = useRef({ duration: 0, force: false, target: '' as TargetEvent })
+  useEffect(() => {
+    if (!resolutionData) return
+    const prev = prevFetchRef.current
+    if (prev.duration === duration && prev.force === forceIntoSlot && prev.target === targetEvent) return
+    prevFetchRef.current = { duration, force: forceIntoSlot, target: targetEvent }
+
+    async function refetchSlots() {
+      setSlotsLoading(true)
+      try {
+        const res = await fetch(
+          `/api/action/${actionId}/resolve-conflict?token=${token}&action=move_new&conflict_idx=${conflictIdx}&unified=1&duration=${duration}&force=${forceIntoSlot ? '1' : '0'}&target=${targetEvent}`
+        )
+        if (res.ok) {
+          const data = await res.json()
+          setResolutionData(prev => prev ? { ...prev, availableSlots: data.availableSlots } : prev)
+          setSelectedSlot(null)
+        }
+      } catch { /* keep existing slots */ }
+      finally { setSlotsLoading(false) }
+    }
+    refetchSlots()
+  }, [duration, forceIntoSlot, targetEvent, actionId, token, conflictIdx, resolutionData])
+
+  function handleTargetToggle(target: TargetEvent) {
+    setTargetEvent(target)
+    setSelectedSlot(null)
+    if (target === 'new') {
+      setResolutionAction('move_new')
+      setDuration(Math.min(60, Math.max(5, Math.round((resolutionData?.newEvent?.durationMinutes || 30) / 5) * 5)))
+    } else {
+      setResolutionAction('reschedule_existing')
+      setDuration(Math.min(60, Math.max(5, Math.round((resolutionData?.existingEvent?.durationMinutes || 30) / 5) * 5)))
+    }
+  }
 
   async function handleConfirm() {
-    if (resolutionAction === 'move_new' && !selectedSlot) {
+    // Determine final action
+    let finalAction = resolutionAction
+    if (finalAction === 'move_new' && !selectedSlot && !forceIntoSlot) {
       setError('Vyberte nový termín ze seznamu.')
       return
     }
+    if (finalAction === 'reschedule_existing' && !selectedSlot && !resolutionData?.altSlot) {
+      setError('Vyberte nový termín ze seznamu.')
+      return
+    }
+
     setExecuting(true)
+    setError(null)
     try {
       const res = await fetch(`/api/action/${actionId}/resolve-conflict`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token,
-          action: resolutionAction,
+          action: finalAction,
           conflict_idx: parseInt(conflictIdx, 10),
           edited_draft: resolutionData?.draft ? { subject: draftSubject, body: draftBody } : undefined,
           selected_slot: selectedSlot || undefined,
-          new_duration: newDuration && newDuration !== resolutionData?.newEvent?.durationMinutes ? newDuration : undefined,
-          existing_duration: existingDuration && existingDuration !== resolutionData?.existingEvent?.durationMinutes ? existingDuration : undefined,
+          new_duration: duration,
+          existing_duration: targetEvent === 'existing' ? duration : undefined,
+          force_into_slot: forceIntoSlot,
+          meeting_mode: meetingMode,
+          location: meetingMode === 'address' ? locationText : undefined,
+          target_event: targetEvent,
         }),
       })
       if (!res.ok) {
@@ -735,27 +822,25 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
       }
       const result = await res.json()
 
-      if (resolutionAction === 'keep_both') {
+      if (finalAction === 'keep_both') {
         setSuccess({
           show: true,
           message: 'Kolize ponechána',
           subMessage: 'Obě schůzky zůstávají — můžete nyní kliknout UDĚLAT.',
         })
-      } else if (resolutionAction === 'move_new') {
+      } else if (finalAction === 'cancel_existing') {
         setSuccess({
           show: true,
-          message: 'Nový termín zvolen',
-          subMessage: result.newSlot
-            ? `Schůzka přesunuta. Zkontrolujte nový termín v kartě.`
-            : 'Schůzka byla přesunuta na jiný termín.',
+          message: 'Zrušeno a potvrzeno!',
+          subMessage: 'Stávající schůzka zrušena, nová potvrzena.',
         })
       } else {
         setSuccess({
           show: true,
-          message: resolutionAction === 'reschedule_existing' ? 'Přesunuto a potvrzeno!' : 'Zrušeno a potvrzeno!',
-          subMessage: resolutionAction === 'reschedule_existing'
-            ? 'Stávající schůzka přesunuta, nová potvrzena.'
-            : 'Stávající schůzka zrušena, nová potvrzena.',
+          message: 'Přesunuto!',
+          subMessage: result.newSlot
+            ? 'Schůzka přesunuta na nový termín.'
+            : 'Schůzka byla přesunuta.',
         })
       }
     } catch (err) {
@@ -768,181 +853,353 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
     return <SuccessOverlay message={success.message} subMessage={success.subMessage} />
   }
   if (loading) return <Spinner message="Načítání konfliktu..." />
-  if (error) return <ErrorDisplay message={error} />
+  if (error && !resolutionData) return <ErrorDisplay message={error} />
   if (!resolutionData) return <ErrorDisplay message="Data nenalezena" />
 
-  const actionLabel = resolutionAction === 'keep_both'
-    ? 'Ponechat obojí'
-    : resolutionAction === 'reschedule_existing'
-      ? 'Přesunout stávající'
-      : resolutionAction === 'cancel_existing'
-        ? 'Zrušit stávající'
-        : 'Změnit čas schůzky'
+  const existingTitle = resolutionData.existingEvent.title
+  const newTitle = resolutionData.newEvent?.title || resolutionData.newEvent?.cpName || 'Nová schůzka'
+  const movingLabel = targetEvent === 'new' ? newTitle : existingTitle
+  const stayingLabel = targetEvent === 'new' ? existingTitle : newTitle
+
+  // Duration slider marks
+  const durationMarks = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+
+  // Meeting mode options
+  const modeOptions: { value: MeetingMode; label: string; icon: string }[] = [
+    { value: 'address', label: 'Osobně', icon: '📍' },
+    { value: 'online', label: 'Online', icon: '💻' },
+    { value: 'phone', label: 'Telefonát', icon: '📞' },
+  ]
+
+  const slots = resolutionData.availableSlots || []
 
   return (
-    <Card style={{ width: '100%', maxWidth: '672px', margin: '0 auto' }}>
+    <Card style={{ width: '100%', maxWidth: '720px', margin: '0 auto' }}>
+      {/* Header */}
       <div style={{ padding: `${theme.spacing.lg} ${theme.spacing.lg} ${theme.spacing.sm}` }}>
         <p style={{
           fontSize: theme.typography.sizes.xs,
           fontWeight: theme.typography.weights.medium,
-          color: resolutionAction === 'keep_both' ? '#16a34a' : '#dc2626',
+          color: '#dc2626',
           textTransform: 'uppercase',
           letterSpacing: '0.05em',
         }}>
-          Řešení kolize
+          ⚠ Kolize v kalendáři
         </p>
         <h2 style={{
-          fontSize: theme.typography.sizes.lg,
+          fontSize: theme.typography.sizes.xl,
           fontWeight: theme.typography.weights.semibold,
           color: theme.colors.text,
           marginTop: theme.spacing.xs,
         }}>
-          {actionLabel}
+          Vyřešit kolizi
         </h2>
       </div>
 
-      {/* Summary of what will happen */}
+      {/* Two event cards side by side */}
       <div style={{
+        display: 'flex',
+        gap: theme.spacing.md,
         padding: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
-        fontSize: theme.typography.sizes.base,
-        color: theme.colors.text,
-        lineHeight: '1.625',
       }}>
-        {resolutionData.summary}
-      </div>
-
-      {/* Existing event info */}
-      <div style={{
-        margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
-        padding: theme.spacing.md,
-        backgroundColor: '#fef2f2',
-        borderRadius: theme.borderRadius.md,
-        border: '1px solid #fecaca',
-      }}>
-        <div style={{ fontSize: theme.typography.sizes.sm, fontWeight: 600, color: '#991b1b', marginBottom: '4px' }}>
-          Stávající schůzka
-        </div>
-        <div style={{ fontSize: theme.typography.sizes.sm, color: '#1f2937' }}>
-          <strong>{resolutionData.existingEvent.title}</strong>
-        </div>
-        <div style={{ fontSize: theme.typography.sizes.sm, color: '#6b7280' }}>
-          {resolutionData.existingEvent.time}
-        </div>
-        {resolutionData.existingEvent.cpName && (
-          <div style={{ fontSize: theme.typography.sizes.sm, color: '#6b7280' }}>
-            {resolutionData.existingEvent.cpName}
-          </div>
-        )}
-      </div>
-
-      {/* Duration adjustments (for reschedule, cancel, keep_both) */}
-      {resolutionAction !== 'move_new' && (resolutionData.existingEvent.durationMinutes || resolutionData.newEvent?.durationMinutes) && (
+        {/* Existing event */}
         <div style={{
-          margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
+          flex: 1,
           padding: theme.spacing.md,
-          backgroundColor: theme.colors.secondary,
+          backgroundColor: targetEvent === 'existing' ? '#fef2f2' : theme.colors.secondary,
           borderRadius: theme.borderRadius.md,
-          border: `1px solid ${theme.colors.border}`,
+          border: `2px solid ${targetEvent === 'existing' ? '#dc2626' : theme.colors.border}`,
+          opacity: targetEvent === 'existing' ? 1 : 0.7,
         }}>
+          <div style={{ fontSize: theme.typography.sizes.xs, fontWeight: 700, color: '#991b1b', textTransform: 'uppercase', marginBottom: '4px' }}>
+            Stávající
+          </div>
+          <div style={{ fontSize: theme.typography.sizes.sm, fontWeight: 600, color: theme.colors.text }}>
+            {existingTitle}
+          </div>
+          <div style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted }}>
+            {resolutionData.existingEvent.time}
+          </div>
+          {resolutionData.existingEvent.cpName && (
+            <div style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted }}>
+              {resolutionData.existingEvent.cpName}
+            </div>
+          )}
+          {resolutionData.existingEvent.durationMinutes && (
+            <div style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted, marginTop: '2px' }}>
+              {resolutionData.existingEvent.durationMinutes} min
+            </div>
+          )}
+        </div>
+
+        {/* New event */}
+        <div style={{
+          flex: 1,
+          padding: theme.spacing.md,
+          backgroundColor: targetEvent === 'new' ? '#eff6ff' : theme.colors.secondary,
+          borderRadius: theme.borderRadius.md,
+          border: `2px solid ${targetEvent === 'new' ? '#1e40af' : theme.colors.border}`,
+          opacity: targetEvent === 'new' ? 1 : 0.7,
+        }}>
+          <div style={{ fontSize: theme.typography.sizes.xs, fontWeight: 700, color: '#1e40af', textTransform: 'uppercase', marginBottom: '4px' }}>
+            Nová (tato)
+          </div>
+          <div style={{ fontSize: theme.typography.sizes.sm, fontWeight: 600, color: theme.colors.text }}>
+            {newTitle}
+          </div>
+          {resolutionData.newEvent?.start && (
+            <div style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted }}>
+              {new Date(resolutionData.newEvent.start).toLocaleString('cs-CZ', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Prague' })}
+            </div>
+          )}
+          {resolutionData.newEvent?.cpName && (
+            <div style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted }}>
+              {resolutionData.newEvent.cpName}
+            </div>
+          )}
+          {resolutionData.newEvent?.durationMinutes && (
+            <div style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted, marginTop: '2px' }}>
+              {resolutionData.newEvent.durationMinutes} min
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Toggle: which event to move */}
+      <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>
+        <div style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+          Kterou schůzku přesunout?
+        </div>
+        <div style={{ display: 'flex', gap: theme.spacing.sm }}>
+          <button
+            onClick={() => handleTargetToggle('new')}
+            style={{
+              flex: 1,
+              padding: '10px',
+              backgroundColor: targetEvent === 'new' ? theme.colors.primary : theme.colors.surface,
+              color: targetEvent === 'new' ? 'white' : theme.colors.text,
+              border: `2px solid ${targetEvent === 'new' ? theme.colors.primary : theme.colors.border}`,
+              borderRadius: theme.borderRadius.md,
+              cursor: 'pointer',
+              fontSize: theme.typography.sizes.sm,
+              fontWeight: targetEvent === 'new' ? theme.typography.weights.semibold : theme.typography.weights.normal,
+              transition: 'all 0.15s ease',
+            }}
+          >
+            Přesunout novou
+          </button>
+          <button
+            onClick={() => handleTargetToggle('existing')}
+            style={{
+              flex: 1,
+              padding: '10px',
+              backgroundColor: targetEvent === 'existing' ? '#dc2626' : theme.colors.surface,
+              color: targetEvent === 'existing' ? 'white' : theme.colors.text,
+              border: `2px solid ${targetEvent === 'existing' ? '#dc2626' : theme.colors.border}`,
+              borderRadius: theme.borderRadius.md,
+              cursor: 'pointer',
+              fontSize: theme.typography.sizes.sm,
+              fontWeight: targetEvent === 'existing' ? theme.typography.weights.semibold : theme.typography.weights.normal,
+              transition: 'all 0.15s ease',
+            }}
+          >
+            Přesunout stávající
+          </button>
+          <button
+            onClick={() => { setResolutionAction('keep_both'); setTargetEvent('new') }}
+            style={{
+              padding: '10px 14px',
+              backgroundColor: resolutionAction === 'keep_both' ? '#16a34a' : theme.colors.surface,
+              color: resolutionAction === 'keep_both' ? 'white' : theme.colors.text,
+              border: `2px solid ${resolutionAction === 'keep_both' ? '#16a34a' : theme.colors.border}`,
+              borderRadius: theme.borderRadius.md,
+              cursor: 'pointer',
+              fontSize: theme.typography.sizes.sm,
+              fontWeight: resolutionAction === 'keep_both' ? theme.typography.weights.semibold : theme.typography.weights.normal,
+              transition: 'all 0.15s ease',
+            }}
+          >
+            Ponechat obojí
+          </button>
+          {resolutionData.existingEvent.hasGuests && (
+            <button
+              onClick={() => setResolutionAction('cancel_existing')}
+              style={{
+                padding: '10px 14px',
+                backgroundColor: resolutionAction === 'cancel_existing' ? '#991b1b' : theme.colors.surface,
+                color: resolutionAction === 'cancel_existing' ? 'white' : theme.colors.text,
+                border: `2px solid ${resolutionAction === 'cancel_existing' ? '#991b1b' : theme.colors.border}`,
+                borderRadius: theme.borderRadius.md,
+                cursor: 'pointer',
+                fontSize: theme.typography.sizes.sm,
+                fontWeight: resolutionAction === 'cancel_existing' ? theme.typography.weights.semibold : theme.typography.weights.normal,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              Zrušit stávající
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Duration slider */}
+      {resolutionAction !== 'keep_both' && resolutionAction !== 'cancel_existing' && (
+        <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>
           <div style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
-            Upravit délku (minuty)
+            Délka schůzky: <strong style={{ color: theme.colors.text, fontSize: theme.typography.sizes.sm }}>{duration} min</strong>
           </div>
-          <div style={{ display: 'flex', gap: theme.spacing.md }}>
-            {resolutionData.existingEvent.durationMinutes && (
-              <div style={{ flex: 1 }}>
-                <Input
-                  label="Stávající"
-                  type="number"
-                  value={String(existingDuration)}
-                  onChange={e => setExistingDuration(e.target.value ? parseInt(e.target.value, 10) : '')}
-                />
-              </div>
-            )}
-            {resolutionData.newEvent?.durationMinutes && (
-              <div style={{ flex: 1 }}>
-                <Input
-                  label="Nová"
-                  type="number"
-                  value={String(newDuration)}
-                  onChange={e => setNewDuration(e.target.value ? parseInt(e.target.value, 10) : '')}
-                />
-              </div>
-            )}
+          <input
+            type="range"
+            min={5}
+            max={60}
+            step={5}
+            value={duration}
+            onChange={e => setDuration(parseInt(e.target.value, 10))}
+            style={{
+              width: '100%',
+              height: '6px',
+              cursor: 'pointer',
+              accentColor: theme.colors.primary,
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
+            {[5, 15, 30, 45, 60].map(m => (
+              <span key={m} style={{ fontSize: '10px', color: theme.colors.textMuted }}>{m}m</span>
+            ))}
           </div>
         </div>
       )}
 
-      {/* Alt slot info (for reschedule) */}
-      {resolutionData.altSlot && resolutionAction === 'reschedule_existing' && (
-        <div style={{
-          margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
-          padding: theme.spacing.md,
-          backgroundColor: theme.colors.successBg,
-          borderRadius: theme.borderRadius.md,
-          border: `1px solid ${theme.colors.success}`,
-        }}>
-          <div style={{ fontSize: theme.typography.sizes.sm, fontWeight: 600, color: theme.colors.success, marginBottom: '4px' }}>
-            Nový termín pro stávající
+      {/* Meeting mode */}
+      {resolutionAction !== 'keep_both' && resolutionAction !== 'cancel_existing' && (
+        <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>
+          <div style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+            Typ schůzky
           </div>
-          <div style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.text }}>
-            {resolutionData.altSlot.time}
-          </div>
-        </div>
-      )}
-
-      {/* Slot picker (for move_new) */}
-      {resolutionAction === 'move_new' && resolutionData.availableSlots && resolutionData.availableSlots.length > 0 && (
-        <div style={{
-          margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: theme.spacing.xs,
-        }}>
-          <div style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
-            Vyberte nový termín
-          </div>
-          {resolutionData.availableSlots.map((slot, idx) => {
-            const isSelected = selectedSlot?.start === slot.start && selectedSlot?.end === slot.end
-            return (
+          <div style={{ display: 'flex', gap: theme.spacing.sm }}>
+            {modeOptions.map(opt => (
               <button
-                key={idx}
-                onClick={() => setSelectedSlot({ start: slot.start, end: slot.end })}
+                key={opt.value}
+                onClick={() => setMeetingMode(opt.value)}
                 style={{
-                  display: 'block',
-                  width: '100%',
-                  padding: '10px 14px',
-                  backgroundColor: isSelected ? theme.colors.primary : theme.colors.surface,
-                  color: isSelected ? 'white' : theme.colors.text,
-                  border: `2px solid ${isSelected ? theme.colors.primary : theme.colors.border}`,
+                  flex: 1,
+                  padding: '8px',
+                  backgroundColor: meetingMode === opt.value ? theme.colors.primary : theme.colors.surface,
+                  color: meetingMode === opt.value ? 'white' : theme.colors.text,
+                  border: `2px solid ${meetingMode === opt.value ? theme.colors.primary : theme.colors.border}`,
                   borderRadius: theme.borderRadius.md,
                   cursor: 'pointer',
                   fontSize: theme.typography.sizes.sm,
-                  fontWeight: isSelected ? theme.typography.weights.semibold : theme.typography.weights.normal,
-                  textAlign: 'left',
+                  fontWeight: meetingMode === opt.value ? theme.typography.weights.semibold : theme.typography.weights.normal,
                   transition: 'all 0.15s ease',
                 }}
               >
-                {slot.label}
+                {opt.icon} {opt.label}
               </button>
-            )
-          })}
-        </div>
-      )}
-      {resolutionAction === 'move_new' && resolutionData.availableSlots && resolutionData.availableSlots.length === 0 && (
-        <div style={{
-          margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
-          padding: theme.spacing.md,
-          backgroundColor: '#fef2f2',
-          borderRadius: theme.borderRadius.md,
-          color: '#991b1b',
-          fontSize: theme.typography.sizes.sm,
-        }}>
-          Žádné volné termíny v následujících 14 dnech.
+            ))}
+          </div>
+          {meetingMode === 'address' && (
+            <div style={{ marginTop: theme.spacing.sm }}>
+              <Input
+                label="Místo"
+                value={locationText}
+                onChange={e => setLocationText(e.target.value)}
+                placeholder="Adresa schůzky..."
+              />
+            </div>
+          )}
         </div>
       )}
 
-      {/* Editable draft (only if event has guests/CP) */}
-      {resolutionData.draft && (
+      {/* Force into booked slots toggle */}
+      {resolutionAction !== 'keep_both' && resolutionAction !== 'cancel_existing' && (
+        <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>
+          <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: theme.spacing.sm,
+            cursor: 'pointer',
+            fontSize: theme.typography.sizes.sm,
+            color: theme.colors.text,
+          }}>
+            <input
+              type="checkbox"
+              checked={forceIntoSlot}
+              onChange={e => setForceIntoSlot(e.target.checked)}
+              style={{ width: '18px', height: '18px', accentColor: theme.colors.primary, cursor: 'pointer' }}
+            />
+            <span>
+              Zobrazit i obsazené termíny
+              <span style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted, marginLeft: '4px' }}>
+                (krátký hovor během jiné schůzky)
+              </span>
+            </span>
+          </label>
+        </div>
+      )}
+
+      {/* Slot picker — 2 column grid */}
+      {resolutionAction !== 'keep_both' && resolutionAction !== 'cancel_existing' && (
+        <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>
+          <div style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+            Vyberte nový termín pro &quot;{movingLabel}&quot;
+            {slotsLoading && <span style={{ marginLeft: '8px', fontSize: '11px', color: theme.colors.primary }}>načítám…</span>}
+          </div>
+          <div style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted, marginBottom: '8px' }}>
+            &quot;{stayingLabel}&quot; zůstane beze změny.
+          </div>
+          {slots.length > 0 ? (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: theme.spacing.xs,
+            }}>
+              {slots.map((slot, idx) => {
+                const isSelected = selectedSlot?.start === slot.start && selectedSlot?.end === slot.end
+                const isBusy = slot.busy
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => setSelectedSlot({ start: slot.start, end: slot.end })}
+                    style={{
+                      padding: '8px 12px',
+                      backgroundColor: isSelected
+                        ? theme.colors.primary
+                        : isBusy
+                          ? '#fef2f2'
+                          : theme.colors.surface,
+                      color: isSelected ? 'white' : isBusy ? '#991b1b' : theme.colors.text,
+                      border: `2px solid ${isSelected ? theme.colors.primary : isBusy ? '#fecaca' : theme.colors.border}`,
+                      borderRadius: theme.borderRadius.md,
+                      cursor: 'pointer',
+                      fontSize: theme.typography.sizes.sm,
+                      fontWeight: isSelected ? theme.typography.weights.semibold : theme.typography.weights.normal,
+                      textAlign: 'left',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    {slot.label}
+                    {isBusy && <span style={{ fontSize: '10px', marginLeft: '4px' }}>⚠</span>}
+                  </button>
+                )
+              })}
+            </div>
+          ) : (
+            <div style={{
+              padding: theme.spacing.md,
+              backgroundColor: '#fef2f2',
+              borderRadius: theme.borderRadius.md,
+              color: '#991b1b',
+              fontSize: theme.typography.sizes.sm,
+            }}>
+              Žádné volné termíny v následujících 14 dnech.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Editable draft (only if existing event has guests/CP and we're moving/cancelling it) */}
+      {resolutionData.draft && (resolutionAction === 'reschedule_existing' || resolutionAction === 'cancel_existing') && (
         <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}`, display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
           <div style={{
             fontSize: theme.typography.sizes.xs,
@@ -967,7 +1224,21 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
         </div>
       )}
 
-      {/* Confirm / cancel */}
+      {/* Error display */}
+      {error && (
+        <div style={{
+          margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
+          padding: theme.spacing.md,
+          backgroundColor: '#fef2f2',
+          borderRadius: theme.borderRadius.md,
+          color: '#991b1b',
+          fontSize: theme.typography.sizes.sm,
+        }}>
+          {error}
+        </div>
+      )}
+
+      {/* Confirm button */}
       <div style={{
         padding: `${theme.spacing.md} ${theme.spacing.lg}`,
         display: 'flex',
@@ -978,9 +1249,15 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
           variant="primary"
           onClick={handleConfirm}
           loading={executing}
-          disabled={resolutionAction === 'move_new' && !selectedSlot}
+          disabled={
+            (resolutionAction !== 'keep_both' && resolutionAction !== 'cancel_existing' && !selectedSlot)
+          }
         >
-          Potvrdit
+          {resolutionAction === 'keep_both'
+            ? 'Ponechat obojí'
+            : resolutionAction === 'cancel_existing'
+              ? 'Zrušit stávající'
+              : 'Potvrdit přesun'}
         </Button>
       </div>
     </Card>

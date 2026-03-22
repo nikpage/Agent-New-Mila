@@ -97,28 +97,76 @@ export async function GET(
       summary = `Vyberte nový termín pro schůzku. Stávající "${conflict.event_title}" zůstane beze změny.`
     }
 
-    // For move_new, provide available slots so user can pick
-    let availableSlots: { start: string; end: string; label: string }[] | undefined
-    if (resolutionAction === 'move_new') {
-      const durationMs = payload?.start && payload?.end
-        ? new Date(payload.end as string).getTime() - new Date(payload.start as string).getTime()
-        : new Date(conflict.event_end).getTime() - new Date(conflict.event_start).getTime()
-      const durationMinutes = Math.max(30, Math.round(durationMs / 60000))
-      const slots = await findBestSlots(action.user_id, durationMinutes, 10)
-      availableSlots = slots.map(s => ({
-        start: s.start.toISOString(),
-        end: s.end.toISOString(),
-        label: formatTimeRange(s.start.toISOString(), s.end.toISOString(), tz),
-      }))
-    }
+    // Unified view: always provide available slots for slot picker
+    const isUnified = request.nextUrl.searchParams.get('unified') === '1'
+    const requestedDuration = parseInt(request.nextUrl.searchParams.get('duration') || '0', 10)
+    const forceIntoSlot = request.nextUrl.searchParams.get('force') === '1'
 
-    // Provide current durations for editing
+    // Calculate durations
     const newEventDuration = payload?.start && payload?.end
       ? Math.round((new Date(payload.end as string).getTime() - new Date(payload.start as string).getTime()) / 60000)
       : null
     const existingEventDuration = Math.round(
       (new Date(conflict.event_end).getTime() - new Date(conflict.event_start).getTime()) / 60000
     )
+
+    // Determine slot duration: use requested duration, or fall back to event duration
+    const slotDuration = requestedDuration > 0
+      ? requestedDuration
+      : (resolutionAction === 'move_new' || isUnified)
+        ? Math.max(5, newEventDuration || 30)
+        : Math.max(5, existingEventDuration || 30)
+
+    let availableSlots: { start: string; end: string; label: string; busy?: boolean }[] | undefined
+    if (resolutionAction === 'move_new' || isUnified) {
+      const slotCount = forceIntoSlot ? 20 : 10
+      const freeSlots = await findBestSlots(action.user_id, slotDuration, slotCount)
+      availableSlots = freeSlots.map(s => ({
+        start: s.start.toISOString(),
+        end: s.end.toISOString(),
+        label: formatTimeRange(s.start.toISOString(), s.end.toISOString(), tz),
+        busy: false,
+      }))
+
+      // If force mode, generate busy-overlay slots at working-hour intervals
+      if (forceIntoSlot) {
+        const existingStarts = new Set(availableSlots.map(s => s.start))
+        const workStart = typeof settings.working_hours_start === 'number' ? settings.working_hours_start : parseInt(String(settings.working_hours_start || '8'), 10)
+        const workEnd = typeof settings.working_hours_end === 'number' ? settings.working_hours_end : parseInt(String(settings.working_hours_end || '18'), 10)
+        const now = new Date()
+        // Generate slots every 30 min for the next 7 working days
+        for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+          const day = new Date(now)
+          day.setDate(day.getDate() + dayOffset)
+          for (let hour = workStart; hour < workEnd; hour++) {
+            for (const minute of [0, 30]) {
+              const slotStart = new Date(day)
+              slotStart.setHours(hour, minute, 0, 0)
+              if (slotStart <= now) continue
+              const slotEnd = new Date(slotStart.getTime() + slotDuration * 60000)
+              if (slotEnd.getHours() > workEnd || (slotEnd.getHours() === workEnd && slotEnd.getMinutes() > 0)) continue
+              const iso = slotStart.toISOString()
+              if (!existingStarts.has(iso)) {
+                availableSlots.push({
+                  start: iso,
+                  end: slotEnd.toISOString(),
+                  label: formatTimeRange(iso, slotEnd.toISOString(), tz),
+                  busy: true,
+                })
+              }
+            }
+          }
+        }
+        // Sort all slots chronologically
+        availableSlots.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime())
+      }
+    }
+
+    // New event title from action context
+    const newEventTitle = (payload?.topic as string)
+      || (action.cp_id ? (await getCPById(action.cp_id))?.name : null)
+      || null
+    const newEventCpName = action.cp_id ? (await getCPById(action.cp_id))?.name || null : null
 
     return NextResponse.json({
       action: resolutionAction,
@@ -133,12 +181,15 @@ export async function GET(
         durationMinutes: existingEventDuration,
       },
       newEvent: {
+        title: newEventTitle,
+        cpName: newEventCpName,
         durationMinutes: newEventDuration,
         start: (payload?.start as string) || null,
         end: (payload?.end as string) || null,
       },
       altSlot: altTimeStr ? { time: altTimeStr, start: conflict.alt_slot_start, end: conflict.alt_slot_end } : null,
       availableSlots,
+      recommendation: conflict.recommendation,
     })
   } catch (error) {
     console.error('[ResolveConflict:GET]', error)
@@ -160,7 +211,11 @@ export async function POST(
   try {
     const { id: actionId } = await params
     const body = await request.json()
-    const { token, action: resolutionAction, conflict_idx: conflictIdx = 0, edited_draft, selected_slot, new_duration, existing_duration } = body as {
+    const {
+      token, action: resolutionAction, conflict_idx: conflictIdx = 0,
+      edited_draft, selected_slot, new_duration, existing_duration,
+      force_into_slot, meeting_mode, location: meetingLocation, target_event,
+    } = body as {
       token: string
       action: ResolutionAction
       conflict_idx?: number
@@ -168,6 +223,10 @@ export async function POST(
       selected_slot?: { start: string; end: string }
       new_duration?: number
       existing_duration?: number
+      force_into_slot?: boolean
+      meeting_mode?: 'address' | 'online' | 'phone'
+      location?: string
+      target_event?: 'new' | 'existing'
     }
 
     if (!token) {
@@ -315,14 +374,18 @@ export async function POST(
       }
 
       // 2. Use user-selected slot or find one automatically
-      const durationMs = payload?.start && payload?.end
-        ? new Date(payload.end as string).getTime() - new Date(payload.start as string).getTime()
-        : new Date(conflict.event_end).getTime() - new Date(conflict.event_start).getTime()
-      const durationMinutes = Math.max(30, Math.round(durationMs / 60000))
+      const durationMinutes = new_duration && new_duration > 0
+        ? new_duration
+        : (() => {
+          const durationMs = payload?.start && payload?.end
+            ? new Date(payload.end as string).getTime() - new Date(payload.start as string).getTime()
+            : new Date(conflict.event_end).getTime() - new Date(conflict.event_start).getTime()
+          return Math.max(5, Math.round(durationMs / 60000))
+        })()
 
       let newSlot: { start: Date; end: Date }
       if (selected_slot) {
-        // User picked a specific slot from the available list
+        // User picked a specific slot (may be a busy slot if force_into_slot)
         newSlot = {
           start: new Date(selected_slot.start),
           end: new Date(selected_slot.end),
@@ -336,22 +399,28 @@ export async function POST(
         newSlot = newSlots[0]
       }
 
-      // 3. Create new hold at the new slot
-      const location = payload?.location as string | null
+      // 3. Determine location from meeting_mode
+      const effectiveLocation = meeting_mode === 'online'
+        ? null
+        : meeting_mode === 'phone'
+          ? null
+          : (meetingLocation || (payload?.location as string | null))
+      const isOnline = meeting_mode === 'online'
 
+      // 4. Create new hold at the new slot
       const holdResult = await blockSlotForProposal(
         userId,
         actionRecord.cp_id,
         newSlot,
         durationMinutes,
-        location || undefined
+        effectiveLocation || undefined
       )
 
       if (!holdResult.success || !holdResult.holdEvent) {
         return NextResponse.json({ error: holdResult.error || 'Failed to create new hold' }, { status: 500 })
       }
 
-      // 4. Update action payload with new hold info — fresh fetch to avoid stale writes
+      // 5. Update action payload with new hold info — fresh fetch to avoid stale writes
       const freshMoveAction = await getActionById(actionId)
       const freshMovePayload = (freshMoveAction?.payload as Record<string, unknown>) || {}
       const updatedConflicts = conflicts.filter((_, i) => i !== conflictIdx)
@@ -362,6 +431,10 @@ export async function POST(
           start: newSlot.start.toISOString(),
           end: newSlot.end.toISOString(),
           conflicts: updatedConflicts,
+          ...(meeting_mode ? { meeting_type: meeting_mode } : {}),
+          ...(isOnline ? { is_online: true } : {}),
+          ...(effectiveLocation ? { location: effectiveLocation } : {}),
+          ...(force_into_slot ? { forced_into_slot: true } : {}),
         } as unknown as Json,
       })
 

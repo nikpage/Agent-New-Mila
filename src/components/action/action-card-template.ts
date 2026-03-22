@@ -217,10 +217,7 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
         <div style="font-size: 13px; color: #991b1b; font-weight: 500; margin-bottom: 8px;">${recText}</div>
 
         <div>
-          ${resolveKeepBothUrl ? `<a href="${resolveKeepBothUrl}" style="${btnStyle} background-color: #16a34a; color: white;">PONECHAT OBOJÍ</a>` : ''}
-          ${resolveRescheduleUrl ? `<a href="${resolveRescheduleUrl}" style="${btnStyle} background-color: #dc2626; color: white;">PŘESUNOUT STÁVAJÍCÍ</a>` : ''}
-          ${resolveCancelUrl ? `<a href="${resolveCancelUrl}" style="${btnStyle} background-color: #991b1b; color: white;">ZRUŠIT STÁVAJÍCÍ</a>` : ''}
-          ${resolveMoveNewUrl ? `<a href="${resolveMoveNewUrl}" style="${btnStyle} background-color: #1e40af; color: white;">ZMĚNIT ČAS</a>` : ''}
+          ${resolveMoveNewUrl ? `<a href="${resolveMoveNewUrl}" style="${btnStyle} background-color: #dc2626; color: white; padding: 8px 20px; font-size: 14px;">VYŘEŠIT KOLIZI</a>` : ''}
         </div>
       </div>`
       }).join('')}
