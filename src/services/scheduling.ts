@@ -293,7 +293,7 @@ export async function blockSlotForProposal(
   try {
     const gcalEvent = await createTentativeCalendarEvent(userId, {
       summary: holdTitle,
-      description: `Tentative hold - awaiting confirmation from ${cpName}. Managed by Mila.`,
+      description: `Předběžná rezervace — čeká se na potvrzení od ${cpName}. Spravuje Mila.`,
       location: location,
       startTime: slot.start,
       endTime: slot.end,
@@ -510,8 +510,8 @@ async function bookTravelBuffer(
   let gcalEventId: string | undefined
   try {
     const gcalBuffer = await createTentativeCalendarEvent(userId, {
-      summary: `🚗 Travel to ${parentEvent.title || 'meeting'}`,
-      description: `Travel from ${origin} to ${meetingLocation} (${travelTime.durationText}). Auto-managed by Mila.`,
+      summary: `🚗 Cesta na ${parentEvent.title || 'schůzku'}`,
+      description: `Cesta z ${origin} do ${meetingLocation} (${travelTime.durationText}). Spravuje Mila.`,
       startTime: bufferStart,
       endTime: bufferEnd,
       status: 'confirmed',
@@ -722,7 +722,7 @@ export async function proposeMeetingMultipleCPs(
     try {
       const gcalEvent = await createTentativeCalendarEvent(userId, {
         summary: holdTitle,
-        description: `Tentative hold - awaiting confirmation. Managed by Mila.`,
+        description: `Předběžná rezervace — čeká se na potvrzení. Spravuje Mila.`,
         location: location,
         startTime: slot.start,
         endTime: slot.end,
