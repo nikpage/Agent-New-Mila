@@ -324,10 +324,12 @@ export async function createHoldEvent(params: {
   location?: string
   googleEventId?: string
   weight?: number
+  conversationId?: string
 }): Promise<Event> {
   return createEvent({
     user_id: params.userId,
     cp_id: params.cpId,
+    conversation_id: params.conversationId || null,
     title: `HOLD: Meeting with ${params.cpName}`,
     description: `Tentative hold - awaiting confirmation from ${params.cpName}`,
     location: params.location || null,
@@ -339,6 +341,30 @@ export async function createHoldEvent(params: {
     google_event_id: params.googleEventId || null,
     weight: params.weight ?? null,
   })
+}
+
+/**
+ * Check if a conversation already has a non-cancelled event (hold or confirmed).
+ */
+export async function hasActiveEventForConversation(
+  userId: string,
+  conversationId: string
+): Promise<boolean> {
+  const supabase = getSupabaseAdmin()
+  const { count, error } = await supabase
+    .from('events')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', userId)
+    .eq('conversation_id', conversationId)
+    .neq('status', 'cancelled')
+    .neq('event_type', 'travel_buffer')
+
+  if (error) {
+    console.error(`Failed to check events for conversation ${conversationId}:`, error)
+    return false
+  }
+
+  return (count || 0) > 0
 }
 
 /**

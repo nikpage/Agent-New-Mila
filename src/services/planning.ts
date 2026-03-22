@@ -5,6 +5,7 @@ import {
   calculatePriorityScore,
   getPendingActionTypes,
 } from '@/lib/db/actions'
+import { hasActiveEventForConversation } from '@/lib/db/events'
 import { getConversationById, getRecentMessages, updateConversation } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
 import { getLatestMessageFromCP } from '@/lib/db/messages'
@@ -106,6 +107,12 @@ export async function generateActionProposal(
 
     // Filter out action types that already have pending actions for this conversation
     const existingPendingTypes = await getPendingActionTypes(conversation.id)
+
+    // Skip SCHEDULE if conversation already has an active event (hold or confirmed)
+    const hasEvent = await hasActiveEventForConversation(userId, conversation.id)
+    if (hasEvent) {
+      existingPendingTypes.add('SCHEDULE')
+    }
 
     // Dedup: max one of each actionType per conversation per run, and skip already-pending types
     const seenTypes = new Set<string>()

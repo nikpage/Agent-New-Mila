@@ -279,7 +279,8 @@ export async function blockSlotForProposal(
   slot: SlotProposal,
   durationMinutes: number,
   location?: string,
-  weight?: number
+  weight?: number,
+  conversationId?: string
 ): Promise<SchedulingResult> {
   const cp = await getCPById(cpId)
   if (!cp) {
@@ -308,6 +309,7 @@ export async function blockSlotForProposal(
       location: location,
       googleEventId: gcalEvent.id,
       weight: weight ?? undefined,
+      conversationId,
     })
 
     // Book travel buffer NOW — a hold without travel blocked is a hold the user can't reach.
@@ -931,7 +933,7 @@ export async function optimizeScheduleActions(
 
         if (preferredSlotIsFree && isSlotAvailable(preferredSlot)) {
           // Preferred time is genuinely free — use it directly
-          const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+          const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
           if (holdResult.success && holdResult.holdEvent) {
             await updateActionWithHold(action, holdResult, meetingLocation, settings)
             result.optimized++
@@ -954,7 +956,7 @@ export async function optimizeScheduleActions(
 
           if (allConflictsMovable) {
             // New meeting outprioritizes all conflicts — book and suggest moving existing events
-            const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+            const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
             if (holdResult.success && holdResult.holdEvent) {
               const conflictInfos: ConflictInfo[] = conflicts.map(existing => ({
                 existingEvent: existing,
@@ -1020,7 +1022,9 @@ export async function optimizeScheduleActions(
         action.cp_id,
         slot,
         duration,
-        meetingLocation || undefined
+        meetingLocation || undefined,
+        undefined,
+        action.conversation_id
       )
       if (holdResult.success && holdResult.holdEvent) {
         await updateActionWithHold(action, holdResult, meetingLocation, settings)
@@ -1129,7 +1133,7 @@ export async function scheduleSingleAction(
     )
 
     if (preferredSlotIsFree) {
-      const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+      const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
       if (holdResult.success && holdResult.holdEvent) {
         await updateActionWithHold(action, holdResult, meetingLocation, settings)
         result.optimized++
@@ -1147,7 +1151,7 @@ export async function scheduleSingleAction(
       })
 
       if (allConflictsMovable) {
-        const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined)
+        const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
         if (holdResult.success && holdResult.holdEvent) {
           const conflictInfos: ConflictInfo[] = conflicts.map(existing => ({
             existingEvent: existing,
@@ -1191,7 +1195,7 @@ export async function scheduleSingleAction(
   }
 
   for (const slot of candidateSlots) {
-    const holdResult = await blockSlotForProposal(userId, action.cp_id, slot, duration, meetingLocation || undefined)
+    const holdResult = await blockSlotForProposal(userId, action.cp_id, slot, duration, meetingLocation || undefined, undefined, action.conversation_id)
     if (holdResult.success && holdResult.holdEvent) {
       await updateActionWithHold(action, holdResult, meetingLocation, settings)
       result.optimized++

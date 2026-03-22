@@ -78,9 +78,11 @@ Last updated: 2026-03-15
 ## Known Issues (not yet fixed)
 
 ### BUG-008: Calendar events not linking to conversations
-- **Status**: OPEN
-- **Symptom**: Calendar invitations detected by calendar-ingestion don't always create a linkage to the relevant email conversation about the same meeting.
-- **Impact**: Medium — Mila may propose a SCHEDULE action for a meeting that's already on the calendar.
+- **Status**: FIXED
+- **Symptom**: Calendar events had no `conversation_id` — no link to the conversation that produced them. Mila could propose a SCHEDULE action for a meeting already on the calendar.
+- **Fix**: Added `conversation_id` column to `events` table. Wired through three paths: (1) `syncGoogleEventToLocal` looks up CP's conversation, (2) `blockSlotForProposal` receives `conversation_id` from the action, (3) `planning.ts` checks `hasActiveEventForConversation` before proposing SCHEDULE.
+- **Migration**: `ALTER TABLE events ADD COLUMN conversation_id uuid REFERENCES conversation_threads(id) ON DELETE SET NULL;`
+- **Files**: `types.ts`, `events.ts`, `calendar-ingestion.ts`, `scheduling.ts`, `planning.ts`
 
 ### BUG-009: WhatsApp group message attribution
 - **Status**: OPEN

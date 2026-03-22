@@ -398,6 +398,7 @@ export interface Database {
           id: string
           user_id: string
           cp_id: string | null
+          conversation_id: string | null
           parent_event_id: string | null
           pre_block_group_id: string | null
           google_event_id: string | null
@@ -415,6 +416,7 @@ export interface Database {
           id?: string
           user_id: string
           cp_id?: string | null
+          conversation_id?: string | null
           parent_event_id?: string | null
           pre_block_group_id?: string | null
           google_event_id?: string | null
@@ -432,6 +434,7 @@ export interface Database {
           id?: string
           user_id?: string
           cp_id?: string | null
+          conversation_id?: string | null
           parent_event_id?: string | null
           pre_block_group_id?: string | null
           google_event_id?: string | null

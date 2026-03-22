@@ -45,7 +45,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 ## Calendar
 
-**`events`** — id, user_id, cp_id, title, description, location, start_time, end_time, event_type (meeting/travel_buffer), status, parent_event_id (self-ref for travel buffers), pre_block_group_id, google_event_id, created_at
+**`events`** — id, user_id, cp_id, conversation_id (FK to conversation_threads), title, description, location, start_time, end_time, event_type (meeting/travel_buffer), status, parent_event_id (self-ref for travel buffers), pre_block_group_id, google_event_id, created_at
 
 ## GDPR & Audit
 
@@ -101,4 +101,10 @@ ALTER TABLE messages ADD COLUMN enriched_text text;
 CREATE INDEX idx_messages_enriched_null
   ON messages (user_id, created_at)
   WHERE enriched_text IS NULL;
+```
+
+### Event-Conversation Link
+```sql
+ALTER TABLE events ADD COLUMN conversation_id uuid REFERENCES conversation_threads(id) ON DELETE SET NULL;
+CREATE INDEX idx_events_conversation ON events(conversation_id) WHERE conversation_id IS NOT NULL;
 ```

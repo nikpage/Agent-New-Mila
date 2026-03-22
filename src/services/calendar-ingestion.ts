@@ -161,6 +161,30 @@ async function syncGoogleEventToLocal(
     }
   }
 
+  // Find the conversation for this CP (if any) — links the event to its deal thread
+  let conversationId: string | null = null
+  if (cpId) {
+    const { data: cpThreads } = await supabase
+      .from('thread_participants')
+      .select('thread_id')
+      .eq('cp_id', cpId)
+
+    if (cpThreads && cpThreads.length > 0) {
+      const threadIds = cpThreads.map((t: { thread_id: string }) => t.thread_id)
+      const { data: conv } = await supabase
+        .from('conversation_threads')
+        .select('id')
+        .eq('user_id', userId)
+        .in('id', threadIds)
+        .order('last_updated', { ascending: false })
+        .limit(1)
+
+      if (conv && conv.length > 0) {
+        conversationId = conv[0].id
+      }
+    }
+  }
+
   // Upsert using the stable Google Calendar event ID.
   // If the event already exists locally (matched by google_event_id + user_id),
   // it will be updated with the latest values from Google Calendar.
@@ -168,6 +192,7 @@ async function syncGoogleEventToLocal(
   const isNonPersonal = !isPersonal
   await upsertEventByGoogleId(gcalEvent.id, userId, {
     cp_id: cpId,
+    conversation_id: conversationId,
     title: gcalEvent.summary,
     description: gcalEvent.description || null,
     location: gcalEvent.location || null,
