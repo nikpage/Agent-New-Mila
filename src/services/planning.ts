@@ -109,7 +109,7 @@ export async function generateActionProposal(
     const existingPendingTypes = await getPendingActionTypes(conversation.id)
 
     // Skip SCHEDULE if conversation already has an active event (hold or confirmed)
-    const hasEvent = await hasActiveEventForConversation(userId, conversation.id)
+    const hasEvent = await hasActiveEventForConversation(conversation.user_id, conversation.id)
     if (hasEvent) {
       existingPendingTypes.add('SCHEDULE')
     }
