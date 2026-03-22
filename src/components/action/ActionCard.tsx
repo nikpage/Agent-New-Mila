@@ -123,10 +123,10 @@ export function ActionCard({
         ? missingInfoFields.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
         : locationPartial
     )
-    // Conflicts block UDĚLAT — user MUST resolve conflict first
-    const hasConflicts = Array.isArray(actionPayload?.conflicts) && (actionPayload.conflicts as unknown[]).length > 0
-    doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold) || hasConflicts
+    doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold)
   }
+  // Conflicts show a warning but don't block UDĚLAT — user decides
+  const hasConflicts = action.action_type === 'SCHEDULE' && Array.isArray(actionPayload?.conflicts) && (actionPayload.conflicts as unknown[]).length > 0
 
   const getUrgencyLabel = (urgency: number): string => {
     if (urgency >= 8) return 'TEĎ'
@@ -301,10 +301,10 @@ export function ActionCard({
             onClick={run('doit', onDoIt)}
             loading={loading === 'doit'}
             disabled={doItDisabled}
-            title={doItDisabled ? 'Nejdříve vyplňte požadované údaje přes UPRAVIT' : undefined}
-            style={doItDisabled ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+            title={doItDisabled ? 'Nejdříve vyplňte požadované údaje přes UPRAVIT' : hasConflicts ? 'Schůzka koliduje s jinou — klikněte pro potvrzení i tak' : undefined}
+            style={doItDisabled ? { opacity: 0.5, cursor: 'not-allowed' } : hasConflicts ? { borderColor: '#dc2626', boxShadow: '0 0 0 1px #dc2626' } : undefined}
           >
-            UDĚLAT
+            {hasConflicts && !doItDisabled ? '⚠ UDĚLAT' : 'UDĚLAT'}
           </Button>
           <Button variant={doItDisabled ? 'primary' : 'secondary'} onClick={() => setEditOpen(!editOpen)}>
             UPRAVIT

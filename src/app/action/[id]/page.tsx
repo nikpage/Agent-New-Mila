@@ -661,12 +661,17 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
     conflict: { event_title: string; event_start: string; event_end: string }
     draft: { subject: string; body: string } | null
     summary: string
-    existingEvent: { title: string; time: string; cpName: string | null; hasGuests: boolean }
+    existingEvent: { title: string; time: string; cpName: string | null; hasGuests: boolean; durationMinutes?: number }
+    newEvent?: { durationMinutes: number | null; start: string | null; end: string | null }
     altSlot: { time: string; start: string; end: string } | null
+    availableSlots?: { start: string; end: string; label: string }[]
   } | null>(null)
 
   const [draftSubject, setDraftSubject] = useState('')
   const [draftBody, setDraftBody] = useState('')
+  const [selectedSlot, setSelectedSlot] = useState<{ start: string; end: string } | null>(null)
+  const [newDuration, setNewDuration] = useState<number | ''>('')
+  const [existingDuration, setExistingDuration] = useState<number | ''>('')
 
   useEffect(() => {
     async function load() {
@@ -689,6 +694,12 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
           setDraftSubject(data.draft.subject)
           setDraftBody(data.draft.body)
         }
+        if (data.existingEvent?.durationMinutes) {
+          setExistingDuration(data.existingEvent.durationMinutes)
+        }
+        if (data.newEvent?.durationMinutes) {
+          setNewDuration(data.newEvent.durationMinutes)
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load')
       } finally {
@@ -699,6 +710,10 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
   }, [actionId, token, resolutionAction, conflictIdx])
 
   async function handleConfirm() {
+    if (resolutionAction === 'move_new' && !selectedSlot) {
+      setError('Vyberte nový termín ze seznamu.')
+      return
+    }
     setExecuting(true)
     try {
       const res = await fetch(`/api/action/${actionId}/resolve-conflict`, {
@@ -709,6 +724,9 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
           action: resolutionAction,
           conflict_idx: parseInt(conflictIdx, 10),
           edited_draft: resolutionData?.draft ? { subject: draftSubject, body: draftBody } : undefined,
+          selected_slot: selectedSlot || undefined,
+          new_duration: newDuration && newDuration !== resolutionData?.newEvent?.durationMinutes ? newDuration : undefined,
+          existing_duration: existingDuration && existingDuration !== resolutionData?.existingEvent?.durationMinutes ? existingDuration : undefined,
         }),
       })
       if (!res.ok) {
@@ -717,10 +735,16 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
       }
       const result = await res.json()
 
-      if (resolutionAction === 'move_new') {
+      if (resolutionAction === 'keep_both') {
         setSuccess({
           show: true,
-          message: 'Nový termín nalezen',
+          message: 'Kolize ponechána',
+          subMessage: 'Obě schůzky zůstávají — můžete nyní kliknout UDĚLAT.',
+        })
+      } else if (resolutionAction === 'move_new') {
+        setSuccess({
+          show: true,
+          message: 'Nový termín zvolen',
           subMessage: result.newSlot
             ? `Schůzka přesunuta. Zkontrolujte nový termín v kartě.`
             : 'Schůzka byla přesunuta na jiný termín.',
@@ -747,11 +771,13 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
   if (error) return <ErrorDisplay message={error} />
   if (!resolutionData) return <ErrorDisplay message="Data nenalezena" />
 
-  const actionLabel = resolutionAction === 'reschedule_existing'
-    ? 'Přesunout stávající'
-    : resolutionAction === 'cancel_existing'
-      ? 'Zrušit stávající'
-      : 'Přesunout novou schůzku'
+  const actionLabel = resolutionAction === 'keep_both'
+    ? 'Ponechat obojí'
+    : resolutionAction === 'reschedule_existing'
+      ? 'Přesunout stávající'
+      : resolutionAction === 'cancel_existing'
+        ? 'Zrušit stávající'
+        : 'Změnit čas schůzky'
 
   return (
     <Card style={{ width: '100%', maxWidth: '672px', margin: '0 auto' }}>
@@ -759,7 +785,7 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
         <p style={{
           fontSize: theme.typography.sizes.xs,
           fontWeight: theme.typography.weights.medium,
-          color: '#dc2626',
+          color: resolutionAction === 'keep_both' ? '#16a34a' : '#dc2626',
           textTransform: 'uppercase',
           letterSpacing: '0.05em',
         }}>
@@ -809,6 +835,43 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
         )}
       </div>
 
+      {/* Duration adjustments (for reschedule, cancel, keep_both) */}
+      {resolutionAction !== 'move_new' && (resolutionData.existingEvent.durationMinutes || resolutionData.newEvent?.durationMinutes) && (
+        <div style={{
+          margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
+          padding: theme.spacing.md,
+          backgroundColor: theme.colors.secondary,
+          borderRadius: theme.borderRadius.md,
+          border: `1px solid ${theme.colors.border}`,
+        }}>
+          <div style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
+            Upravit délku (minuty)
+          </div>
+          <div style={{ display: 'flex', gap: theme.spacing.md }}>
+            {resolutionData.existingEvent.durationMinutes && (
+              <div style={{ flex: 1 }}>
+                <Input
+                  label="Stávající"
+                  type="number"
+                  value={String(existingDuration)}
+                  onChange={e => setExistingDuration(e.target.value ? parseInt(e.target.value, 10) : '')}
+                />
+              </div>
+            )}
+            {resolutionData.newEvent?.durationMinutes && (
+              <div style={{ flex: 1 }}>
+                <Input
+                  label="Nová"
+                  type="number"
+                  value={String(newDuration)}
+                  onChange={e => setNewDuration(e.target.value ? parseInt(e.target.value, 10) : '')}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Alt slot info (for reschedule) */}
       {resolutionData.altSlot && resolutionAction === 'reschedule_existing' && (
         <div style={{
@@ -824,6 +887,57 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
           <div style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.text }}>
             {resolutionData.altSlot.time}
           </div>
+        </div>
+      )}
+
+      {/* Slot picker (for move_new) */}
+      {resolutionAction === 'move_new' && resolutionData.availableSlots && resolutionData.availableSlots.length > 0 && (
+        <div style={{
+          margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: theme.spacing.xs,
+        }}>
+          <div style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '4px' }}>
+            Vyberte nový termín
+          </div>
+          {resolutionData.availableSlots.map((slot, idx) => {
+            const isSelected = selectedSlot?.start === slot.start && selectedSlot?.end === slot.end
+            return (
+              <button
+                key={idx}
+                onClick={() => setSelectedSlot({ start: slot.start, end: slot.end })}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '10px 14px',
+                  backgroundColor: isSelected ? theme.colors.primary : theme.colors.surface,
+                  color: isSelected ? 'white' : theme.colors.text,
+                  border: `2px solid ${isSelected ? theme.colors.primary : theme.colors.border}`,
+                  borderRadius: theme.borderRadius.md,
+                  cursor: 'pointer',
+                  fontSize: theme.typography.sizes.sm,
+                  fontWeight: isSelected ? theme.typography.weights.semibold : theme.typography.weights.normal,
+                  textAlign: 'left',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                {slot.label}
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {resolutionAction === 'move_new' && resolutionData.availableSlots && resolutionData.availableSlots.length === 0 && (
+        <div style={{
+          margin: `0 ${theme.spacing.lg} ${theme.spacing.md}`,
+          padding: theme.spacing.md,
+          backgroundColor: '#fef2f2',
+          borderRadius: theme.borderRadius.md,
+          color: '#991b1b',
+          fontSize: theme.typography.sizes.sm,
+        }}>
+          Žádné volné termíny v následujících 14 dnech.
         </div>
       )}
 
@@ -864,6 +978,7 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
           variant="primary"
           onClick={handleConfirm}
           loading={executing}
+          disabled={resolutionAction === 'move_new' && !selectedSlot}
         >
           Potvrdit
         </Button>

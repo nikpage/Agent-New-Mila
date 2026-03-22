@@ -11,7 +11,7 @@ import { sendEmail } from '@/lib/google/gmail'
 import type { ConflictCardData } from '@/components/action/action-card-template'
 import type { Json } from '@/lib/supabase/types'
 
-type ResolutionAction = 'reschedule_existing' | 'cancel_existing' | 'move_new'
+type ResolutionAction = 'reschedule_existing' | 'cancel_existing' | 'move_new' | 'keep_both'
 
 /**
  * GET — Load conflict resolution details + generate draft on-demand.
@@ -40,7 +40,7 @@ export async function GET(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
-    if (!resolutionAction || !['reschedule_existing', 'cancel_existing', 'move_new'].includes(resolutionAction)) {
+    if (!resolutionAction || !['reschedule_existing', 'cancel_existing', 'move_new', 'keep_both'].includes(resolutionAction)) {
       return NextResponse.json({ error: 'Invalid resolution action' }, { status: 400 })
     }
 
@@ -72,7 +72,7 @@ export async function GET(
 
     // Generate draft only if event has guests/CP that need to be notified
     let draft: { subject: string; body: string } | null = null
-    if (resolutionAction !== 'move_new' && (conflict.event_has_guests || conflict.event_cp_name)) {
+    if (resolutionAction !== 'move_new' && resolutionAction !== 'keep_both' && (conflict.event_has_guests || conflict.event_cp_name)) {
       const cpName = conflict.event_cp_name || 'participant'
       draft = await generateConflictResolutionDraft(
         resolutionAction === 'reschedule_existing' ? 'reschedule' : 'cancel',
@@ -87,13 +87,38 @@ export async function GET(
 
     // Build human-readable summary of what will happen
     let summary: string
-    if (resolutionAction === 'reschedule_existing') {
+    if (resolutionAction === 'keep_both') {
+      summary = `Ponechat obě schůzky — překryv s "${conflict.event_title}" je v pořádku. Nová schůzka bude potvrzena.`
+    } else if (resolutionAction === 'reschedule_existing') {
       summary = `Přesunout "${conflict.event_title}" ${altTimeStr ? `na ${altTimeStr}` : 'na jiný termín'}. Nová schůzka bude potvrzena automaticky.`
     } else if (resolutionAction === 'cancel_existing') {
       summary = `Zrušit "${conflict.event_title}". Nová schůzka bude potvrzena automaticky.`
     } else {
-      summary = `Přesunout novou schůzku na jiný termín. Stávající "${conflict.event_title}" zůstane beze změny.`
+      summary = `Vyberte nový termín pro schůzku. Stávající "${conflict.event_title}" zůstane beze změny.`
     }
+
+    // For move_new, provide available slots so user can pick
+    let availableSlots: { start: string; end: string; label: string }[] | undefined
+    if (resolutionAction === 'move_new') {
+      const durationMs = payload?.start && payload?.end
+        ? new Date(payload.end as string).getTime() - new Date(payload.start as string).getTime()
+        : new Date(conflict.event_end).getTime() - new Date(conflict.event_start).getTime()
+      const durationMinutes = Math.max(30, Math.round(durationMs / 60000))
+      const slots = await findBestSlots(action.user_id, durationMinutes, 10)
+      availableSlots = slots.map(s => ({
+        start: s.start.toISOString(),
+        end: s.end.toISOString(),
+        label: formatTimeRange(s.start.toISOString(), s.end.toISOString(), tz),
+      }))
+    }
+
+    // Provide current durations for editing
+    const newEventDuration = payload?.start && payload?.end
+      ? Math.round((new Date(payload.end as string).getTime() - new Date(payload.start as string).getTime()) / 60000)
+      : null
+    const existingEventDuration = Math.round(
+      (new Date(conflict.event_end).getTime() - new Date(conflict.event_start).getTime()) / 60000
+    )
 
     return NextResponse.json({
       action: resolutionAction,
@@ -105,8 +130,15 @@ export async function GET(
         time: existingTimeStr,
         cpName: conflict.event_cp_name,
         hasGuests: conflict.event_has_guests,
+        durationMinutes: existingEventDuration,
+      },
+      newEvent: {
+        durationMinutes: newEventDuration,
+        start: (payload?.start as string) || null,
+        end: (payload?.end as string) || null,
       },
       altSlot: altTimeStr ? { time: altTimeStr, start: conflict.alt_slot_start, end: conflict.alt_slot_end } : null,
+      availableSlots,
     })
   } catch (error) {
     console.error('[ResolveConflict:GET]', error)
@@ -128,11 +160,14 @@ export async function POST(
   try {
     const { id: actionId } = await params
     const body = await request.json()
-    const { token, action: resolutionAction, conflict_idx: conflictIdx = 0, edited_draft } = body as {
+    const { token, action: resolutionAction, conflict_idx: conflictIdx = 0, edited_draft, selected_slot, new_duration, existing_duration } = body as {
       token: string
       action: ResolutionAction
       conflict_idx?: number
       edited_draft?: { subject: string; body: string }
+      selected_slot?: { start: string; end: string }
+      new_duration?: number
+      existing_duration?: number
     }
 
     if (!token) {
@@ -179,6 +214,48 @@ export async function POST(
 
     const userId = actionRecord.user_id
     const settings = await getUserSettings(userId)
+
+    // ── Duration changes (optional, before main resolution) ────────────
+    if (existing_duration && existing_duration > 0) {
+      const existingEvt = await getEventById(conflict.event_id)
+      if (existingEvt && existingEvt.google_event_id) {
+        const newEnd = new Date(new Date(conflict.event_start).getTime() + existing_duration * 60000)
+        await updateCalendarEvent(userId, existingEvt.google_event_id, {
+          endTime: newEnd,
+        })
+        const { updateEvent: updateDbEvent } = await import('@/lib/db/events')
+        await updateDbEvent(conflict.event_id, { end_time: newEnd.toISOString() })
+      }
+    }
+    if (new_duration && new_duration > 0 && payload?.hold_event_id) {
+      const holdEvt = await getEventById(payload.hold_event_id as string)
+      if (holdEvt && holdEvt.google_event_id) {
+        const holdStart = new Date(payload.start as string)
+        const newEnd = new Date(holdStart.getTime() + new_duration * 60000)
+        await updateCalendarEvent(userId, holdEvt.google_event_id, {
+          endTime: newEnd,
+        })
+        const { updateEvent: updateDbEvent } = await import('@/lib/db/events')
+        await updateDbEvent(holdEvt.id, { end_time: newEnd.toISOString() })
+        // Update the action payload with new end time
+        const latestAction = await getActionById(actionId)
+        const latestPayload = (latestAction?.payload as Record<string, unknown>) || {}
+        await updateAction(actionId, {
+          payload: { ...latestPayload, end: newEnd.toISOString() } as unknown as Json,
+        })
+      }
+    }
+
+    if (resolutionAction === 'keep_both') {
+      // User accepts the overlap — remove conflict from payload, unblock UDĚLAT
+      const updatedConflicts = conflicts.filter((_, i) => i !== conflictIdx)
+      const freshAction = await getActionById(actionId)
+      const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
+      await updateAction(actionId, {
+        payload: { ...freshPayload, conflicts: updatedConflicts } as unknown as Json,
+      })
+      return NextResponse.json({ success: true, resolution: 'keep_both' })
+    }
 
     if (resolutionAction === 'reschedule_existing') {
       // 1. Reschedule existing event to alt slot
@@ -237,16 +314,27 @@ export async function POST(
         await cancelEventWithCleanup(holdEventId)
       }
 
-      // 2. Find a new slot that doesn't conflict
-      const durationMs = new Date(conflict.event_end).getTime() - new Date(conflict.event_start).getTime()
+      // 2. Use user-selected slot or find one automatically
+      const durationMs = payload?.start && payload?.end
+        ? new Date(payload.end as string).getTime() - new Date(payload.start as string).getTime()
+        : new Date(conflict.event_end).getTime() - new Date(conflict.event_start).getTime()
       const durationMinutes = Math.max(30, Math.round(durationMs / 60000))
-      const newSlots = await findBestSlots(userId, durationMinutes, 1)
 
-      if (newSlots.length === 0) {
-        return NextResponse.json({ error: 'No available slot found for the new meeting' }, { status: 400 })
+      let newSlot: { start: Date; end: Date }
+      if (selected_slot) {
+        // User picked a specific slot from the available list
+        newSlot = {
+          start: new Date(selected_slot.start),
+          end: new Date(selected_slot.end),
+        }
+      } else {
+        // Fallback: auto-find (backward compat)
+        const newSlots = await findBestSlots(userId, durationMinutes, 1)
+        if (newSlots.length === 0) {
+          return NextResponse.json({ error: 'No available slot found for the new meeting' }, { status: 400 })
+        }
+        newSlot = newSlots[0]
       }
-
-      const newSlot = newSlots[0]
 
       // 3. Create new hold at the new slot
       const location = payload?.location as string | null
@@ -264,12 +352,12 @@ export async function POST(
       }
 
       // 4. Update action payload with new hold info — fresh fetch to avoid stale writes
-      const latestAction = await getActionById(actionId)
-      const latestPayload = (latestAction?.payload as Record<string, unknown>) || {}
+      const freshMoveAction = await getActionById(actionId)
+      const freshMovePayload = (freshMoveAction?.payload as Record<string, unknown>) || {}
       const updatedConflicts = conflicts.filter((_, i) => i !== conflictIdx)
       await updateAction(actionId, {
         payload: {
-          ...latestPayload,
+          ...freshMovePayload,
           hold_event_id: holdResult.holdEvent.id,
           start: newSlot.start.toISOString(),
           end: newSlot.end.toISOString(),

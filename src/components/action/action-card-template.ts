@@ -71,6 +71,7 @@ export interface ActionCardEmailParams {
   resolveRescheduleUrl?: string | null
   resolveCancelUrl?: string | null
   resolveMoveNewUrl?: string | null
+  resolveKeepBothUrl?: string | null
   /** New action's intent summary (for conflict comparison display) */
   newActionTopic?: string | null
   newActionScore?: number | null
@@ -111,7 +112,7 @@ function formatIntentHtml(text: string): string {
 }
 
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
-  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone, slotText, conflicts, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl } = params
+  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone, slotText, conflicts, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl } = params
   // Resolve effective meeting type: use meetingType if set, fall back to isOnline for backward compat
   const effectiveMeetingType = meetingType || (isOnline ? 'online' : 'address')
 
@@ -121,10 +122,14 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
   const urgencyBadge = BADGE_EMAIL_COLORS.accent
   const urgencyLabel = urgency >= 8 ? 'TEĎ' : urgency >= 4 ? 'Zítra' : 'Později'
 
-  // UDĚLAT button: grayed out when user needs to fill in info first
+  // UDĚLAT button: grayed out when user needs to fill in info first.
+  // Conflicts show warning style but stay clickable — user decides.
+  const hasActiveConflicts = conflicts && conflicts.length > 0 && !needsInput
   const doItButton = needsInput
     ? `<span style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.secondary}; color: ${theme.colors.textMuted}; border-radius: 6px; font-weight: 500; font-size: 14px; margin-right: 8px; opacity: 0.5; cursor: not-allowed;">UDĚLAT</span>`
-    : `<a href="${executeUrl}" style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.primary}; color: white; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none; margin-right: 8px;">UDĚLAT</a>`
+    : hasActiveConflicts
+      ? `<a href="${executeUrl}" style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.primary}; color: white; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none; margin-right: 8px; border: 2px solid #dc2626;">⚠ UDĚLAT</a>`
+      : `<a href="${executeUrl}" style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.primary}; color: white; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none; margin-right: 8px;">UDĚLAT</a>`
 
   return `
     <div style="background-color: ${theme.colors.surface}; border: 1px solid ${theme.colors.border}; border-radius: 8px; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1); margin-bottom: 24px; font-family: 'Inter', system-ui, sans-serif;">
@@ -212,9 +217,10 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
         <div style="font-size: 13px; color: #991b1b; font-weight: 500; margin-bottom: 8px;">${recText}</div>
 
         <div>
+          ${resolveKeepBothUrl ? `<a href="${resolveKeepBothUrl}" style="${btnStyle} background-color: #16a34a; color: white;">PONECHAT OBOJÍ</a>` : ''}
           ${resolveRescheduleUrl ? `<a href="${resolveRescheduleUrl}" style="${btnStyle} background-color: #dc2626; color: white;">PŘESUNOUT STÁVAJÍCÍ</a>` : ''}
           ${resolveCancelUrl ? `<a href="${resolveCancelUrl}" style="${btnStyle} background-color: #991b1b; color: white;">ZRUŠIT STÁVAJÍCÍ</a>` : ''}
-          ${resolveMoveNewUrl ? `<a href="${resolveMoveNewUrl}" style="${btnStyle} background-color: #1e40af; color: white;">PŘESUNOUT NOVOU</a>` : ''}
+          ${resolveMoveNewUrl ? `<a href="${resolveMoveNewUrl}" style="${btnStyle} background-color: #1e40af; color: white;">ZMĚNIT ČAS</a>` : ''}
         </div>
       </div>`
       }).join('')}
