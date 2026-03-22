@@ -293,18 +293,25 @@ async function processOneInboundEmail(
     occurred_at: email.date.toISOString(),
   })
 
-  // Enrich message: extract key info, save enriched text, embed it
+  // Enrich message: extract key info, save enriched text
   // Use enrichment-safe cleaning (keeps signatures — they contain addresses and contact info)
+  let enrichedText: string | null = null
   try {
     const textForEnrichment = cleanMessageTextForEnrichment(email.body, 'email')
-    const enrichedText = await enrichMessage(textForEnrichment, 'email', 'inbound', undefined, settings ?? undefined)
+    enrichedText = await enrichMessage(textForEnrichment, 'email', 'inbound', undefined, settings ?? undefined)
     await updateMessage(messageId, { enriched_text: enrichedText })
-
-    // Embed the enriched text (not the raw body) — skip cleaning since enriched text is AI-generated
-    const embedding = await generateMessageEmbedding(enrichedText, 'email', true)
-    await saveMessageEmbedding(messageId, embedding)
   } catch (error) {
-    console.error(`Failed to enrich/embed message ${messageId}:`, error)
+    console.error(`[Enrichment] FAILED for inbound message ${messageId}:`, error)
+  }
+
+  // Embed the enriched text (not the raw body) — skip cleaning since enriched text is AI-generated
+  if (enrichedText) {
+    try {
+      const embedding = await generateMessageEmbedding(enrichedText, 'email', true)
+      await saveMessageEmbedding(messageId, embedding)
+    } catch (error) {
+      console.error(`[Embeddings] FAILED for inbound message ${messageId}:`, error)
+    }
   }
 
   return {
@@ -418,18 +425,25 @@ async function processOneOutboundEmail(
     occurred_at: email.date.toISOString(),
   })
 
-  // Enrich message: extract key info, save enriched text, embed it
+  // Enrich message: extract key info, save enriched text
   // Use enrichment-safe cleaning (keeps signatures — they contain addresses and contact info)
+  let enrichedText: string | null = null
   try {
     const textForEnrichment = cleanMessageTextForEnrichment(email.body, 'email')
-    const enrichedText = await enrichMessage(textForEnrichment, 'email', 'outbound', undefined, settings ?? undefined)
+    enrichedText = await enrichMessage(textForEnrichment, 'email', 'outbound', undefined, settings ?? undefined)
     await updateMessage(messageId, { enriched_text: enrichedText })
-
-    // Embed the enriched text (not the raw body) — skip cleaning since enriched text is AI-generated
-    const embedding = await generateMessageEmbedding(enrichedText, 'email', true)
-    await saveMessageEmbedding(messageId, embedding)
   } catch (error) {
-    console.error(`Failed to enrich/embed outbound message ${messageId}:`, error)
+    console.error(`[Enrichment] FAILED for outbound message ${messageId}:`, error)
+  }
+
+  // Embed the enriched text (not the raw body) — skip cleaning since enriched text is AI-generated
+  if (enrichedText) {
+    try {
+      const embedding = await generateMessageEmbedding(enrichedText, 'email', true)
+      await saveMessageEmbedding(messageId, embedding)
+    } catch (error) {
+      console.error(`[Embeddings] FAILED for outbound message ${messageId}:`, error)
+    }
   }
 
   return true

@@ -65,8 +65,10 @@ Last updated: 2026-03-15
 - **Action**: Update QStash agent schedule to `*/10 * * * *` when configuring production.
 
 ### VERIFY-002: Embedding failure visibility
-- **Status**: TO VERIFY
-- **Claim**: Embedding failures are supposed to be surfaced now (not silent as BUG-010 described). Verify that the fix landed — check `src/lib/embeddings/generate.ts` and callers for proper error logging/reporting.
+- **Status**: VERIFIED — was broken, now fixed
+- **Finding**: Embedding failures WERE still silent. Header comment in `generate.ts` falsely claimed "the app works without embeddings." Ingestion bundled enrichment + embedding in one try/catch — couldn't tell which failed. Threading logged a generic message.
+- **Fix**: (1) Deleted false header comment in `generate.ts`. (2) Separated enrichment and embedding try/catch in `ingestion.ts` (inbound + outbound). (3) All embedding failures now log `[Embeddings] FAILED` with message ID for Sentry filtering. (4) Updated CLAUDE.md to reflect that embeddings are critical, not optional.
+- **Files**: `src/lib/embeddings/generate.ts`, `src/services/ingestion.ts`, `src/services/threading.ts`, `CLAUDE.md`
 
 ### VERIFY-003: WhatsApp group message handling
 - **Status**: TO VERIFY
@@ -86,9 +88,10 @@ Last updated: 2026-03-15
 - **Impact**: Low — affects multi-party WhatsApp group chats only.
 
 ### BUG-010: Embedding failures not surfaced
-- **Status**: OPEN
-- **Symptom**: When embedding generation fails (Gemini API error), it's caught silently. If embeddings fail consistently, threading falls back entirely to external thread ID matching, losing cross-channel intelligence.
-- **Impact**: Low — graceful degradation, but user has no visibility into degraded mode.
+- **Status**: FIXED (VERIFY-002)
+- **Symptom**: When embedding generation fails (Gemini API error), it was caught silently. Enrichment and embedding shared one try/catch — couldn't distinguish which failed.
+- **Fix**: Separated try/catch blocks. All failures now log `[Embeddings] FAILED` or `[Enrichment] FAILED` with message ID. Visible in Sentry.
+- **Future consideration**: Embedding fallback strategy — dual-embed with second provider for instant failover. Flagged for decision before significant conversation volume exists.
 
 ---
 

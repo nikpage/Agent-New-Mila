@@ -160,7 +160,7 @@ export async function assignToConversation(
         }
       }
     } catch (error) {
-      console.error('[Threading] Embedding similarity check failed:', error)
+      console.error(`[Embeddings] FAILED during threading for message ${message.id} (cp: ${message.cp_id}):`, error)
     }
   }
 

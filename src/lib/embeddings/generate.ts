@@ -1,9 +1,10 @@
 /**
  * Embedding Generation
  * Uses Gemini embedding model (gemini-embedding-001, 768-dim, multilingual).
- * No fallback chain — embeddings are Gemini-only. When Gemini is unavailable
- * (geo-block, missing key), calls are skipped silently. The app works without
- * embeddings: threading falls back to Gmail thread ID matching.
+ * No fallback chain — embeddings are Gemini-only.
+ * Embeddings are CRITICAL for cross-channel conversation threading.
+ * Without them, only Gmail thread ID matching works — cross-channel
+ * and cross-thread merging is lost. Failures must be logged and visible.
  */
 
 import { getNextClient } from '@/lib/ai/providers/gemini-keys'

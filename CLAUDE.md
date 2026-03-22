@@ -326,7 +326,7 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 
 **Rate limit handling**: On 429/RESOURCE_EXHAUSTED errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
 
-**Embedding model**: gemini-embedding-001 (768-dim, multilingual) — separate from chat, NO fallback chain. Embedding failures are caught silently — the app works without them (threading falls back to Gmail thread ID matching).
+**Embedding model**: gemini-embedding-001 (768-dim, multilingual) — separate from chat, NO fallback chain. Embeddings are critical for cross-channel conversation threading. Failures are logged with `[Embeddings] FAILED` prefix for Sentry visibility. Without embeddings, only Gmail thread ID matching works — cross-channel and cross-thread merging is lost.
 
 **Providers**:
 - `src/lib/ai/providers/gemini.ts` — @google/generative-ai SDK. Supports multi-key rotation via GEMINI_API_KEYS (comma-separated) — strictly round-robins across keys on every request to spread load. Falls back to single GEMINI_API_KEY if not set.
