@@ -174,9 +174,9 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
       </div>
       ` : ''}
 
-      ${conflicts && conflicts.length > 0 ? `
+      ${conflicts && conflicts.filter(c => !(c as Record<string, unknown>).resolved).length > 0 ? `
       <!-- CONFLICT RESOLUTION -->
-      ${conflicts.map((c, idx) => {
+      ${conflicts.filter(c => !(c as Record<string, unknown>).resolved).map((c, idx) => {
         const tz = 'Europe/Prague'
         const cStart = new Date(c.event_start)
         const cEnd = new Date(c.event_end)

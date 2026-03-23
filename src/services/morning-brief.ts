@@ -179,11 +179,17 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
 
       // Conflict resolution URLs (only for SCHEDULE actions with conflicts)
       const actionPayload = action.payload as Record<string, unknown> | null
-      const hasConflicts = action.action_type === 'SCHEDULE' && Array.isArray(actionPayload?.conflicts) && (actionPayload!.conflicts as unknown[]).length > 0
-      const resolveRescheduleUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=reschedule_existing&conflict_idx=0` : null
-      const resolveCancelUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=cancel_existing&conflict_idx=0` : null
-      const resolveMoveNewUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=move_new&conflict_idx=0` : null
-      const resolveKeepBothUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=keep_both&conflict_idx=0` : null
+      const unresolvedConflicts = action.action_type === 'SCHEDULE' && Array.isArray(actionPayload?.conflicts)
+        ? (actionPayload!.conflicts as Record<string, unknown>[]).filter(c => !c.resolved)
+        : []
+      const hasConflicts = unresolvedConflicts.length > 0
+      const firstUnresolvedIdx = hasConflicts
+        ? (actionPayload!.conflicts as Record<string, unknown>[]).findIndex(c => !c.resolved)
+        : 0
+      const resolveRescheduleUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=reschedule_existing&conflict_idx=${firstUnresolvedIdx}` : null
+      const resolveCancelUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=cancel_existing&conflict_idx=${firstUnresolvedIdx}` : null
+      const resolveMoveNewUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=move_new&conflict_idx=${firstUnresolvedIdx}` : null
+      const resolveKeepBothUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=keep_both&conflict_idx=${firstUnresolvedIdx}` : null
 
       briefActions.push({
         action,
@@ -622,7 +628,13 @@ async function sendInstantNotificationForConversation(
 
       // Conflict resolution URLs (only for SCHEDULE actions with conflicts)
       const instantPayload = action.payload as Record<string, unknown> | null
-      const instantHasConflicts = action.action_type === 'SCHEDULE' && Array.isArray(instantPayload?.conflicts) && (instantPayload!.conflicts as unknown[]).length > 0
+      const instantUnresolvedConflicts = action.action_type === 'SCHEDULE' && Array.isArray(instantPayload?.conflicts)
+        ? (instantPayload!.conflicts as Record<string, unknown>[]).filter(c => !c.resolved)
+        : []
+      const instantHasConflicts = instantUnresolvedConflicts.length > 0
+      const instantFirstIdx = instantHasConflicts
+        ? (instantPayload!.conflicts as Record<string, unknown>[]).findIndex(c => !c.resolved)
+        : 0
 
       briefActions.push({
         action,
@@ -636,10 +648,10 @@ async function sendInstantNotificationForConversation(
         executeUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute&type=${action.action_type}`,
         todoUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`,
         blacklistUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`,
-        resolveRescheduleUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=reschedule_existing&conflict_idx=0` : null,
-        resolveCancelUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=cancel_existing&conflict_idx=0` : null,
-        resolveMoveNewUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=move_new&conflict_idx=0` : null,
-        resolveKeepBothUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=keep_both&conflict_idx=0` : null,
+        resolveRescheduleUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=reschedule_existing&conflict_idx=${instantFirstIdx}` : null,
+        resolveCancelUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=cancel_existing&conflict_idx=${instantFirstIdx}` : null,
+        resolveMoveNewUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=move_new&conflict_idx=${instantFirstIdx}` : null,
+        resolveKeepBothUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=keep_both&conflict_idx=${instantFirstIdx}` : null,
       })
     }
 

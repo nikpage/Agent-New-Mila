@@ -52,11 +52,19 @@ export async function GET(
       return NextResponse.json({ error: 'Conflict not found — may have been resolved' }, { status: 404 })
     }
 
+    // Check if this conflict was already resolved in a previous interaction
+    if ((conflict as Record<string, unknown>).resolved) {
+      return NextResponse.json({
+        error: 'Tento konflikt již byl vyřešen.',
+        resolved: true,
+      }, { status: 409 })
+    }
+
     // Check if the existing event still exists (may have been moved/cancelled already)
     const existingEvent = await getEventById(conflict.event_id)
     if (!existingEvent || existingEvent.status === 'cancelled') {
       return NextResponse.json({
-        error: 'Conflict already resolved — the existing event was moved or cancelled',
+        error: 'Tento konflikt již byl vyřešen — schůzka byla přesunuta nebo zrušena.',
         resolved: true,
       }, { status: 409 })
     }
@@ -70,9 +78,10 @@ export async function GET(
       ? formatTimeRange(conflict.alt_slot_start, conflict.alt_slot_end || conflict.alt_slot_start, tz)
       : null
 
-    // Generate draft only if event has guests/CP that need to be notified
+    // Generate draft for any resolution that might notify the existing event's CP.
+    // The frontend decides whether to show it based on the selected resolution action.
     let draft: { subject: string; body: string } | null = null
-    if (resolutionAction !== 'move_new' && resolutionAction !== 'keep_both' && (conflict.event_has_guests || conflict.event_cp_name)) {
+    if (conflict.event_has_guests || conflict.event_cp_name) {
       const cpName = conflict.event_cp_name || 'participant'
       draft = await generateConflictResolutionDraft(
         resolutionAction === 'reschedule_existing' ? 'reschedule' : 'cancel',
@@ -258,11 +267,15 @@ export async function POST(
       return NextResponse.json({ error: 'Conflict not found' }, { status: 404 })
     }
 
+    if ((conflict as Record<string, unknown>).resolved) {
+      return NextResponse.json({ success: true, message: 'Tento konflikt již byl vyřešen.', resolved: true })
+    }
+
     // Re-check existing event is still there
     const existingEvent = await getEventById(conflict.event_id)
     if (!existingEvent || existingEvent.status === 'cancelled') {
       // Conflict gone — remove from payload and let user proceed normally
-      const updatedConflicts = conflicts.filter((_, i) => i !== conflictIdx)
+      const updatedConflicts = conflicts.map((c, i) => i === conflictIdx ? { ...c, resolved: true } : c)
       const freshAction = await getActionById(actionId)
       const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
       await updateAction(actionId, {
@@ -307,7 +320,7 @@ export async function POST(
 
     if (resolutionAction === 'keep_both') {
       // User accepts the overlap — remove conflict from payload, unblock UDĚLAT
-      const updatedConflicts = conflicts.filter((_, i) => i !== conflictIdx)
+      const updatedConflicts = conflicts.map((c, i) => i === conflictIdx ? { ...c, resolved: true } : c)
       const freshAction = await getActionById(actionId)
       const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
       await updateAction(actionId, {
@@ -447,7 +460,7 @@ export async function POST(
       // 5. Update action payload with new hold info — fresh fetch to avoid stale writes
       const freshMoveAction = await getActionById(actionId)
       const freshMovePayload = (freshMoveAction?.payload as Record<string, unknown>) || {}
-      const updatedConflicts = conflicts.filter((_, i) => i !== conflictIdx)
+      const updatedConflicts = conflicts.map((c, i) => i === conflictIdx ? { ...c, resolved: true } : c)
       await updateAction(actionId, {
         payload: {
           ...freshMovePayload,
