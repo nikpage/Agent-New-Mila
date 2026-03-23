@@ -6,7 +6,7 @@ import { getUserSettings } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
 import { generateConflictResolutionDraft } from '@/lib/ai/mila-voice'
 import { confirmSlot, findBestSlots, blockSlotForProposal } from '@/services/scheduling'
-import { updateCalendarEvent } from '@/lib/google/calendar'
+import { updateCalendarEvent, deleteCalendarEvent } from '@/lib/google/calendar'
 import { sendEmail } from '@/lib/google/gmail'
 import type { ConflictCardData } from '@/components/action/action-card-template'
 import type { Json } from '@/lib/supabase/types'
@@ -367,10 +367,34 @@ export async function POST(
       return NextResponse.json({ success: true, resolution: 'cancel_existing' })
 
     } else if (resolutionAction === 'move_new') {
-      // 1. Cancel current hold for the new event
+      // 1. Delete current hold for the new event (DB + Google Calendar)
       const holdEventId = payload?.hold_event_id as string | null
       if (holdEventId) {
-        await cancelEventWithCleanup(holdEventId)
+        const holdEvent = await getEventById(holdEventId)
+        // Delete travel buffers from GCal
+        const { getTravelBuffers, cleanupTravelBuffers } = await import('@/lib/db/events')
+        const travelBuffers = await getTravelBuffers(holdEventId)
+        for (const buf of travelBuffers) {
+          if (buf.google_event_id) {
+            try {
+              await deleteCalendarEvent(userId, buf.google_event_id, 'none')
+            } catch (e) {
+              console.error('[ResolveConflict] Failed to delete travel buffer from GCal:', e)
+            }
+          }
+        }
+        await cleanupTravelBuffers(holdEventId)
+        // Delete hold from GCal
+        if (holdEvent?.google_event_id) {
+          try {
+            await deleteCalendarEvent(userId, holdEvent.google_event_id, 'none')
+          } catch (e) {
+            console.error('[ResolveConflict] Failed to delete hold from GCal:', e)
+          }
+        }
+        // Delete hold from DB
+        const { deleteEvent: deleteDbEvent } = await import('@/lib/db/events')
+        await deleteDbEvent(holdEventId)
       }
 
       // 2. Use user-selected slot or find one automatically

@@ -935,83 +935,67 @@ export async function optimizeScheduleActions(
             preferenceBooked = true
             break
           }
-        } else {
-          // Preferred time conflicts.
-          // approximate: try nearby free slots (±30min) before conflict resolution
-          if (pref.flexibility === 'approximate') {
-            const nearbySlots = allSlots.filter(s =>
-              Math.abs(s.start.getTime() - preferredDate.getTime()) <= 30 * 60000 &&
-              s.start.getTime() !== preferredDate.getTime() &&
-              isSlotAvailable(s)
-            ).sort((a, b) =>
-              Math.abs(a.start.getTime() - preferredDate.getTime()) -
-              Math.abs(b.start.getTime() - preferredDate.getTime())
-            )
-            let nearbyBooked = false
-            for (const nearby of nearbySlots) {
-              const holdResult = await blockSlotForProposal(userId, action.cp_id, nearby, duration, meetingLocation || undefined, undefined, action.conversation_id)
-              if (holdResult.success && holdResult.holdEvent) {
-                await updateActionWithHold(action, holdResult, meetingLocation, settings)
-                result.optimized++
-                result.holds.push(holdResult.holdEvent)
-                bookedRanges.push(bookedRangeForHold(nearby.start, nearby.end, holdResult))
-                preferenceBooked = true
-                nearbyBooked = true
-                break
-              }
+        } else if (pref.flexibility === 'approximate') {
+          // approximate: try nearby free slots (±30min) before giving up
+          const nearbySlots = allSlots.filter(s =>
+            Math.abs(s.start.getTime() - preferredDate.getTime()) <= 30 * 60000 &&
+            s.start.getTime() !== preferredDate.getTime() &&
+            isSlotAvailable(s)
+          ).sort((a, b) =>
+            Math.abs(a.start.getTime() - preferredDate.getTime()) -
+            Math.abs(b.start.getTime() - preferredDate.getTime())
+          )
+          for (const nearby of nearbySlots) {
+            const holdResult = await blockSlotForProposal(userId, action.cp_id, nearby, duration, meetingLocation || undefined, undefined, action.conversation_id)
+            if (holdResult.success && holdResult.holdEvent) {
+              await updateActionWithHold(action, holdResult, meetingLocation, settings)
+              result.optimized++
+              result.holds.push(holdResult.holdEvent)
+              bookedRanges.push(bookedRangeForHold(nearby.start, nearby.end, holdResult))
+              preferenceBooked = true
+              break
             }
-            if (nearbyBooked) break
           }
+          if (preferenceBooked) break
+          // No nearby slot — try next preference
+        } else if (pref.flexibility === 'exact' && isSlotAvailable(preferredSlot)) {
+          // exact: conflict resolution — suggest moving, never auto-move
+          const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
+          const newScore = action.priority_score ?? 0
 
-          // exact: conflict resolution — move existing holds, suggest moving confirmed events
-          if (pref.flexibility === 'exact' && isSlotAvailable(preferredSlot)) {
-            const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
-            const newScore = action.priority_score ?? 0
+          const allConflictsMovable = conflicts.length > 0 && conflicts.every(existing => {
+            const w = existing.weight ?? 7
+            return w < 100 && newScore > calculateEventScore({ weight: w })
+          })
 
-            const allConflictsMovable = conflicts.length > 0 && conflicts.every(existing => {
-              const w = existing.weight ?? 7
-              return w < 100 && newScore > calculateEventScore({ weight: w })
-            })
-
-            if (allConflictsMovable) {
-              // Move tentative holds out of the way; report confirmed events for user decision
+          if (allConflictsMovable) {
+            const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
+            if (holdResult.success && holdResult.holdEvent) {
+              const conflictInfos: ConflictInfo[] = conflicts.map(existing => ({
+                existingEvent: existing,
+                existingScore: calculateEventScore({ weight: existing.weight ?? 7 }),
+                newScore,
+                recommendation: 'move_existing' as const,
+              }))
+              holdResult.conflicts = conflictInfos
               for (const conflict of conflicts) {
-                const isTentativeHold = conflict.status === 'tentative'
-                if (isTentativeHold) {
-                  await rejectSlot(userId, conflict.id)
-                } else {
-                  result.moveSuggestions.push({
-                    existingEventId: conflict.id,
-                    existingWeight: conflict.weight,
-                    reason: `CP stated specific time: ${pref.source_phrase || pref.time}`,
-                  })
-                }
+                result.moveSuggestions.push({
+                  existingEventId: conflict.id,
+                  existingWeight: conflict.weight,
+                  reason: `CP stated specific time: ${pref.source_phrase || pref.time}`,
+                })
               }
-
-              const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
-              if (holdResult.success && holdResult.holdEvent) {
-                // Only attach non-tentative conflicts for the action card
-                const confirmedConflicts = conflicts.filter(c => c.status !== 'tentative')
-                if (confirmedConflicts.length > 0) {
-                  holdResult.conflicts = confirmedConflicts.map(existing => ({
-                    existingEvent: existing,
-                    existingScore: calculateEventScore({ weight: existing.weight ?? 7 }),
-                    newScore,
-                    recommendation: 'move_existing' as const,
-                  }))
-                }
-                await updateActionWithHold(action, holdResult, meetingLocation, settings)
-                result.optimized++
-                result.holds.push(holdResult.holdEvent)
-                bookedRanges.push(bookedRangeForHold(preferredDate, preferredEnd, holdResult))
-                preferenceBooked = true
-                break
-              }
+              await updateActionWithHold(action, holdResult, meetingLocation, settings)
+              result.optimized++
+              result.holds.push(holdResult.holdEvent)
+              bookedRanges.push(bookedRangeForHold(preferredDate, preferredEnd, holdResult))
+              preferenceBooked = true
+              break
             }
           }
-          // Conflict too strong or approximate had no nearby slots — try next preference
+          // Conflict too strong — try next preference
         }
-        // Preferred slot failed batch check or hold creation — try next preference
+        // Preferred slot failed or no resolution — try next preference
       }
     }
 
@@ -1173,7 +1157,27 @@ export async function scheduleSingleAction(
           result.holds.push(holdResult.holdEvent)
           return result
         }
-      } else {
+      } else if (pref.flexibility === 'approximate') {
+        // approximate: try nearby free slots (±30min) before giving up
+        const nearbySlots = daySlots.filter(s =>
+          Math.abs(s.start.getTime() - preferredDate.getTime()) <= 30 * 60000 &&
+          s.start.getTime() !== preferredDate.getTime()
+        ).sort((a, b) =>
+          Math.abs(a.start.getTime() - preferredDate.getTime()) -
+          Math.abs(b.start.getTime() - preferredDate.getTime())
+        )
+        for (const nearby of nearbySlots) {
+          const holdResult = await blockSlotForProposal(userId, action.cp_id, nearby, duration, meetingLocation || undefined, undefined, action.conversation_id)
+          if (holdResult.success && holdResult.holdEvent) {
+            await updateActionWithHold(action, holdResult, meetingLocation, settings)
+            result.optimized++
+            result.holds.push(holdResult.holdEvent)
+            return result
+          }
+        }
+        // No nearby slot — try next preference
+      } else if (pref.flexibility === 'exact') {
+        // exact: conflict resolution — suggest moving, never auto-move
         const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
         const newScore = action.priority_score ?? 0
 
