@@ -734,24 +734,24 @@ describe('Scheduling — Optimization Priority Order', () => {
     mockGetPendingScheduleActions.mockResolvedValue([{
       id: 'action-1',
       cp_id: 'cp-1',
-      payload: { channel: 'email', cp_availability: 'Tuesday afternoon only' },
+      payload: { channel: 'email', timePreferences: [{ time: '2027-06-09T14:00:00Z', flexibility: 'loose', rank: 1 }] },
     }])
 
     // Monday 9am is free (better for travel), Tuesday 14:00 matches CP constraint
     mockFindFreeSlots.mockResolvedValue([
-      { start: new Date('2026-03-09T09:00:00'), end: new Date('2026-03-09T09:30:00') }, // Monday
-      { start: new Date('2026-03-10T14:00:00'), end: new Date('2026-03-10T14:30:00') }, // Tuesday PM
+      { start: new Date('2027-06-08T09:00:00Z'), end: new Date('2027-06-08T09:30:00Z') }, // Monday
+      { start: new Date('2027-06-09T14:00:00Z'), end: new Date('2027-06-09T14:30:00Z') }, // Tuesday PM
     ])
     mockFindConflicts.mockResolvedValue([])
     mockCreateTentativeCalendarEvent.mockResolvedValue({ id: 'gcal-1' })
-    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2026-03-10T09:00:00.000Z', end_time: '2026-03-10T09:30:00.000Z', cp_name: 'Test CP' })
+    mockCreateHoldEvent.mockResolvedValue({ id: 'hold-1', status: 'tentative', start_time: '2027-06-09T14:00:00.000Z', end_time: '2027-06-09T14:30:00.000Z', cp_name: 'Test CP' })
 
     const result = await optimizeScheduleActions('user-1')
 
     expect(result.optimized).toBe(1)
     // Should pick Tuesday PM (CP availability) over Monday AM (travel-optimal)
     expect(mockCreateTentativeCalendarEvent).toHaveBeenCalledWith('user-1', expect.objectContaining({
-      startTime: new Date('2026-03-10T14:00:00'),
+      startTime: new Date('2027-06-09T14:00:00Z'),
     }))
   })
 
@@ -818,8 +818,8 @@ describe('Scheduling — Optimization Priority Order', () => {
     expect(Math.max(...hours) - Math.min(...hours)).toBeLessThanOrEqual(2)
   })
 
-  it('CP-constrained time with conflict uses suggestedTime (preferred date) path', async () => {
-    // CP can ONLY meet at 10:00 — AI sets suggestedTime. Calendar is blocked at 10:00.
+  it('CP-constrained time with conflict uses timePreferences (preferred date) path', async () => {
+    // CP can ONLY meet at 10:00 — AI sets timePreferences. Calendar is blocked at 10:00.
     // Optimizer books at 10:00 anyway (CP hard constraint) and reports the conflict.
     const { optimizeScheduleActions } = await import('./scheduling')
 
@@ -829,8 +829,7 @@ describe('Scheduling — Optimization Priority Order', () => {
       priority_score: 150,
       payload: {
         channel: 'email',
-        cp_availability: 'Only available at 10:00 on Tuesday',
-        suggestedTime: '2026-03-24T10:00:00',
+        timePreferences: [{ time: '2026-03-24T10:00:00', flexibility: 'exact', rank: 1, source_phrase: 'Only available at 10:00 on Tuesday' }],
       },
     }])
 
@@ -856,8 +855,8 @@ describe('Scheduling — Optimization Priority Order', () => {
     expect(result.moveSuggestions[0].existingEventId).toBe('existing-1')
   })
 
-  it('without CP time constraint or suggestedTime, reports unscheduled when no free slots match', async () => {
-    // No CP constraint, no suggestedTime — if calendar is full, report unscheduled.
+  it('without CP time constraint or timePreferences, reports unscheduled when no free slots match', async () => {
+    // No CP constraint, no timePreferences — if calendar is full, report unscheduled.
     const { optimizeScheduleActions } = await import('./scheduling')
 
     mockGetPendingScheduleActions.mockResolvedValue([{

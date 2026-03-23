@@ -208,10 +208,10 @@ export async function generateActionProposal(
         }
 
         schedulingPayload = {
-          suggestedTime: proposal.suggestedTime || null,
+          timePreferences: proposal.timePreferences || [],
+          cpAvailabilityRaw: (proposal as Record<string, unknown>).cpAvailabilityRaw as string || null,
           suggestedLocation: meetingLocation || null,
           location_partial: locationPartial,
-          cp_availability: (proposal as Record<string, unknown>).cpAvailability as string || null,
           duration: settings.default_meeting_duration,
           meeting_type: proposedMeetingType,
           is_online: proposedMeetingType === 'online',

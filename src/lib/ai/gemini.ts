@@ -177,6 +177,13 @@ Be concise. Focus on actionable insights.`
   } satisfies ConversationSummary
 }
 
+export interface TimePreference {
+  time: string                                    // ISO 8601
+  flexibility: 'exact' | 'approximate' | 'loose'  // exact=sharp, approximate=±30min, loose=half-day
+  rank: number                                     // 1=first choice
+  source_phrase?: string                           // original CP text
+}
+
 /**
  * Determine what action should be proposed (Intent Only - NO DRAFTS)
  * Stage: planning (gemini-2.5-flash → claude-sonnet)
@@ -192,7 +199,8 @@ export type ProposedAction = {
   dealType: DealType
   suggestedLocation?: string | null
   locationConfidence?: 'high' | 'low' | null
-  suggestedTime?: string | null
+  timePreferences?: TimePreference[]
+  cpAvailabilityRaw?: string | null
   meetingType?: 'address' | 'online' | 'phone'
   cpPhone?: string | null
 }
@@ -265,7 +273,7 @@ ACTION TYPE RULES — return one OR multiple actions only when genuinely indepen
    - CP proposed a specific time → SCHEDULE (create event + send invite)
    - CP wants to meet but no time yet → SCHEDULE (find slot + send invite)
    - CP asks to sign a contract in person → SCHEDULE (that's a meeting)
-   CRITICAL — suggestedTime: This MUST be the time of the ACTUAL MEETING with the CP. If CP says "meeting at 9:00" → suggestedTime = 9:00. If CP says "let's meet tomorrow afternoon" → suggestedTime = tomorrow 14:00 (your best interpretation). NEVER schedule a separate time slot to "send the invitation" or "confirm the meeting" — clicking UDĚLAT sends the invite automatically. If user needs prep time before the meeting, that is a separate TODO, not a second SCHEDULE.
+   CRITICAL — timePreferences: Extract ALL times the CP mentioned for the ACTUAL MEETING, not just the first. Rank by CP's stated preference order. "around"/"kolem"/"přibližně" → approximate. "at"/"v"/"přesně"/"sharp" → exact. "morning"/"afternoon"/"next week" → loose (use midpoint as time). "9 or 10" → two entries rank 1 and 2. "between 9 and 11" → one entry time=10:00 flexibility=loose. No time stated → timePreferences: []. NEVER schedule a separate time slot to "send the invitation" or "confirm the meeting" — clicking UDĚLAT sends the invite automatically. If user needs prep time before the meeting, that is a separate TODO, not a second SCHEDULE. CRITICAL: If the CP explicitly stated a time (even outside working hours or on weekends), extract it exactly as stated. But if YOU are generating a suggested time and the CP did NOT state one, you MUST respect the user's working hours and working days from the system context. Do NOT suggest weekends or evenings unless the CP explicitly requested them.
    CRITICAL — invite is the reply: The calendar invite body IS the reply to the counterparty. When user clicks UDĚLAT, Mila sends the calendar invite which serves as the confirmation email. So intent_cs must describe BOTH what the reply will say AND what meeting is being booked. Example: "Potvrdím účast na podpisu zítra v 9:00 u notáře, zodpovím dotaz ohledně dokumentů a zablokuji čas ve vašem kalendáři. Klikněte UDĚLAT." There is NEVER a separate REPLY when a SCHEDULE exists. The invite handles ALL communication about the meeting.
 3. TODO — something the user needs to do themselves that is NOT a message and NOT a meeting. Examples: gather documents, review a contract internally, get banker approval, verify an address, prepare specific paperwork. Be CONCRETE — list each specific task (e.g. "Získejte souhlas od banky" not "Připravte dokumenty"). NEVER use TODO when the CP proposed a meeting — that is SCHEDULE. NEVER use TODO when the next step is responding to the CP — that is REPLY or SCHEDULE.
    CRITICAL: Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up", "send later", or "call if no reply". Mila proposes actions — the user decides and acts. If something is time-sensitive, set urgency accordingly so instant notifications alert the user.
@@ -319,8 +327,8 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "cpPhone": "Counterparty's phone number if found in the conversation (from signature, message text, or WhatsApp). Format: international with + prefix (e.g. '+420123456789'). null if not found. Important for phone meetings.",
   "suggestedLocation": "Physical address WHERE PEOPLE WILL MEET — the meeting venue, NOT the property or deal subject. Only relevant when meetingType is 'address'. Priority: (1) explicit venue ('meet at Dykova 17', 'come to our office'), (2) CP's office address from signature IF meeting is at their place, (3) user's office address (see system context) if CP says 'at your office' or 'come to you', (4) the property address ONLY if the meeting is literally at the property (e.g. a viewing/inspection). Addresses in email signatures are the SENDER's company address — do not confuse with meeting venue. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. null if no meeting venue clues exist or meetingType is not 'address'.",
   "locationConfidence": "'high' if venue is explicitly stated or clearly implied ('meet at your office', 'come to Dykova 17'). 'low' if inferring from weak signals (signature address without meeting-place context). null if suggestedLocation is null.",
-  "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). If the enriched messages contain 'Navrhovaný čas' with a specific day+time, you MUST convert it to ISO 8601 and put it here. Do NOT leave null when a specific time is stated. null ONLY if no specific time mentioned. CRITICAL: If the CP explicitly stated a time (even outside working hours or on weekends), extract it exactly as stated. But if YOU are generating a suggested time and the CP did NOT state one, you MUST respect the user's working hours and working days from the system context. Do NOT suggest weekends or evenings unless the CP explicitly requested them.",
-  "cpAvailability": "Free-text string describing when the CP said they're available (e.g. 'Tuesday afternoon', 'next week except Wednesday'). null if not mentioned."
+  "timePreferences": [{"time": "ISO 8601 datetime", "flexibility": "exact|approximate|loose", "rank": 1, "source_phrase": "original text from CP"}],
+  "cpAvailabilityRaw": "Full original phrasing of CP's availability statement, verbatim. null if CP did not mention availability. Display only — the structured timePreferences above are what the scheduler uses."
 }]
 
 Rules:

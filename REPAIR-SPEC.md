@@ -40,7 +40,7 @@ It was changed to: "pick ONE per conversation."
 
 2. Change the JSON instruction from single object to array-capable:
    - "Respond with ONLY valid JSON — an array of one or more action objects:"
-   - Each object keeps the same schema (actionType, rationale_cs, intent_cs, missingInfo, urgency, dollarValue, weight, dealType, suggestedLocation, suggestedTime)
+   - Each object keeps the same schema (actionType, rationale_cs, intent_cs, missingInfo, urgency, dollarValue, weight, dealType, suggestedLocation, timePreferences, cpAvailabilityRaw)
    - urgency, dollarValue, weight, dealType are per-action — different actions from the same email can have different urgency
 
 3. Update the response parser to handle both array and single object (backward safe):
