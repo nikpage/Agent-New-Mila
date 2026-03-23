@@ -151,7 +151,7 @@ import type { UserSettings } from '@/lib/supabase/types'
  * Injected into every AI prompt for consistent persona.
  * Reads from per-user settings stored in DB.
  */
-export function getAISystemPrompt(settings: UserSettings): string {
+export function getAISystemPrompt(settings: UserSettings, options?: { excludeLawyerNotary?: boolean }): string {
   const lines: string[] = []
   if (settings.ai_system_context) lines.push(settings.ai_system_context)
 
@@ -164,7 +164,7 @@ export function getAISystemPrompt(settings: UserSettings): string {
   lines.push('')
   if (settings.office_location) lines.push(`User's office: ${settings.office_location}`)
   if (settings.home_location) lines.push(`User's home: ${settings.home_location}`)
-  if (settings.lawyer_notary) lines.push(`User's lawyer/notary: ${settings.lawyer_notary}`)
+  if (settings.lawyer_notary && !options?.excludeLawyerNotary) lines.push(`User's lawyer/notary: ${settings.lawyer_notary}`)
 
   lines.push('')
   const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']

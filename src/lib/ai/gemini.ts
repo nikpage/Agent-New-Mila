@@ -220,7 +220,7 @@ export async function proposeAction(
     .map(m => `[${m.direction}]: ${m.text}`)
     .join('\n\n')
 
-  const systemContext = getAISystemPrompt(settings)
+  const systemContext = getAISystemPrompt(settings, { excludeLawyerNotary: true })
   const channelNote = channel === 'whatsapp'
     ? 'CHANNEL: WhatsApp — keep messages short, informal, no subject line needed.'
     : 'CHANNEL: Email — standard professional format.'
