@@ -47,8 +47,6 @@ import { getConversationById } from '@/lib/db/conversations'
 import { getTravelTime, calculateDepartureTime } from '@/lib/google/maps'
 import { isWorkingDay, getNextWorkingDay } from '@/lib/holidays'
 import { generateSchedulingIntent } from '@/lib/ai/mila-voice'
-import { runAITask } from '@/lib/ai/runner'
-import type { TimePreference } from '@/lib/ai/gemini'
 import type { UserSettings, Event, ActionProposal } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -807,19 +805,19 @@ export async function optimizeScheduleActions(
 
   // Sort actions by CP time constraint tightness (most constrained first).
   // Per spec: CP availability is #1 optimization priority — NOT priority_score.
-  // Actions with timePreferences get scheduled first so they claim
+  // Actions with a specific suggestedTime get scheduled first so they claim
   // their constrained slot before flexible actions fill the gaps.
   const sortedActions = [...actions].sort((a, b) => {
     const payloadA = a.payload as Record<string, unknown> | null
     const payloadB = b.payload as Record<string, unknown> | null
-    const prefsA = (payloadA?.timePreferences as TimePreference[]) || []
-    const rawAvailA = (payloadA?.cpAvailabilityRaw as string) || null
-    const prefsB = (payloadB?.timePreferences as TimePreference[]) || []
-    const rawAvailB = (payloadB?.cpAvailabilityRaw as string) || null
+    const timeA = (payloadA?.suggestedTime as string) || null
+    const availA = (payloadA?.cp_availability as string) || null
+    const timeB = (payloadB?.suggestedTime as string) || null
+    const availB = (payloadB?.cp_availability as string) || null
 
-    // Constraint score: structured preferences = 3, raw availability text = 2, none = 1
-    const constraintA = prefsA.length > 0 ? 3 : rawAvailA ? 2 : 1
-    const constraintB = prefsB.length > 0 ? 3 : rawAvailB ? 2 : 1
+    // Constraint score: specific time = 3, CP availability text = 2, none = 1
+    const constraintA = timeA ? 3 : availA ? 2 : 1
+    const constraintB = timeB ? 3 : availB ? 2 : 1
 
     if (constraintA !== constraintB) return constraintB - constraintA
 
@@ -844,8 +842,8 @@ export async function optimizeScheduleActions(
       continue
     }
 
-    const preferences = (payload?.timePreferences as TimePreference[]) || []
-    const cpAvailabilityRaw = (payload?.cpAvailabilityRaw as string) || null
+    const cpAvailability = (payload?.cp_availability as string) || null
+    const suggestedTime = (payload?.suggestedTime as string) || null
     const payloadMeetingType = (payload?.meeting_type as string) || 'address'
     // Phone and online meetings don't need a physical location — skip travel buffer
     const meetingLocation = (payloadMeetingType === 'phone' || payloadMeetingType === 'online')
@@ -853,153 +851,85 @@ export async function optimizeScheduleActions(
       : (payload?.suggestedLocation as string) || (payload?.location as string) || null
     const duration = (payload?.duration as number) || settings.default_meeting_duration
 
-    // ── Preference-based slot selection ──────────────────────────────
-    // Try each time preference in rank order. For each preference:
-    // 1. Parse the time and compute a flexibility window
-    // 2. Check if a free slot exists in that window
-    // 3. If free → book it. If conflict → compare priorities. If conflict too strong → next preference.
-    let preferenceBooked = false
+    // If CP stated a specific time, parse it as Prague local time.
+    // Without timezone info, new Date() parses as UTC on Vercel,
+    // causing e.g. 9:00 to become 10:00 in Prague.
+    let preferredDate: Date | undefined
+    if (suggestedTime) {
+      preferredDate = parseTimePreferenceToPragueDate(suggestedTime)
+    }
 
-    if (preferences.length > 0) {
-      const sortedPrefs = [...preferences].sort((a, b) => a.rank - b.rank)
+    // ── Unified slot selection ──────────────────────────────────────
+    let candidateSlots: SlotProposal[] = []
 
-      for (const pref of sortedPrefs) {
-        const preferredDate = parseTimePreferenceToPragueDate(pref.time)
-        if (!preferredDate) continue
+    if (preferredDate) {
+      const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
+      const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
 
-        // Compute flexibility window
-        const windowMinutes = pref.flexibility === 'exact' ? 0
-          : pref.flexibility === 'approximate' ? 30
-          : 180 // loose = ±3 hours
+      // CP stated a specific time — respect it even if outside working hours/days.
+      let preferredSlotIsFree = allSlots.some(free =>
+        free.start.getTime() <= preferredDate!.getTime() &&
+        free.end.getTime() >= preferredEnd.getTime()
+      )
 
-        const windowStart = new Date(preferredDate.getTime() - windowMinutes * 60000)
-        const windowEnd = new Date(preferredDate.getTime() + windowMinutes * 60000)
-        const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
-        const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
-
-        // For exact/approximate: check if the preferred slot itself is free
-        // For loose: find any free slot in the window
-        if (pref.flexibility === 'loose') {
-          // Find free slots in the window
-          const windowSlots = allSlots.filter(s =>
-            s.start.getTime() >= windowStart.getTime() &&
-            s.start.getTime() <= windowEnd.getTime() &&
-            isSlotAvailable(s)
-          )
-          if (windowSlots.length > 0) {
-            // Pick the slot closest to the preferred time
-            const closest = windowSlots.sort((a, b) =>
-              Math.abs(a.start.getTime() - preferredDate.getTime()) -
-              Math.abs(b.start.getTime() - preferredDate.getTime())
-            )[0]
-            const holdResult = await blockSlotForProposal(userId, action.cp_id, closest, duration, meetingLocation || undefined, undefined, action.conversation_id)
-            if (holdResult.success && holdResult.holdEvent) {
-              await updateActionWithHold(action, holdResult, meetingLocation, settings)
-              result.optimized++
-              result.holds.push(holdResult.holdEvent)
-              bookedRanges.push(bookedRangeForHold(closest.start, closest.end, holdResult))
-              preferenceBooked = true
-              break
-            }
-          }
-          // No free slot in window — try next preference
-          continue
-        }
-
-        // exact or approximate: check preferred slot directly
-        // CP stated a specific time — respect it even if outside working hours/days.
-        let preferredSlotIsFree = allSlots.some(free =>
-          free.start.getTime() <= preferredDate.getTime() &&
+      if (!preferredSlotIsFree) {
+        const daySlots = await findFreeSlots(
+          userId, preferredDate, duration,
+          settings.working_hours_start, settings.working_hours_end,
+          settings.meeting_buffer_minutes
+        )
+        preferredSlotIsFree = daySlots.some(free =>
+          free.start.getTime() <= preferredDate!.getTime() &&
           free.end.getTime() >= preferredEnd.getTime()
         )
+      }
 
-        if (!preferredSlotIsFree) {
-          const daySlots = await findFreeSlots(
-            userId, preferredDate, duration,
-            settings.working_hours_start, settings.working_hours_end,
-            settings.meeting_buffer_minutes
-          )
-          preferredSlotIsFree = daySlots.some(free =>
-            free.start.getTime() <= preferredDate.getTime() &&
-            free.end.getTime() >= preferredEnd.getTime()
-          )
+      if (preferredSlotIsFree && isSlotAvailable(preferredSlot)) {
+        const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
+        if (holdResult.success && holdResult.holdEvent) {
+          await updateActionWithHold(action, holdResult, meetingLocation, settings)
+          result.optimized++
+          result.holds.push(holdResult.holdEvent)
+          bookedRanges.push(bookedRangeForHold(preferredDate, preferredEnd, holdResult))
+          continue
         }
+      } else if (isSlotAvailable(preferredSlot)) {
+        // Preferred time conflicts — compare priorities
+        const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
+        const newScore = action.priority_score ?? 0
 
-        if (preferredSlotIsFree && isSlotAvailable(preferredSlot)) {
+        const allConflictsMovable = conflicts.length > 0 && conflicts.every(existing => {
+          const w = existing.weight ?? 7
+          return w < 100 && newScore > calculateEventScore({ weight: w })
+        })
+
+        if (allConflictsMovable) {
           const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
           if (holdResult.success && holdResult.holdEvent) {
+            const conflictInfos: ConflictInfo[] = conflicts.map(existing => ({
+              existingEvent: existing,
+              existingScore: calculateEventScore({ weight: existing.weight ?? 7 }),
+              newScore,
+              recommendation: 'move_existing' as const,
+            }))
+            holdResult.conflicts = conflictInfos
+            for (const conflict of conflicts) {
+              result.moveSuggestions.push({
+                existingEventId: conflict.id,
+                existingWeight: conflict.weight,
+                reason: `CP stated specific time: ${suggestedTime}`,
+              })
+            }
             await updateActionWithHold(action, holdResult, meetingLocation, settings)
             result.optimized++
             result.holds.push(holdResult.holdEvent)
             bookedRanges.push(bookedRangeForHold(preferredDate, preferredEnd, holdResult))
-            preferenceBooked = true
-            break
+            continue
           }
-        } else if (pref.flexibility === 'approximate') {
-          // approximate: try nearby free slots (±30min) before giving up
-          const nearbySlots = allSlots.filter(s =>
-            Math.abs(s.start.getTime() - preferredDate.getTime()) <= 30 * 60000 &&
-            s.start.getTime() !== preferredDate.getTime() &&
-            isSlotAvailable(s)
-          ).sort((a, b) =>
-            Math.abs(a.start.getTime() - preferredDate.getTime()) -
-            Math.abs(b.start.getTime() - preferredDate.getTime())
-          )
-          for (const nearby of nearbySlots) {
-            const holdResult = await blockSlotForProposal(userId, action.cp_id, nearby, duration, meetingLocation || undefined, undefined, action.conversation_id)
-            if (holdResult.success && holdResult.holdEvent) {
-              await updateActionWithHold(action, holdResult, meetingLocation, settings)
-              result.optimized++
-              result.holds.push(holdResult.holdEvent)
-              bookedRanges.push(bookedRangeForHold(nearby.start, nearby.end, holdResult))
-              preferenceBooked = true
-              break
-            }
-          }
-          if (preferenceBooked) break
-          // No nearby slot — try next preference
-        } else if (pref.flexibility === 'exact' && isSlotAvailable(preferredSlot)) {
-          // exact: conflict resolution — suggest moving, never auto-move
-          const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
-          const newScore = action.priority_score ?? 0
-
-          const allConflictsMovable = conflicts.length > 0 && conflicts.every(existing => {
-            const w = existing.weight ?? 7
-            return w < 100 && newScore > calculateEventScore({ weight: w })
-          })
-
-          if (allConflictsMovable) {
-            const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
-            if (holdResult.success && holdResult.holdEvent) {
-              const conflictInfos: ConflictInfo[] = conflicts.map(existing => ({
-                existingEvent: existing,
-                existingScore: calculateEventScore({ weight: existing.weight ?? 7 }),
-                newScore,
-                recommendation: 'move_existing' as const,
-              }))
-              holdResult.conflicts = conflictInfos
-              for (const conflict of conflicts) {
-                result.moveSuggestions.push({
-                  existingEventId: conflict.id,
-                  existingWeight: conflict.weight,
-                  reason: `CP stated specific time: ${pref.source_phrase || pref.time}`,
-                })
-              }
-              await updateActionWithHold(action, holdResult, meetingLocation, settings)
-              result.optimized++
-              result.holds.push(holdResult.holdEvent)
-              bookedRanges.push(bookedRangeForHold(preferredDate, preferredEnd, holdResult))
-              preferenceBooked = true
-              break
-            }
-          }
-          // Conflict too strong — try next preference
         }
-        // Preferred slot failed or no resolution — try next preference
+        // Conflict too strong — fall through to normal slot selection
       }
     }
-
-    if (preferenceBooked) continue
 
     // Normal path: pick from GCal-validated free slots
     const availableSlots = allSlots.filter(s => isSlotAvailable(s))
@@ -1009,14 +939,14 @@ export async function optimizeScheduleActions(
       continue
     }
 
-    // Score slots against preferences (fallback scoring) or use LLM escape hatch
-    let candidateSlots: SlotProposal[] = availableSlots
-    if (preferences.length > 0) {
-      const scored = scoreSlotsAgainstPreferences(availableSlots, preferences)
-      if (scored.length > 0) candidateSlots = scored
-    } else if (cpAvailabilityRaw) {
-      const llmScored = await llmEscapeHatchScoring(availableSlots, cpAvailabilityRaw)
-      if (llmScored.length > 0) candidateSlots = llmScored
+    // Priority 1: Filter by CP availability if stated
+    candidateSlots = availableSlots
+    if (cpAvailability) {
+      const cpFiltered = filterSlotsByCpAvailability(availableSlots, cpAvailability)
+      if (cpFiltered.length > 0) {
+        candidateSlots = cpFiltered
+      }
+      // If no CP-matching slots, fall through to all available (best effort)
     }
 
     // Priority 2: User availability — already handled by findBestSlots (only returns free slots)
@@ -1086,8 +1016,8 @@ export async function scheduleSingleAction(
     return result
   }
 
-  const preferences = (payload?.timePreferences as TimePreference[]) || []
-  const cpAvailabilityRaw = (payload?.cpAvailabilityRaw as string) || null
+  const cpAvailability = (payload?.cp_availability as string) || null
+  const suggestedTime = (payload?.suggestedTime as string) || null
   const singleMeetingType = (payload?.meeting_type as string) || 'address'
   // Phone and online meetings don't need a physical location — skip travel buffer
   const meetingLocation = (singleMeetingType === 'phone' || singleMeetingType === 'online')
@@ -1095,135 +1025,81 @@ export async function scheduleSingleAction(
     : (payload?.suggestedLocation as string) || (payload?.location as string) || null
   const duration = (payload?.duration as number) || settings.default_meeting_duration
 
-  // ── Preference-based slot selection (mirrors batch optimizer) ──
-  if (preferences.length > 0) {
-    const sortedPrefs = [...preferences].sort((a, b) => a.rank - b.rank)
+  // Parse CP-stated time (same timezone logic as batch optimizer)
+  let preferredDate: Date | undefined
+  if (suggestedTime) {
+    preferredDate = parseTimePreferenceToPragueDate(suggestedTime)
+  }
 
-    for (const pref of sortedPrefs) {
-      const preferredDate = parseTimePreferenceToPragueDate(pref.time)
-      if (!preferredDate) continue
+  // CP stated a specific time — respect it even if outside working hours/days.
+  if (preferredDate) {
+    const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
+    const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
 
-      const windowMinutes = pref.flexibility === 'exact' ? 0
-        : pref.flexibility === 'approximate' ? 30
-        : 180
+    const daySlots = await findFreeSlots(
+      userId, preferredDate, duration,
+      settings.working_hours_start, settings.working_hours_end,
+      settings.meeting_buffer_minutes
+    )
+    const preferredSlotIsFree = daySlots.some(free =>
+      free.start.getTime() <= preferredDate!.getTime() &&
+      free.end.getTime() >= preferredEnd.getTime()
+    )
 
-      const preferredEnd = new Date(preferredDate.getTime() + duration * 60 * 1000)
-      const preferredSlot: SlotProposal = { start: preferredDate, end: preferredEnd }
-
-      if (pref.flexibility === 'loose') {
-        const windowStart = new Date(preferredDate.getTime() - windowMinutes * 60000)
-        const windowEndTime = new Date(preferredDate.getTime() + windowMinutes * 60000)
-        const daySlots = await findFreeSlots(
-          userId, windowStart, duration,
-          settings.working_hours_start, settings.working_hours_end,
-          settings.meeting_buffer_minutes
-        )
-        const windowSlots = daySlots.filter(s =>
-          s.start.getTime() >= windowStart.getTime() &&
-          s.start.getTime() <= windowEndTime.getTime()
-        )
-        if (windowSlots.length > 0) {
-          const closest = windowSlots.sort((a, b) =>
-            Math.abs(a.start.getTime() - preferredDate.getTime()) -
-            Math.abs(b.start.getTime() - preferredDate.getTime())
-          )[0]
-          const holdResult = await blockSlotForProposal(userId, action.cp_id, closest, duration, meetingLocation || undefined, undefined, action.conversation_id)
-          if (holdResult.success && holdResult.holdEvent) {
-            await updateActionWithHold(action, holdResult, meetingLocation, settings)
-            result.optimized++
-            result.holds.push(holdResult.holdEvent)
-            return result
-          }
-        }
-        continue
+    if (preferredSlotIsFree) {
+      const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
+      if (holdResult.success && holdResult.holdEvent) {
+        await updateActionWithHold(action, holdResult, meetingLocation, settings)
+        result.optimized++
+        result.holds.push(holdResult.holdEvent)
+        return result
       }
+    } else {
+      // Preferred time conflicts — only override if new meeting outprioritizes ALL conflicts
+      const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
+      const newScore = action.priority_score ?? 0
 
-      // exact or approximate
-      const daySlots = await findFreeSlots(
-        userId, preferredDate, duration,
-        settings.working_hours_start, settings.working_hours_end,
-        settings.meeting_buffer_minutes
-      )
-      const preferredSlotIsFree = daySlots.some(free =>
-        free.start.getTime() <= preferredDate.getTime() &&
-        free.end.getTime() >= preferredEnd.getTime()
-      )
+      const allConflictsMovable = conflicts.length > 0 && conflicts.every(existing => {
+        const w = existing.weight ?? 7
+        return w < 100 && newScore > calculateEventScore({ weight: w })
+      })
 
-      if (preferredSlotIsFree) {
+      if (allConflictsMovable) {
         const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
         if (holdResult.success && holdResult.holdEvent) {
+          const conflictInfos: ConflictInfo[] = conflicts.map(existing => ({
+            existingEvent: existing,
+            existingScore: calculateEventScore({ weight: existing.weight ?? 7 }),
+            newScore,
+            recommendation: 'move_existing' as const,
+          }))
+          holdResult.conflicts = conflictInfos
+          for (const conflict of conflicts) {
+            result.moveSuggestions.push({
+              existingEventId: conflict.id,
+              existingWeight: conflict.weight,
+              reason: `CP stated specific time: ${suggestedTime}`,
+            })
+          }
           await updateActionWithHold(action, holdResult, meetingLocation, settings)
           result.optimized++
           result.holds.push(holdResult.holdEvent)
           return result
         }
-      } else if (pref.flexibility === 'approximate') {
-        // approximate: try nearby free slots (±30min) before giving up
-        const nearbySlots = daySlots.filter(s =>
-          Math.abs(s.start.getTime() - preferredDate.getTime()) <= 30 * 60000 &&
-          s.start.getTime() !== preferredDate.getTime()
-        ).sort((a, b) =>
-          Math.abs(a.start.getTime() - preferredDate.getTime()) -
-          Math.abs(b.start.getTime() - preferredDate.getTime())
-        )
-        for (const nearby of nearbySlots) {
-          const holdResult = await blockSlotForProposal(userId, action.cp_id, nearby, duration, meetingLocation || undefined, undefined, action.conversation_id)
-          if (holdResult.success && holdResult.holdEvent) {
-            await updateActionWithHold(action, holdResult, meetingLocation, settings)
-            result.optimized++
-            result.holds.push(holdResult.holdEvent)
-            return result
-          }
-        }
-        // No nearby slot — try next preference
-      } else if (pref.flexibility === 'exact') {
-        // exact: conflict resolution — suggest moving, never auto-move
-        const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
-        const newScore = action.priority_score ?? 0
-
-        const allConflictsMovable = conflicts.length > 0 && conflicts.every(existing => {
-          const w = existing.weight ?? 7
-          return w < 100 && newScore > calculateEventScore({ weight: w })
-        })
-
-        if (allConflictsMovable) {
-          const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
-          if (holdResult.success && holdResult.holdEvent) {
-            const conflictInfos: ConflictInfo[] = conflicts.map(existing => ({
-              existingEvent: existing,
-              existingScore: calculateEventScore({ weight: existing.weight ?? 7 }),
-              newScore,
-              recommendation: 'move_existing' as const,
-            }))
-            holdResult.conflicts = conflictInfos
-            for (const conflict of conflicts) {
-              result.moveSuggestions.push({
-                existingEventId: conflict.id,
-                existingWeight: conflict.weight,
-                reason: `CP stated specific time: ${pref.source_phrase || pref.time}`,
-              })
-            }
-            await updateActionWithHold(action, holdResult, meetingLocation, settings)
-            result.optimized++
-            result.holds.push(holdResult.holdEvent)
-            return result
-          }
-        }
-        // Conflict too strong — try next preference
       }
+      // Conflict too strong — fall through to normal slot selection
     }
   }
 
-  // No preference matched — find best free slot
+  // No preferred time or it failed — find best free slot
   const allSlots = await findBestSlots(userId, duration, 20)
+  let candidateSlots = allSlots
 
-  let candidateSlots: SlotProposal[] = allSlots
-  if (preferences.length > 0) {
-    const scored = scoreSlotsAgainstPreferences(allSlots, preferences)
-    if (scored.length > 0) candidateSlots = scored
-  } else if (cpAvailabilityRaw) {
-    const llmScored = await llmEscapeHatchScoring(allSlots, cpAvailabilityRaw)
-    if (llmScored.length > 0) candidateSlots = llmScored
+  if (cpAvailability) {
+    const cpFiltered = filterSlotsByCpAvailability(allSlots, cpAvailability)
+    if (cpFiltered.length > 0) {
+      candidateSlots = cpFiltered
+    }
   }
 
   if (meetingLocation && candidateSlots.length > 1) {
@@ -1485,96 +1361,48 @@ function parseTimePreferenceToPragueDate(isoString: string): Date | undefined {
 }
 
 /**
- * Score slots against structured time preferences.
- * Returns slots with score > 0 sorted descending by score.
- * Falls back to returning all slots if nothing scores > 0.
+ * Filter slots that match CP's stated availability (simple keyword matching)
+ * E.g. "Tuesday afternoon" → filter to Tuesday PM slots
  */
-function scoreSlotsAgainstPreferences(
+function filterSlotsByCpAvailability(
   slots: SlotProposal[],
-  preferences: TimePreference[]
+  cpAvailability: string
 ): SlotProposal[] {
-  if (preferences.length === 0 || slots.length === 0) return slots
+  const lower = cpAvailability.toLowerCase()
+  const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+  const czDayNames = ['neděle', 'pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota']
 
-  const scored: { slot: SlotProposal; score: number }[] = slots.map(slot => {
-    let totalScore = 0
+  return slots.filter(slot => {
+    const dayOfWeek = slot.start.getDay()
+    const hour = slot.start.getHours()
+    const dayName = dayNames[dayOfWeek]
+    const czDayName = czDayNames[dayOfWeek]
 
-    for (const pref of preferences) {
-      const prefDate = parseTimePreferenceToPragueDate(pref.time)
-      if (!prefDate) continue
-
-      const rankWeight = pref.rank === 1 ? 1.0 : pref.rank === 2 ? 0.7 : 0.5
-      let prefScore = 0
-
-      if (pref.flexibility === 'exact') {
-        // Match if slot start hour and minute match exactly
-        const diffMs = Math.abs(slot.start.getTime() - prefDate.getTime())
-        prefScore = diffMs === 0 ? 10 : 0
-      } else if (pref.flexibility === 'approximate') {
-        // ±60min window, linear decay
-        const diffMinutes = Math.abs(slot.start.getTime() - prefDate.getTime()) / 60000
-        prefScore = Math.max(0, 10 - (diffMinutes / 6))
-      } else if (pref.flexibility === 'loose') {
-        // Same half-day = 10, same day = 5, else 0
-        const sameDay = slot.start.toDateString() === prefDate.toDateString()
-        if (sameDay) {
-          const slotIsAM = slot.start.getHours() < 12
-          const prefIsAM = prefDate.getHours() < 12
-          prefScore = slotIsAM === prefIsAM ? 10 : 5
-        }
-      }
-
-      totalScore += prefScore * rankWeight
+    // Check day match
+    const dayMatch = lower.includes(dayName) || lower.includes(czDayName)
+    if (!dayMatch && (dayNames.some(d => lower.includes(d)) || czDayNames.some(d => lower.includes(d)))) {
+      return false // CP specified a day and this isn't it
     }
 
-    return { slot, score: totalScore }
+    // Check time-of-day match
+    const isAfternoon = hour >= 12
+    const isMorning = hour < 12
+    if (lower.includes('afternoon') || lower.includes('odpoledne')) {
+      if (!isAfternoon) return false
+    }
+    if (lower.includes('morning') || lower.includes('ráno') || lower.includes('dopoledne')) {
+      if (!isMorning) return false
+    }
+
+    // Check specific time match (e.g. "at 10:00" or "v 10:00")
+    const timeMatch = lower.match(/(?:at|v)\s+(\d{1,2}):?(\d{2})?/)
+    if (timeMatch) {
+      const targetHour = parseInt(timeMatch[1])
+      if (hour !== targetHour) return false
+    }
+
+    return true
   })
-
-  const withScore = scored.filter(s => s.score > 0).sort((a, b) => b.score - a.score)
-  return withScore.length > 0 ? withScore.map(s => s.slot) : slots
-}
-
-/**
- * LLM escape hatch: when timePreferences is empty but cpAvailabilityRaw has text,
- * ask a cheap LLM to score slots against the raw CP text.
- * Falls back to returning all slots on failure.
- */
-async function llmEscapeHatchScoring(
-  slots: SlotProposal[],
-  cpAvailabilityRaw: string
-): Promise<SlotProposal[]> {
-  if (slots.length === 0) return slots
-
-  const slotDescriptions = slots.map((s, i) =>
-    `${i}: ${s.start.toISOString()} — ${s.end.toISOString()}`
-  ).join('\n')
-
-  const prompt = `CP said: "${cpAvailabilityRaw}"
-
-Available slots:
-${slotDescriptions}
-
-Score each slot 0-10 for how well it matches CP's stated availability.
-Return ONLY a JSON array of numbers (one score per slot, same order).
-Example: [8, 2, 0, 10]`
-
-  try {
-    const result = await runAITask('filter', prompt)
-    const match = result.match(/\[[\s\S]*?\]/)
-    if (!match) return slots
-
-    const scores: number[] = JSON.parse(match[0])
-    if (!Array.isArray(scores) || scores.length !== slots.length) return slots
-
-    const scored = slots
-      .map((slot, i) => ({ slot, score: scores[i] || 0 }))
-      .filter(s => s.score > 0)
-      .sort((a, b) => b.score - a.score)
-
-    return scored.length > 0 ? scored.map(s => s.slot) : slots
-  } catch (error) {
-    console.error('[scheduling] LLM escape hatch failed, using all slots:', error)
-    return slots
-  }
 }
 
 /**
