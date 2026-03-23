@@ -248,7 +248,8 @@ async function connectUser(userId: string): Promise<void> {
 
         // Try to display in terminal (single-user dev convenience)
         import('qrcode-terminal').then(qrt => {
-          qrt.generate(qr, { small: true })
+          const mod = qrt.default || qrt
+          mod.generate(qr, { small: true })
         }).catch(() => {
           // qrcode-terminal not installed — that's fine, use HTTP API
         })
