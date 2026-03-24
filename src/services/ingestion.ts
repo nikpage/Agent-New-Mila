@@ -18,6 +18,9 @@ import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
 import { generateMessageEmbedding, cleanMessageText, cleanMessageTextForEnrichment } from '@/lib/embeddings/generate'
 import { saveMessageEmbedding } from '@/lib/db/embeddings'
 import { v4 as uuidv4 } from 'uuid'
+import { isMilaCommand, classifyCommand } from '@/lib/commands'
+import { executeCommand } from '@/lib/commands'
+import { writeAuditLog } from '@/lib/db/gdpr'
 
 /**
  * Senders that are always skipped — no message or CP is created for these.
@@ -204,7 +207,43 @@ async function processOneInboundEmail(
   const senderName = extractName(email.from)
 
   // Skip if sender is the user (outbound) — Gmail dot-insensitive
+  // But first check for Mila command emails (self-email instructions)
   if (isSameGmailAddress(senderEmail, userEmail)) {
+    if (isMilaCommand(email.subject)) {
+      try {
+        const parsed = classifyCommand(email.subject, email.body)
+        const result = await executeCommand(parsed, userId, settings)
+
+        // Store as message to prevent re-processing (dedup via messageExists)
+        await createMessage({
+          user_id: userId,
+          universal_message_id: email.id,
+          external_id: email.id,
+          external_thread_id: email.threadId,
+          direction: 'internal',
+          raw_text: email.body,
+          tag_primary: 'mila_command',
+          tag_secondary: parsed.type,
+          message_type: 'command',
+          timestamp: email.date.toISOString(),
+        })
+
+        await writeAuditLog({
+          user_id: userId,
+          action: `command:${parsed.type}`,
+          details: { success: result.success, summary: result.summary },
+        })
+
+        console.log(`[Ingest] COMMAND ${parsed.type}: ${result.summary}`)
+      } catch (error) {
+        console.error(`[Ingest] Command parse/exec failed for ${email.id}:`, error)
+        await writeAuditLog({
+          user_id: userId,
+          action: 'command:error',
+          details: { emailId: email.id, error: error instanceof Error ? error.message : String(error) },
+        })
+      }
+    }
     return null
   }
 
