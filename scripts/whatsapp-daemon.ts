@@ -90,6 +90,61 @@ function phoneToJid(phone: string): string {
   return digits + '@s.whatsapp.net'
 }
 
+// ─── Channel Resolution ─────────────────────────────────────────────
+// Cache channel UUIDs per user so we don't query on every message
+const channelCache = new Map<string, string>()
+
+async function getWhatsAppChannelId(userId: string, phone: string): Promise<string> {
+  const cacheKey = `${userId}:whatsapp:${phone}`
+  const cached = channelCache.get(cacheKey)
+  if (cached) return cached
+
+  // Try to find existing channel
+  const { data: existing } = await supabase
+    .from('channels')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('type', 'whatsapp')
+    .eq('identifier', phone)
+    .limit(1)
+    .single()
+
+  if (existing) {
+    channelCache.set(cacheKey, existing.id)
+    return existing.id
+  }
+
+  // Create new channel
+  const { data: created, error } = await supabase
+    .from('channels')
+    .insert({ user_id: userId, type: 'whatsapp', identifier: phone })
+    .select('id')
+    .single()
+
+  if (error) {
+    // Race condition fallback
+    if (error.code === '23505') {
+      const { data: retry } = await supabase
+        .from('channels')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('type', 'whatsapp')
+        .eq('identifier', phone)
+        .limit(1)
+        .single()
+      if (retry) {
+        channelCache.set(cacheKey, retry.id)
+        return retry.id
+      }
+    }
+    throw new Error(`Failed to create whatsapp channel: ${error.message}`)
+  }
+
+  console.log(`[WA:${userId.slice(0, 8)}] Created WhatsApp channel for ${phone}`)
+  channelCache.set(cacheKey, created.id)
+  return created.id
+}
+
 // ─── Supabase Helpers ────────────────────────────────────────────────
 async function findOrCreateCP(userId: string, phone: string, name?: string) {
   const { data: existing } = await supabase
@@ -136,6 +191,7 @@ async function storeInboundMessage(
 
   const id = uuidv4()
   const ts = new Date(timestamp * 1000).toISOString()
+  const channelId = await getWhatsAppChannelId(userId, phone)
 
   const { error } = await supabase
     .from('messages')
@@ -143,7 +199,7 @@ async function storeInboundMessage(
       id,
       user_id: userId,
       cp_id: cp.id,
-      channel_id: 'whatsapp',
+      channel_id: channelId,
       external_id: messageId,
       external_thread_id: `wa:${phone}`,
       universal_message_id: `wa:${messageId}`,
@@ -177,12 +233,13 @@ async function storeOutboundMessage(
   if (!cp) return
 
   const ts = new Date().toISOString()
+  const channelId = await getWhatsAppChannelId(userId, phone)
 
   await supabase.from('messages').insert({
     id: uuidv4(),
     user_id: userId,
     cp_id: cp.id,
-    channel_id: 'whatsapp',
+    channel_id: channelId,
     external_id: messageId,
     external_thread_id: `wa:${phone}`,
     universal_message_id: `wa:${messageId}`,
@@ -194,6 +251,96 @@ async function storeOutboundMessage(
     timestamp: ts,
     occurred_at: ts,
   })
+}
+
+// ─── Message Text Extraction ────────────────────────────────────
+// Extracts readable text from any WhatsApp message type.
+// If a message has no text (e.g. image without caption), returns a bracket placeholder
+// so Mila knows something was sent.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractMessageText(m: any): string | null {
+  // Plain text
+  if (m.conversation) return m.conversation
+  if (m.extendedTextMessage?.text) return m.extendedTextMessage.text
+
+  // Media with captions
+  if (m.imageMessage) return m.imageMessage.caption || '[Image]'
+  if (m.videoMessage) return m.videoMessage.caption || '[Video]'
+  if (m.documentMessage) {
+    const caption = m.documentMessage.caption
+    const filename = m.documentMessage.fileName
+    if (caption) return caption
+    if (filename) return `[Document: ${filename}]`
+    return '[Document]'
+  }
+  if (m.audioMessage) return '[Voice message]'
+
+  // Contact shared
+  if (m.contactMessage) {
+    const name = m.contactMessage.displayName || 'Unknown'
+    const vcard = m.contactMessage.vcard || ''
+    const telMatch = vcard.match(/TEL[^:]*:([^\n]+)/)
+    const phone = telMatch ? telMatch[1].trim() : ''
+    return `[Contact: ${name}${phone ? ' ' + phone : ''}]`
+  }
+  if (m.contactsArrayMessage) {
+    const names = (m.contactsArrayMessage.contacts || [])
+      .map((c: { displayName?: string }) => c.displayName || 'Unknown')
+      .join(', ')
+    return `[Contacts: ${names}]`
+  }
+
+  // Location
+  if (m.locationMessage) {
+    const loc = m.locationMessage
+    const name = loc.name || loc.address || ''
+    const coords = loc.degreesLatitude && loc.degreesLongitude
+      ? `${loc.degreesLatitude},${loc.degreesLongitude}`
+      : ''
+    return `[Location: ${name || coords || 'shared'}]`
+  }
+  if (m.liveLocationMessage) return '[Live location]'
+
+  // Business/template messages
+  if (m.templateMessage) {
+    const hydratedTemplate = m.templateMessage.hydratedTemplate
+      || m.templateMessage.hydratedFourRowTemplate
+    if (hydratedTemplate) {
+      return hydratedTemplate.hydratedContentText
+        || hydratedTemplate.hydratedTitleText
+        || '[Template message]'
+    }
+    return '[Template message]'
+  }
+
+  // Button messages
+  if (m.buttonsMessage) return m.buttonsMessage.contentText || '[Button message]'
+  if (m.buttonsResponseMessage) return m.buttonsResponseMessage.selectedDisplayText || '[Button response]'
+
+  // List messages
+  if (m.listMessage) return m.listMessage.description || m.listMessage.title || '[List message]'
+  if (m.listResponseMessage) {
+    const sel = m.listResponseMessage.singleSelectReply
+    return sel?.selectedRowId || m.listResponseMessage.title || '[List response]'
+  }
+
+  // Polls
+  if (m.pollCreationMessage || m.pollCreationMessageV3) {
+    const poll = m.pollCreationMessage || m.pollCreationMessageV3
+    return `[Poll: ${poll.name || 'untitled'}]`
+  }
+
+  // Edited messages — unwrap and re-extract
+  if (m.editedMessage?.message) return extractMessageText(m.editedMessage.message)
+
+  // View-once — unwrap and re-extract
+  if (m.viewOnceMessage?.message) return extractMessageText(m.viewOnceMessage.message)
+  if (m.viewOnceMessageV2?.message) return extractMessageText(m.viewOnceMessageV2.message)
+
+  // Ephemeral wrapper — unwrap and re-extract
+  if (m.ephemeralMessage?.message) return extractMessageText(m.ephemeralMessage.message)
+
+  return null
 }
 
 // ─── Baileys Session Management ──────────────────────────────────────
@@ -288,10 +435,11 @@ async function connectUser(userId: string): Promise<void> {
     })
 
     // ── Incoming messages ──
-    socket.ev.on('messages.upsert', async (upsert: { messages: Array<{ key: { remoteJid?: string; fromMe?: boolean; id?: string; participant?: string }; message?: { conversation?: string; extendedTextMessage?: { text?: string } }; messageTimestamp?: number; pushName?: string }> }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    socket.ev.on('messages.upsert', async (upsert: { messages: any[] }) => {
       for (const msg of upsert.messages) {
         try {
-          const jid = msg.key.remoteJid
+          const jid = msg.key?.remoteJid
           if (!jid) continue
 
           // Skip own outbound messages
@@ -303,11 +451,17 @@ async function connectUser(userId: string): Promise<void> {
           // Skip group messages (for now)
           if (jid.endsWith('@g.us')) continue
 
-          // Extract message text
-          const body =
-            msg.message?.conversation ||
-            msg.message?.extendedTextMessage?.text
-          if (!body) continue // Skip media-only, reactions, etc.
+          const m = msg.message
+          if (!m) continue
+
+          // Skip protocol/encryption internals — no user value
+          if (m.protocolMessage || m.senderKeyDistributionMessage) continue
+          // Skip reactions and stickers — no actionable text
+          if (m.reactionMessage || m.stickerMessage) continue
+
+          // Extract text from all message types that carry readable content
+          const body = extractMessageText(m)
+          if (!body) continue
 
           const phone = waJidToPhone(jid)
           const messageId = msg.key.id || uuidv4()

@@ -117,7 +117,7 @@ Secondary channel. Architecture:
 - **Companion Device**: Acts as a linked companion device. Works 24/7 even if the user's phone is turned off, out of battery, or in their pocket.
 - **Multi-session**: manages one Baileys connection per user (~5-10 MB each, scales to 50-100 users per server)
 - Auth state persisted per user in `./baileys_auth/<userId>/`
-- Daemon listens for incoming messages → writes to Supabase messages table with channel_id: 'whatsapp'
+- Daemon listens for incoming messages → creates/reuses a `channels` record (type='whatsapp'), writes to Supabase messages table with the channel UUID as `channel_id`
 - **Group Chats**: Extracts the participant (sender) ID from group messages, prepends the group name to the text (e.g., `[Group: Prodej Praha] Jan: Ano`), and processes it so Mila understands multi-party deal chats.
 - Daemon exposes HTTP API: `GET /sessions`, `GET /status/:userId`, `POST /sessions/:userId/connect`, `DELETE /sessions/:userId`, `POST /send { userId, to, body }`, `GET /health`
 

@@ -13,6 +13,7 @@ import { getUserSettings } from '@/lib/db/users'
 import { geocodeAddress } from '@/lib/google/maps'
 import { containsHighValueSignals } from '@/config/client'
 import { selectOfferMultiplier, computeDaysIgnored } from '@/shared/scoring'
+import { getChannelType } from '@/lib/db/channels'
 import { validateDealType } from '@/shared/deal-types'
 import type {
   ActionProposal,
@@ -63,7 +64,8 @@ export async function generateActionProposal(
 
   // Detect channel from most recent message
   const lastMessage = recentMessages[recentMessages.length - 1]
-  const channel: 'email' | 'whatsapp' = lastMessage?.channel_id === 'whatsapp' ? 'whatsapp' : 'email'
+  const channelType = await getChannelType(lastMessage?.channel_id)
+  const channel: 'email' | 'whatsapp' = channelType === 'whatsapp' ? 'whatsapp' : 'email'
 
   // Prefer enriched_text (pre-extracted facts), fall back to cleaned_text.
   // Adaptive count: enough messages to reach ~2000 chars of enriched content,

@@ -21,7 +21,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 **`cps`** (counterparties) — id, user_id, name, primary_identifier, other_identifiers (jsonb), role, locations (jsonb), is_blacklisted, created_at
 
-**`channels`** — id, user_id, type (email/whatsapp), identifier, created_at
+**`channels`** — id (uuid), user_id → users, type (text: 'email', 'whatsapp', etc.), identifier (text: email address or phone number), created_at. Messages reference this via `channel_id` FK. Email messages currently have `channel_id: null` (backward compat); WhatsApp messages have a proper channel UUID. Services use `getChannelType(channelId)` from `src/lib/db/channels.ts` to resolve type.
 
 **`cp_states`** — cp_id → cps, state, summary_text, last_updated
 

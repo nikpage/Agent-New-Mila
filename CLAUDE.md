@@ -200,6 +200,7 @@ Instead of reading these files, use this index:
 | actions.ts | getActionById, getActionsForUser, getPendingActionsForBrief, getRecentlyCompletedActions, createAction, updateAction, updateActionStatus, approveAction, completeAction, dismissAction, dismissAllPendingActions, updateActionDraft, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, calculatePriorityScore, getActionsForConversation, hasPendingAction |
 | todos.ts | getTodoById, getTodosForUser, getPendingTodos, createTodo, updateTodo, completeTodo, deleteTodo, getTodosForThread, getOverdueTodos, getTodosDueToday |
 | events.ts | getEventById, getEventsInRange, getEventsForToday, getUpcomingEvents, createEvent, updateEvent, deleteEvent, findConflicts, getLastEventLocation, getEventsWithCP, findAvailableSlots, getEventsByBlockGroup, cleanupBlockGroup, createHoldEvent, createTravelBuffer, cleanupTravelBuffers, getTravelBuffers, confirmEvent, cancelEventWithCleanup, calculateEventScore, upsertEventByGoogleId, getChildEvents, hasActiveEventForConversation |
+| channels.ts | getOrCreateChannel, getChannelType, getChannelTypes (batch) |
 | embeddings.ts | saveMessageEmbedding, saveConversationEmbedding, getConversationsWithEmbeddingsByCP |
 | gdpr.ts | writeAuditLog, exportAllUserData, deleteAllUserData, enforceRetentionPolicy |
 | locks.ts | tryAcquireUserLock, releaseUserLock |
@@ -245,7 +246,7 @@ Skips conversations with existing pending actions. Caps at 3 auto follow-ups per
 ## Database Schema
 Full schema reference (all tables, columns, deal property model, migrations): See docs/SCHEMA.md
 
-Key tables: users, cps, conversation_threads, messages, action_proposals, events, todos, emails, audit_logs, user_agent_locks. All tables have user_id — always filter by it in queries.
+Key tables: users, cps, channels, conversation_threads, messages, action_proposals, events, todos, emails, audit_logs, user_agent_locks. All tables have user_id — always filter by it in queries. The `channels` table maps channel UUIDs to types ('email', 'whatsapp', etc.) — `messages.channel_id` is a UUID FK to `channels.id`.
 
 Conversation statuses are stored in `conversation_threads.status`: active or archived. Snoozed deals remain active — `snooze_until` suppresses lead tracking temporarily, deal resumes normal monitoring on expiry.
 
@@ -499,6 +500,8 @@ Standalone Baileys daemon (`scripts/whatsapp-daemon.ts`) — pure WebSocket, mul
 - **Process Manager**: Runs via PM2 (`pm2 start scripts/whatsapp-daemon.ts --watch`) on an always-on server/PC.
 - **Companion Device**: Acts as a linked companion device. Works 24/7 even if the user's phone is turned off, out of battery, or in their pocket.
 - **Group Chats**: Extracts the participant (sender) ID from group messages, prepends the group name to the text (e.g., `[Group: Prodej Praha] Jan: Ano`), and processes it so Mila understands multi-party deal chats.
+- **Channel resolution**: Daemon creates/reuses a `channels` record (type='whatsapp', identifier=phone) per user via `getWhatsAppChannelId()`. The channel UUID is stored as `channel_id` on each message. Services use `getChannelType(channelId)` / `getChannelTypes(ids)` from `src/lib/db/channels.ts` to detect channel type. Email messages have `channel_id: null` (backward compat, resolves to 'email'). Future channels follow the same pattern: create a `channels` row, use its UUID.
+- **Message extraction**: `extractMessageText()` handles all WhatsApp message types — plain text, media captions, templates, contacts, locations, voice messages, buttons, lists, polls, edited/view-once/ephemeral wrappers. Excludes only protocol messages, key distribution, reactions, and stickers.
 
 ## Conventions
 - All server-side code uses async/await with Supabase client

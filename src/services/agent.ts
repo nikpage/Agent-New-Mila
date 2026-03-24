@@ -13,6 +13,7 @@ import { getConversationsForUser } from '@/lib/db/conversations'
 import { getUserById } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
+import { getChannelTypes } from '@/lib/db/channels'
 import type { ActionProposal } from '@/lib/supabase/types'
 
 export interface AgentRunResult {
@@ -172,8 +173,9 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       console.log(`[Agent] Step 3: Loading unprocessed messages`)
       const unprocessedMessages = await getUnprocessedMessages(userId)
       result.messagesProcessed = unprocessedMessages.length
+      const channelTypeMap = await getChannelTypes(unprocessedMessages.map(m => m.channel_id))
       result.whatsappMessagesProcessed = unprocessedMessages.filter(
-        m => m.channel_id === 'whatsapp'
+        m => channelTypeMap.get(m.channel_id) === 'whatsapp'
       ).length
       console.log(`[Agent] Step 3: Found ${unprocessedMessages.length} unprocessed (${result.whatsappMessagesProcessed} WhatsApp)`)
 

@@ -19,6 +19,7 @@ import {
   createTestCP,
   createTestConversation,
   createTestMessage,
+  createTestChannel,
   cleanupTestData,
   getTestActions,
   getTestConversations,
@@ -210,10 +211,10 @@ describe.skipIf(!HAS_DB)('Agent Pipeline: full data flow (real DB)', () => {
     expect(typeof result.coldLeads).toBe('number')
   })
 
-  // TODO: WhatsApp counting test disabled — channel_id column is UUID FK but
-  // agent.ts compares to string 'whatsapp'. Needs channel_id schema alignment.
-  it.skip('WhatsApp messages counted separately from email', async () => {
+  it('WhatsApp messages counted separately from email', async () => {
+    const waChannel = await createTestChannel('whatsapp', '+420123456789')
     await createTestMessage({
+      channel_id: waChannel.id,
       external_thread_id: 'wa:+420123456789',
       conversation_id: null,
     })

@@ -129,6 +129,21 @@ export async function createTestMessage(overrides: Record<string, unknown> = {})
   return data
 }
 
+export async function createTestChannel(type: string = 'whatsapp', identifier: string = '+420123456789') {
+  const { data, error } = await db()
+    .from('channels')
+    .insert({
+      user_id: TEST_USER_ID,
+      type,
+      identifier,
+    })
+    .select()
+    .single()
+
+  if (error) throw new Error(`createTestChannel: ${error.message}`)
+  return data
+}
+
 export async function createTestAction(overrides: Record<string, unknown> = {}) {
   // Auto-create CP and conversation if not provided (FK constraints require them)
   if (!overrides.cp_id) {

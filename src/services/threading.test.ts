@@ -165,7 +165,7 @@ describe('Threading — Decision Flow Pinning', () => {
     raw_text: 'raw text',
     tag_primary: null as string | null,
     conversation_id: null,
-    channel_id: 'email',
+    channel_id: null,
     direction: 'inbound',
     timestamp: new Date().toISOString(),
   }

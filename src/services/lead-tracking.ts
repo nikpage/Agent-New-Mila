@@ -20,6 +20,7 @@ import { getUserSettings } from '@/lib/db/users'
 import { containsHighValueSignals } from '@/config/client'
 import { selectOfferMultiplier, computeDaysIgnored } from '@/shared/scoring'
 import { generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
+import { getChannelType } from '@/lib/db/channels'
 import type { ActionProposal, ConversationThread, UserSettings } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -196,7 +197,8 @@ async function processConversationForLeadTracking(
 
   // Determine the channel this conversation is on
   const lastMessage = recentMessages[recentMessages.length - 1]
-  const channel = lastMessage?.channel_id === 'whatsapp' ? 'WhatsApp' : 'email'
+  const channelType = await getChannelType(lastMessage?.channel_id)
+  const channel = channelType === 'whatsapp' ? 'WhatsApp' : 'email'
   const cpName = cp.name || cp.primary_identifier
 
   // Build the follow-up intent

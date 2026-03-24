@@ -17,7 +17,7 @@
 - `POST /send { userId, to, body }` — send message via specific user's session
 
 ## Message Flow
-1. Daemon receives WA message via Baileys event → writes to Supabase `messages` table (`channel_id: 'whatsapp'`, `external_thread_id: wa:+phone`)
+1. Daemon receives WA message via Baileys event → creates/reuses a `channels` record (type='whatsapp', identifier=phone), writes to Supabase `messages` table (`channel_id: <channel UUID>`, `external_thread_id: wa:+phone`)
 2. Agent pipeline picks up WA messages in Step 3 (same as email)
 3. Threading groups by phone number
 4. AI receives channel context, adjusts tone
