@@ -195,6 +195,14 @@ Then send another brief to see the new action appear in the user's inbox.
 
 The user is now fully onboarded. From here, QStash handles automated briefs, and you can trigger agent runs on a schedule or on-demand.
 
+### Self-Email Commands
+
+Once onboarded, the user can give Mila instructions by emailing themselves with a `Mila:` subject prefix. For example:
+- `Mila: new contact` — body contains contact details (AI-parsed)
+- `Mila: todo` — body contains task description (AI-parsed)
+
+Commands are executed during the next agent run and results appear in the next brief. See `docs/COMMANDS.md` for full details and supported aliases.
+
 ---
 
 ## Step 8 (Optional): Add WhatsApp

@@ -46,6 +46,18 @@ User-facing actions (surface in morning brief for approval):
 | TODO | Something the user needs to do themselves (call lawyer, write proposal, plan photoshoot). Mila describes what needs doing — no draft. |
 | SNOOZE | Pauses lead tracking for X days because the deal is waiting on a third party (e.g., bank, land registry). |
 
+### Self-Email Commands
+Users can give Mila instructions by emailing themselves with a `Mila:` subject prefix. This bypasses the normal email pipeline — commands are parsed and executed immediately during ingestion.
+
+| Command | Example Subject | What It Does |
+|---------|----------------|--------------|
+| new contact | Mila: new contact | Creates/updates a counterparty from freeform body text (AI extracts name, email, phone, role, company) |
+| todo | Mila: todo | Creates a task from body text (AI extracts description + optional due date) |
+
+Command results appear in the next morning/afternoon brief under "Zpracované příkazy" (Processed Commands). No new UI needed — the user just sends an email from their phone or desktop.
+
+Czech aliases work: `Mila: kontakt`, `Mila: úkol`.
+
 Internal states (stored in conversation_threads.status, not shown to user):
 - **active** — Ongoing conversation. Snoozed deals remain active — snooze_until suppresses lead tracking temporarily, deal resumes normal monitoring on expiry.
 - **archived** — Conversation is finished — no response needed, nothing to watch.
