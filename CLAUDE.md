@@ -36,7 +36,7 @@ Mila is an AI-powered executive assistant that ingests emails, WhatsApp messages
 ## Commands
 ```bash
 npm run build        # Production build (the primary check — catches type errors + lint)
-npm test             # Run Vitest test suite (388 tests: 262 unit, 22 integration, 10 smoke, 12 e2e)
+npm test             # Run Vitest test suite (414 tests: 288 unit, 22 integration, 10 smoke, 12 e2e)
 npm run typecheck    # TypeScript only: tsc --noEmit
 npm run lint         # ESLint via next lint
 npm run dev          # Dev server (uses 8GB heap)
@@ -97,6 +97,10 @@ src/
 │   ├── whatsapp/
 │   │   ├── types.ts            # WAIncomingMessage, WASendRequest, normalizePhoneNumber, etc.
 │   │   ├── sender.ts           # sendWhatsAppMessage(), getWhatsAppStatus() — talks to daemon
+│   │   └── index.ts            # Barrel re-export
+│   ├── commands/
+│   │   ├── parser.ts           # isMilaCommand, classifyCommand — pure detection + classification
+│   │   ├── executor.ts         # executeCommand — AI-parsed execution (new_contact, todo)
 │   │   └── index.ts            # Barrel re-export
 │   ├── embeddings/
 │   │   └── generate.ts         # cleanMessageText (channel-aware), cleanEmailText, generateEmbedding, generateMessageEmbedding, generateConversationEmbedding
@@ -503,6 +507,23 @@ Standalone Baileys daemon (`scripts/whatsapp-daemon.ts`) — pure WebSocket, mul
 - **Channel resolution**: Daemon creates/reuses a `channels` record (type='whatsapp', identifier=phone) per user via `getWhatsAppChannelId()`. The channel UUID is stored as `channel_id` on each message. Services use `getChannelType(channelId)` / `getChannelTypes(ids)` from `src/lib/db/channels.ts` to detect channel type. Email messages have `channel_id: null` (backward compat, resolves to 'email'). Future channels follow the same pattern: create a `channels` row, use its UUID.
 - **Message extraction**: `extractMessageText()` handles all WhatsApp message types — plain text, media captions, templates, contacts, locations, voice messages, buttons, lists, polls, edited/view-once/ephemeral wrappers. Excludes only protocol messages, key distribution, reactions, and stickers.
 
+## Self-Email Commands
+User sends email to themselves with "Mila:" subject prefix → intercepted in ingestion pipeline → AI-parsed → executed. No new endpoints, no new UI — reuses existing email ingestion. See docs/COMMANDS.md for full details.
+
+**Implementation**: `src/lib/commands/` (parser.ts, executor.ts)
+
+**Supported commands (V1)**:
+| Command | Aliases | AI Extracts | Executes |
+|---------|---------|-------------|----------|
+| new_contact | contact, kontakt, nový kontakt | name, email?, phone?, role?, company? | findOrCreateCP + updateCP |
+| todo | task, úkol, ukol | description, dueDate? | createTodo |
+
+**Integration point**: `src/services/ingestion.ts:212-246` — after self-email detection, before `return null`.
+
+**Lifecycle**: Detection (`isMilaCommand`) → Classification (`classifyCommand`) → AI body parsing (`runAITask` 'classify') → DB execution → audit log (`writeAuditLog`) → message stored for dedup → result surfaced in next brief ("Zpracované příkazy" section).
+
+**Reused functions**: `findOrCreateCP`, `upsertCP`, `updateCP` from db/counterparties.ts; `createTodo` from db/todos.ts; `normalizePhoneNumber` from whatsapp/types.ts; `runAITask` from ai/runner.ts; `writeAuditLog` from db/gdpr.ts.
+
 ## Conventions
 - All server-side code uses async/await with Supabase client
 - Error handling: check error from Supabase responses, throw with descriptive messages
@@ -515,7 +536,7 @@ Standalone Baileys daemon (`scripts/whatsapp-daemon.ts`) — pure WebSocket, mul
 ## Testing
 **Framework**: Vitest 4 with @/* path aliases. Tests co-located (foo.ts → foo.test.ts). Mock-Only-AI philosophy: mock AI + Google APIs, everything else (DB, scoring, tokens, cleaning) runs for real.
 
-**388 tests total**: 262 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See docs/TESTING.md
+**414 tests total**: 288 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See docs/TESTING.md
 
 **Key rules**:
 - Changed a function → update its pinning test
@@ -617,6 +638,7 @@ Actions with urgency >= 9 get an immediate email notification (same action card 
 - **docs/TESTING.md** — Test tiers, inventory, update rules, setup
 - **docs/BULK-INGESTION.md** — Bulk ingestion pipeline, QStash worker chaining, backfill report
 - **docs/WHATSAPP.md** — WhatsApp daemon API, message flow, scaling
+- **docs/COMMANDS.md** — Self-email command interface, supported commands, architecture
 
 ## GDPR Compliance
 **Implementation**: `src/lib/db/gdpr.ts` — deleteAllUserData (FK-safe cascade across 13 tables), exportAllUserData, writeAuditLog (never throws), enforceRetentionPolicy.
