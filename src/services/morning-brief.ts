@@ -93,6 +93,40 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       })
     }
 
+    // Fetch recent command results from audit logs (self-email commands processed since last brief)
+    interface CommandBriefItem {
+      commandType: string
+      summary: string
+      timestamp: string
+    }
+    const commandItems: CommandBriefItem[] = []
+    try {
+      const supabase = (await import('@/lib/supabase/client')).getSupabaseAdmin()
+      const { data: cmdLogs } = await supabase
+        .from('audit_logs')
+        .select('action, details, created_at')
+        .eq('user_id', userId)
+        .like('action', 'command:%')
+        .gte('created_at', twentyFourHoursAgo)
+        .not('action', 'eq', 'command:error')
+        .order('created_at', { ascending: false })
+        .limit(10)
+      if (cmdLogs) {
+        for (const log of cmdLogs) {
+          const details = log.details as Record<string, unknown> | null
+          if (details?.success) {
+            commandItems.push({
+              commandType: (log.action as string).replace('command:', ''),
+              summary: (details.summary as string) || '',
+              timestamp: log.created_at,
+            })
+          }
+        }
+      }
+    } catch (cmdErr) {
+      console.error(`[Brief] Command log fetch failed for ${userId}:`, cmdErr)
+    }
+
     // ─── Quiet brief: no pending actions ──────────────────────────────────────
     if (actions.length === 0) {
       console.log(`[Brief] User ${user.email || userId}: no actions — sending quiet brief`)
@@ -147,7 +181,8 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
             hour: '2-digit', minute: '2-digit', hour12: false, timeZone: user.email_timezone,
           }),
         })),
-        todoItems
+        todoItems,
+        commandItems
       )
       const textContent = `${quietGreeting}\n\n${quietBody}`
       const userEmail = await getUserEmail(userId)
@@ -252,9 +287,9 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
         timeZone: user.email_timezone,
       }),
       location: e.location || undefined,
-    })), completedItems)
+    })), completedItems, commandItems)
 
-    const textContent = generateBriefEmailText(greeting, headline, briefActions, completedItems)
+    const textContent = generateBriefEmailText(greeting, headline, briefActions, completedItems, commandItems)
     const userEmail = await getUserEmail(userId)
 
     await sendEmail(userId, {
@@ -319,7 +354,8 @@ function generateBriefEmailHtml(
   headline: string,
   actions: BriefAction[],
   events: { title: string; time: string; location?: string }[],
-  completedItems: { cpName: string; topic: string; actionType: string; intent: string }[] = []
+  completedItems: { cpName: string; topic: string; actionType: string; intent: string }[] = [],
+  commandItems: { commandType: string; summary: string; timestamp: string }[] = []
 ): string {
   return `
 <!DOCTYPE html>
@@ -408,6 +444,19 @@ function generateBriefEmailHtml(
         </div>`
       }).join('')}
     </div>` : ''}
+
+    ${commandItems.length > 0 ? `
+    <div style="margin-top: 32px; padding-top: 24px; border-top: 1px solid ${theme.colors.border};">
+      <h2 style="font-size: 18px; color: ${theme.colors.textMuted}; margin-bottom: 16px;">Zpracované příkazy</h2>
+      ${commandItems.map(item => {
+        const typeLabel = item.commandType === 'new_contact' ? 'Nový kontakt' : item.commandType === 'todo' ? 'Úkol' : item.commandType
+        return `
+        <div style="padding: 12px 16px; margin-bottom: 8px; background: ${theme.colors.surface}; border-radius: 8px; border-left: 3px solid ${theme.colors.primary};">
+          <div style="font-size: 14px; color: ${theme.colors.text}; font-weight: 500;">${typeLabel}</div>
+          <div style="font-size: 13px; color: ${theme.colors.textMuted}; margin-top: 4px;">${item.summary}</div>
+        </div>`
+      }).join('')}
+    </div>` : ''}
   </div>
 </body>
 </html>`.trim()
@@ -420,7 +469,8 @@ function generateBriefEmailText(
   greeting: string,
   headline: string,
   actions: BriefAction[],
-  completedItems: { cpName: string; topic: string; actionType: string; intent: string }[] = []
+  completedItems: { cpName: string; topic: string; actionType: string; intent: string }[] = [],
+  commandItems: { commandType: string; summary: string; timestamp: string }[] = []
 ): string {
   let text = `${greeting}\n\n${headline}\n\n`;
   for (const { action, cpName, cpRole, topic, actionUrl } of actions) {
@@ -440,6 +490,13 @@ function generateBriefEmailText(
       text += `  ${item.topic}\n\n`;
     }
   }
+  if (commandItems.length > 0) {
+    text += `\n=== Zpracovane prikazy ===\n\n`;
+    for (const item of commandItems) {
+      const typeLabel = item.commandType === 'new_contact' ? 'Novy kontakt' : item.commandType === 'todo' ? 'Ukol' : item.commandType
+      text += `✓ ${typeLabel}: ${item.summary}\n\n`;
+    }
+  }
   return text;
 }
 
@@ -450,7 +507,8 @@ function generateQuietBriefEmailHtml(
   body: string,
   todayEvents: { title: string; time: string }[],
   upcomingEvents: { title: string; date: string; time: string }[],
-  todos: { title: string; due?: string }[]
+  todos: { title: string; due?: string }[],
+  commandItems: { commandType: string; summary: string; timestamp: string }[] = []
 ): string {
   const eventRows = todayEvents.map(e =>
     `<tr><td style="padding: 6px 12px; color: ${theme.colors.textMuted}; font-size: 14px; white-space: nowrap; vertical-align: top;">${e.time}</td><td style="padding: 6px 12px; font-size: 14px; color: ${theme.colors.text};">${e.title}</td></tr>`
@@ -464,7 +522,7 @@ function generateQuietBriefEmailHtml(
     `<tr><td style="padding: 6px 12px; font-size: 14px; color: ${theme.colors.text};">☐ ${t.title}</td><td style="padding: 6px 12px; color: ${theme.colors.textMuted}; font-size: 13px; white-space: nowrap;">${t.due || ''}</td></tr>`
   ).join('')
 
-  const hasSections = todayEvents.length > 0 || upcomingEvents.length > 0 || todos.length > 0
+  const hasSections = todayEvents.length > 0 || upcomingEvents.length > 0 || todos.length > 0 || commandItems.length > 0
 
   return `
 <!DOCTYPE html>
@@ -499,6 +557,20 @@ function generateQuietBriefEmailHtml(
       <div style="background-color: ${theme.colors.surface}; border: 1px solid ${theme.colors.border}; border-radius: 8px;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0">${todoRows}</table>
       </div>
+    </div>
+    ` : ''}
+
+    ${commandItems.length > 0 ? `
+    <div style="margin-bottom: 24px;">
+      <h2 style="font-size: 16px; font-weight: 600; color: ${theme.colors.textMuted}; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Zpracované příkazy</h2>
+      ${commandItems.map(item => {
+        const typeLabel = item.commandType === 'new_contact' ? 'Nový kontakt' : item.commandType === 'todo' ? 'Úkol' : item.commandType
+        return `
+        <div style="padding: 12px 16px; margin-bottom: 8px; background: ${theme.colors.surface}; border-radius: 8px; border-left: 3px solid ${theme.colors.primary};">
+          <div style="font-size: 14px; color: ${theme.colors.text}; font-weight: 500;">${typeLabel}</div>
+          <div style="font-size: 13px; color: ${theme.colors.textMuted}; margin-top: 4px;">${item.summary}</div>
+        </div>`
+      }).join('')}
     </div>
     ` : ''}
 
