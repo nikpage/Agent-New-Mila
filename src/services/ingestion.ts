@@ -211,7 +211,7 @@ async function processOneInboundEmail(
   if (isSameGmailAddress(senderEmail, userEmail)) {
     if (isMilaCommand(email.subject)) {
       try {
-        const parsed = classifyCommand(email.subject, email.body)
+        const parsed = await classifyCommand(email.subject, email.body)
         const result = await executeCommand(parsed, userId, settings)
 
         // Store as message to prevent re-processing (dedup via messageExists)
