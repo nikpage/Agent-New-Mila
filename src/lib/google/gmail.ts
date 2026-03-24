@@ -104,7 +104,7 @@ export async function fetchUnreadEmails(
 ): Promise<EmailMessage[]> {
   return fetchRecentEmails(userId, {
     maxResults,
-    labelIds: ['UNREAD', 'INBOX'],
+    labelIds: ['INBOX'],
   })
 }
 
