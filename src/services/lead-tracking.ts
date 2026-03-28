@@ -177,7 +177,7 @@ async function processConversationForLeadTracking(
     cp.role, settings.offer_multiplier_seller, settings.offer_multiplier_buyer
   )
 
-  // Calculate priority with lead-tracking boosts
+  // Calculate priority — no separate boosts, daysIgnored^1.5 handles escalation
   const basePriority = calculatePriorityScore({
     dollarValue: 0, // We don't know deal value from messages alone
     urgency: status === 'dead' ? 9 : status === 'cold' ? 7 : 5,
@@ -186,14 +186,7 @@ async function processConversationForLeadTracking(
     kcHighValue: settings.kc_high_value,
   })
 
-  // Apply lead-status boost
-  let priorityBoost = 1.0
-  if (status === 'cooling') priorityBoost = settings.cooling_priority_boost
-  if (status === 'cold') priorityBoost = settings.cold_priority_boost
-  if (status === 'dead') priorityBoost = settings.cold_priority_boost * 1.5
-  if (isHighValue) priorityBoost *= 1.5
-
-  const boostedPriority = Math.round(basePriority * priorityBoost)
+  const boostedPriority = basePriority
 
   // Determine the channel this conversation is on
   const lastMessage = recentMessages[recentMessages.length - 1]

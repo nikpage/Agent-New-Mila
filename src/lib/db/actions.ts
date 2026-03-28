@@ -334,19 +334,12 @@ export async function markActionsInstantNotified(actionIds: string[]): Promise<v
  * Calculate priority score for an action
  *
  * Formula:
- * 1. normalizedValue = log-scale compress dollarValue into ~1-34 range (low anchor→2, high anchor→13)
- * 2. normVal = normalizedValue × sellerMultiplier  (applied AFTER log so it's a real multiplier)
- * 3. Total = normVal + urgency + daysIgnored² + weight
+ * Score = (nVal × sellerMultiplier) + (urgency × daysIgnored^1.5) + weight
  *
- * Four independent terms:
- * - normVal: deal size on log scale, amplified by seller/buyer role
- * - urgency: AI-assessed starting pressure (1-10), also serves as baseline for non-deal tasks
- * - daysIgnored²: escalating time pressure — bigger deals don't age faster, all items age equally
- * - weight: immovability (1-10 or 100), flat, never changes
- *
- * The log normalization ensures different users (2M-5M agent vs 10M-100M agent)
- * produce scores in the same range despite different deal sizes.
- * Fibonacci-like tiers but smooth (no jumps).
+ * Three additive terms:
+ * - nVal × sellerMultiplier: deal size (percentage-based, floor 1) amplified by seller/buyer role
+ * - urgency × daysIgnored^1.5: time pressure — urgency amplifies the aging curve
+ * - weight: immovability (1-10 or 100), flat, added to score
  *
  * Zero handling: sellerMultiplier = 0 → replace with 1 to prevent score nullification
  */

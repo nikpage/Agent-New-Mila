@@ -72,8 +72,8 @@ src/
 │   └── index.ts                # Barrel re-exports
 │
 ├── services/                   # Business logic (orchestration layer)
-│   ├── agent.ts                # Main pipeline — 6-step orchestration (parallel ingestion)
-│   ├── scheduling.ts           # Calendar slot finding (702 lines) ⚠️ LARGEST
+│   ├── agent.ts                # Main pipeline — 7-step orchestration (parallel ingestion)
+│   ├── scheduling.ts           # Calendar slot finding (1511 lines) ⚠️ LARGEST
 │   ├── planning.ts             # Action generation with channel detection (parallel batches of 5)
 │   ├── threading.ts            # Email/WA conversation grouping (enriched embeddings + external thread ID)
 │   ├── ingestion.ts            # Email ingestion (parallel batches of 5)
@@ -81,7 +81,7 @@ src/
 │   ├── backfill-report.ts      # "Welcome to Mila" report email after bulk ingestion (772 lines)
 │   ├── calendar-ingestion.ts   # Calendar sync + personal event filtering
 │   ├── lead-tracking.ts        # Cooling/cold/dead lead detection (parallel batches of 10)
-│   └── morning-brief.ts        # Daily summary email (254 lines)
+│   └── morning-brief.ts        # Daily summary email + instant notifications (886 lines)
 │
 ├── lib/                        # Shared utilities & integrations
 │   ├── db/                     # Supabase CRUD — 11 files, ~2500 lines total
@@ -144,15 +144,16 @@ Pure functions used by multiple services. Extracted to prevent the circular regr
 ## Agent Pipeline (src/services/agent.ts)
 ```
 Step 1: Verify user exists + has Google credentials (early return if fail)
-Step 2: purgeUserAsCp — remove any CP records matching user's own identity (user can't be their own counterparty)
-Steps 3 + 3.1 + 3.5 run IN PARALLEL (Promise.allSettled):
-  Step 3: Ingest inbound emails from Gmail (clean → enrich → embed enriched text)
-  Step 3.1: Ingest outbound emails from Gmail (clean → enrich → embed enriched text)
-  Step 3.5: Sync Google Calendar events, detect invitations, filter personal events
-Step 4: Get all unprocessed messages (email + WhatsApp)
-Step 5: Thread messages into conversations (uses enriched_text for embedding similarity)
-Step 6: Generate action proposals for updated conversations — one conversation may produce multiple actions (e.g. REPLY + SCHEDULE + TODO). Channel-aware, adaptive context, batched ×5. Can propose SNOOZE if waiting on third party.
-Step 7: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10). Ignores conversations where current_date < snooze_until.
+Step 0: purgeUserAsCp — remove any CP records matching user's own identity (user can't be their own counterparty)
+Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
+  Step 2: Ingest inbound emails from Gmail (clean → enrich → embed enriched text)
+  Step 2.1: Ingest outbound emails from Gmail (clean → enrich → embed enriched text)
+  Step 2.5: Sync Google Calendar events, detect invitations, filter personal events
+Step 3: Get all unprocessed messages (email + WhatsApp)
+Step 4: Thread messages into conversations (uses enriched_text for embedding similarity)
+Step 4.5: Force-rebuild conversation summaries for all updated conversations (threading only rebuilds after 5 new messages, but planning needs fresh summaries even after 1)
+Step 5: Generate action proposals for updated conversations — one conversation may produce multiple actions (e.g. REPLY + SCHEDULE + TODO). Channel-aware, adaptive context, batched ×5. Can propose SNOOZE if waiting on third party.
+Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10). Ignores conversations where current_date < snooze_until.
 ```
 
 Result type includes: emailsIngested, whatsappMessagesProcessed, calendarEventsSynced, calendarInvitationsDetected, messagesProcessed, conversationsUpdated, actionsGenerated, followUpsGenerated, coolingLeads, coldLeads.
@@ -198,12 +199,12 @@ Instead of reading these files, use this index:
 | File | Contents |
 |------|----------|
 | users.ts | getUserById, getUserByEmail, upsertUser, getUserSettings, updateUserSettings, getUsersWithEmailEnabled, getUsersDueBrief, updateUserGoogleTokens, getUserGoogleTokens |
-| counterparties.ts | normalizeGmailAddress, isSameGmailAddress, purgeUserAsCp, getCPById, getCPByIdentifier, getCPsForUser, upsertCP, findOrCreateCP, updateCP, blacklistCP, getCPState, updateCPState |
+| counterparties.ts | normalizeGmailAddress, isSameGmailAddress, purgeUserAsCp, getCPById, getCPByIdentifier, getCPsByIds, getCPsForUser, upsertCP, findOrCreateCP, updateCP, blacklistCP, getCPState, updateCPState |
 | conversations.ts | getConversationById, getConversationsForUser, createConversation, updateConversation, updateConversationSummary, incrementMessageCount, getMessagesForConversation, getRecentMessages, addParticipant, getParticipants, findConversationByExternalThread |
 | messages.ts | getMessageById, getMessageByExternalId, messageExists, createMessage, createMessages, updateMessage, getMessagesInRange, getUnprocessedMessages, assignMessageToConversation, getLatestMessageFromCP, countMessagesInConversation |
-| actions.ts | getActionById, getActionsForUser, getPendingActionsForBrief, getRecentlyCompletedActions, createAction, updateAction, updateActionStatus, approveAction, completeAction, dismissAction, dismissAllPendingActions, updateActionDraft, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, calculatePriorityScore, getActionsForConversation, hasPendingAction |
+| actions.ts | getActionById, getActionsForUser, getPendingActionsForBrief, getRecentlyCompletedActions, createAction, updateAction, updateActionStatus, approveAction, completeAction, dismissAction, dismissAllPendingActions, updateActionDraft, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, calculatePriorityScore, getActionsForConversation, hasPendingAction, getPendingScheduleActions, getPendingActionTypes, hasPendingActionForCP |
 | todos.ts | getTodoById, getTodosForUser, getPendingTodos, createTodo, updateTodo, completeTodo, deleteTodo, getTodosForThread, getOverdueTodos, getTodosDueToday |
-| events.ts | getEventById, getEventsInRange, getEventsForToday, getUpcomingEvents, createEvent, updateEvent, deleteEvent, findConflicts, getLastEventLocation, getEventsWithCP, findAvailableSlots, getEventsByBlockGroup, cleanupBlockGroup, createHoldEvent, createTravelBuffer, cleanupTravelBuffers, getTravelBuffers, confirmEvent, cancelEventWithCleanup, calculateEventScore, upsertEventByGoogleId, getChildEvents, hasActiveEventForConversation |
+| events.ts | getEventById, getEventsInRange, getEventsForToday, getUpcomingEvents, createEvent, updateEvent, deleteEvent, findConflicts, getLastEventLocation, getEventsWithCP, findAvailableSlots, getEventsByBlockGroup, cleanupBlockGroup, createHoldEvent, createTravelBuffer, cleanupTravelBuffers, getTravelBuffers, confirmEvent, cancelEventWithCleanup, calculateEventScore, upsertEventByGoogleId, getChildEvents, hasActiveEventForConversation, rescheduleEvent |
 | channels.ts | getOrCreateChannel, getChannelType, getChannelTypes (batch) |
 | embeddings.ts | saveMessageEmbedding, saveConversationEmbedding, getConversationsWithEmbeddingsByCP |
 | gdpr.ts | writeAuditLog, exportAllUserData, deleteAllUserData, enforceRetentionPolicy |
@@ -232,7 +233,7 @@ All user configuration is stored in `users.settings` JSONB column. See ONBOARDIN
 The `clientConfig` const object in this file is legacy dead code — not consumed at runtime. All runtime behavior reads from UserSettings via DB.
 
 ## Lead Tracking (src/services/lead-tracking.ts)
-Runs as Step 7 of agent pipeline. Scans all conversations, detects stale leads:
+Runs as Step 6 of agent pipeline. Scans all conversations, detects stale leads:
 
 | Status | Days Inactive | Action |
 |--------|---------------|--------|
@@ -255,16 +256,16 @@ Key tables: users, cps, channels, conversation_threads, messages, action_proposa
 Conversation statuses are stored in `conversation_threads.status`: active or archived. Snoozed deals remain active — `snooze_until` suppresses lead tracking temporarily, deal resumes normal monitoring on expiry.
 
 ## Priority Scoring
-**Formula**: `Score = (nVal × sellerMultiplier × stageWeight) × (urgency + daysIgnored^1.5)`
+**Formula**: `Score = (nVal × sellerMultiplier) + (urgency × daysIgnored^1.5) + weight`
 
-Two groups, multiplied — deal importance × time pressure:
+Three additive terms — deal importance + time pressure + scheduling weight:
 
 - **nVal** = `Math.max(1, Math.round((dollarValue / kcHighValue) * 10))` — Percentage-based normalization capped at a reasonable ceiling. A 5M deal with a 10M high-value anchor gets a base score of 5. Hard floor of 1 ensures no deal ever drops to 0 or negative.
-- **sellerMultiplier** — Applied to nVal. Default 1.5 for sellers, 1.0 for buyers (user-configurable).
-- **stageWeight** — Multiplier reflecting deal lifecycle stage. Ascending from initial contact through closing — a deal near closing gets more weight than a fresh acquisition. More time invested, more at stake. Stage is AI-classified during action proposal (dealType on conversation_threads).
-- **urgency + daysIgnored^1.5** — Time pressure. Additive — a new conversation (daysIgnored=0) with high urgency still scores. ^1.5 provides a strong but manageable curve (Day 1 = 1, Day 3 ≈ 5.2, Day 5 ≈ 11.1, Day 7 ≈ 18.5).
+- **sellerMultiplier** — Applied to nVal. Default 1.5 for sellers, 1.0 for buyers (user-configurable via `selectOfferMultiplier()`).
+- **urgency × daysIgnored^1.5** — Time pressure. Multiplicative — urgency amplifies the aging curve. ^1.5 provides a strong but manageable curve (Day 1 = 1, Day 3 ≈ 5.2, Day 5 ≈ 11.1, Day 7 ≈ 18.5).
+- **weight** — Scheduling immovability (1-10 or 100). Added flat to the score so hard-to-move events rank higher.
 
-These factors are independent. A small urgent deal beats a large routine one. A todo with today's deadline beats a high-value deal that can wait.
+These terms are independent. A small urgent deal beats a large routine one. A todo with today's deadline beats a high-value deal that can wait.
 
 ### Urgency Scale
 
@@ -290,7 +291,7 @@ These factors are independent. A small urgent deal beats a large routine one. A 
 
 ### Slot Defense (W — Immovability)
 
-**weight (W) is NOT part of the priority score.** W is a scheduling constraint only — it determines how strongly an existing calendar event resists being moved:
+**weight (W) serves dual purpose: it's added flat to the priority score AND determines how strongly an existing calendar event resists being moved:**
 - **1–10**: movable to hard-to-move. A casual viewing might be a 3. A client meeting with a specific requested time might be a 7.
 - **100**: effectively immovable. Court dates, notary appointments, personal commitments (doctor, kids' concert, partner's flight). The gap between 10 and 100 is intentional — it creates a hard tier.
 
@@ -303,16 +304,15 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 | dollarValue | 0+ (CZK) | Deal/transaction value |
 | kcHighValue | default 5000000 | "Big deal" anchor from settings.kc_high_value. Used to calculate nVal. |
 | sellerMultiplier | default 1 | From user settings: offer_multiplier_seller (1.5) or offer_multiplier_buyer (1.0) based on CP role |
-| stageWeight | TBD | AI-classified deal stage, mapped to multiplier. Ascending from initial contact to closing. |
 | urgency | 1-10 | AI-assessed, safe default 1 |
 | daysIgnored | 0+ | Days since last activity (escalates via ^1.5) |
-| weight | 1-10 or 100 | Scheduling constraint only. How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable. User events default to 7. NEVER null — always has a value. Do not add null guards for weight. |
+| weight | 1-10 or 100, default 0 | Added flat to priority score + scheduling immovability. How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable. User events default to 7. |
 
 **Safe defaults**: urgency, sellerMultiplier fallback to 1 if 0/null (prevents score collapse). kcHighValue falls back to 5000000.
 
 **DO NOT REMOVE OR CHANGE** the formula or wiring without explicit user permission.
 
-**Wiring**: Both `planning.ts` and `lead-tracking.ts` import `selectOfferMultiplier` and `computeDaysIgnored` from `@/shared/scoring` — never from each other. Both pass sellerMultiplier (from CP role), kcHighValue (from user settings), and daysIgnored (from shared computation) to `calculatePriorityScore()`. `planning.ts` additionally passes weight (from AI response).
+**Wiring**: Both `planning.ts` and `lead-tracking.ts` import `selectOfferMultiplier` and `computeDaysIgnored` from `@/shared/scoring` — never from each other. Both pass sellerMultiplier (from CP role), kcHighValue (from user settings), and daysIgnored (from shared computation) to `calculatePriorityScore()`. `planning.ts` additionally passes weight (from AI response). Lead tracking passes no boost multipliers — escalation is handled entirely by daysIgnored^1.5 via the main formula.
 
 ## AI Model Configuration
 **Config**: `src/config/ai-models.ts` — 7 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
@@ -323,7 +323,7 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 |-------|---------|--------------------------------|
 | filter | Spam detection | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
 | classify | Email category + priority | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
-| enrichment | Per-message key info extraction | gemini-2.5-flash-lite → gemini-2.5-flash |
+| enrichment | Per-message key info extraction | gemini-2.5-flash → claude-haiku-4-5-20251001 |
 | threading | extractTopic, shouldJoinConversation | gemini-2.5-flash → claude-sonnet-4-6 |
 | analysis | analyzeConversation | gemini-2.5-flash → claude-sonnet-4-6 |
 | planning | proposeAction (type, rationale, intent) | gemini-2.5-flash → claude-sonnet-4-6 |
@@ -475,9 +475,10 @@ When a new meeting conflicts with existing events:
 | Function | Replaces | Purpose |
 |----------|----------|---------|
 | `generateFinalDraft()` | Was in gemini.ts | CP-facing email/WhatsApp draft, on-demand at execution time |
+| `generateConflictResolutionDraft()` | N/A | Generates reschedule/cancel notifications to counterparties when conflicts are resolved |
 
 ### Urgency-aware tone
-All user-facing functions receive urgency level. The AI adjusts tone accordingly:
+Most user-facing functions receive urgency (directly or via action objects). `generateLeadFollowUpIntent()` derives urgency from lead status at the call site. The AI adjusts tone accordingly:
 - **Urgency 9-10**: direct, bold, conveys time pressure
 - **Urgency 4-8**: standard professional
 - **Urgency 1-3**: calm, routine
