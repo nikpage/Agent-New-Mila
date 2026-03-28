@@ -122,6 +122,18 @@ export async function exportAllUserData(userId: string): Promise<Record<string, 
     exported.audit_logs = []
   }
 
+  // Deal timeline
+  try {
+    const { data: timeline } = await supabase
+      .from('deal_timeline')
+      .select('*')
+      .eq('user_id', userId)
+      .order('occurred_at', { ascending: true })
+    exported.deal_timeline = timeline || []
+  } catch {
+    exported.deal_timeline = []
+  }
+
   // Message embedding count (embeddings themselves are large vectors, export count only)
   try {
     const messages = exported.messages as { id: string }[] | null

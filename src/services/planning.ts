@@ -8,7 +8,7 @@ import {
 import { hasActiveEventForConversation } from '@/lib/db/events'
 import { getConversationById, getRecentMessages, updateConversation } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
-import { getLatestMessageFromCP } from '@/lib/db/messages'
+import { getLatestInboundFromCP, getTimelineForConversation } from '@/lib/db/timeline'
 import { getUserSettings } from '@/lib/db/users'
 import { geocodeAddress } from '@/lib/google/maps'
 import { containsHighValueSignals } from '@/config/client'
@@ -49,6 +49,7 @@ export async function generateActionProposal(
   const summary = conversation.summary_json as unknown as ConversationSummary
 
   const recentMessages = await getRecentMessages(conversation.id, 10)
+  const timelineEntries = await getTimelineForConversation(conversation.id, 10)
 
   // Find CP from latest message — support both inbound AND outbound
   // Outbound: user sent an email to CP (e.g., proposing a meeting)
@@ -67,14 +68,17 @@ export async function generateActionProposal(
   const channelType = await getChannelType(lastMessage?.channel_id)
   const channel: 'email' | 'whatsapp' = channelType === 'whatsapp' ? 'whatsapp' : 'email'
 
-  // Prefer enriched_text (pre-extracted facts), fall back to cleaned_text.
-  // Adaptive count: enough messages to reach ~2000 chars of enriched content,
-  // minimum 3, maximum 10. Short enrichments (WhatsApp) naturally include
-  // more messages; long enrichments (email) include fewer.
-  const allFormatted = recentMessages.map(m => ({
-    direction: m.direction || 'UNKNOWN',
-    text: m.enriched_text || m.cleaned_text || m.raw_text || '',
-  }))
+  // Prefer timeline entries (includes calls, voice notes) over raw messages.
+  // Fall back to messages for conversations created before timeline was active.
+  const allFormatted = timelineEntries.length > 0
+    ? timelineEntries.map(e => ({
+        direction: e.direction === 'in' ? 'inbound' : e.direction === 'out' ? 'outbound' : e.direction,
+        text: e.content || '',
+      }))
+    : recentMessages.map(m => ({
+        direction: m.direction || 'UNKNOWN',
+        text: m.enriched_text || m.cleaned_text || m.raw_text || '',
+      }))
 
   const PLANNING_TARGET_CHARS = 2000
   const PLANNING_MIN_MESSAGES = 3
@@ -95,8 +99,8 @@ export async function generateActionProposal(
     // Get AI recommendations — one or more actions per conversation
     const proposals = await proposeAction(summary, formattedMessages, cp.name, settings, channel)
 
-    const latestInbound = await getLatestMessageFromCP(conversation.user_id, cp.id)
-    const daysIgnored = computeDaysIgnored(latestInbound?.timestamp, conversation.created_at)
+    const latestInbound = await getLatestInboundFromCP(conversation.user_id, cp.id)
+    const daysIgnored = computeDaysIgnored(latestInbound?.occurred_at, conversation.created_at)
     const offerMultiplier = selectOfferMultiplier(
       cp.role, settings.offer_multiplier_seller, settings.offer_multiplier_buyer
     )

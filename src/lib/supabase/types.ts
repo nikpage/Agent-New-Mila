@@ -577,6 +577,50 @@ export interface Database {
           expires_at?: string
         }
       }
+      deal_timeline: {
+        Row: {
+          id: string
+          user_id: string
+          cp_id: string
+          conversation_id: string | null
+          parent_id: string | null
+          event_type: string
+          direction: string
+          occurred_at: string
+          ingested_at: string
+          content: string | null
+          message_id: string | null
+          metadata: Json | null
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          cp_id: string
+          conversation_id?: string | null
+          parent_id?: string | null
+          event_type: string
+          direction: string
+          occurred_at: string
+          ingested_at?: string
+          content?: string | null
+          message_id?: string | null
+          metadata?: Json | null
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          cp_id?: string
+          conversation_id?: string | null
+          parent_id?: string | null
+          event_type?: string
+          direction?: string
+          occurred_at?: string
+          ingested_at?: string
+          content?: string | null
+          message_id?: string | null
+          metadata?: Json | null
+        }
+      }
     }
     Views: {
       [_ in never]: never
@@ -605,6 +649,8 @@ export type Email = Database['public']['Tables']['emails']['Row']
 export type AgentError = Database['public']['Tables']['agent_errors']['Row']
 export type AuditLog = Database['public']['Tables']['audit_logs']['Row']
 export type UserAgentLock = Database['public']['Tables']['user_agent_locks']['Row']
+export type DealTimelineEntry = Database['public']['Tables']['deal_timeline']['Row']
+export type DealTimelineInsert = Database['public']['Tables']['deal_timeline']['Insert']
 
 // Insert types
 export type UserInsert = Database['public']['Tables']['users']['Insert']
@@ -624,7 +670,12 @@ export const VALID_DEAL_TYPES = ['sale', 'purchase', 'rental', 'lease', 'consult
 export type DealType = (typeof VALID_DEAL_TYPES)[number] | null
 
 // Counterparty roles — stored on cps.role
-export const VALID_CP_ROLES = ['seller', 'buyer', 'landlord', 'tenant', 'agent', 'developer', 'other'] as const
+// Three tiers: RetailDeal, BusinessDeal, Service
+export const RETAIL_DEAL_ROLES = ['buyer', 'seller', 'small-landlord', 'renter'] as const
+export const BUSINESS_DEAL_ROLES = ['investor', 'big-landlord'] as const
+export const SERVICE_ROLES = ['lawyer', 'notary', 'photographer', 'appraiser', 'inspector', 'repair-builder'] as const
+export const DEAL_ROLES = [...RETAIL_DEAL_ROLES, ...BUSINESS_DEAL_ROLES] as const
+export const VALID_CP_ROLES = [...RETAIL_DEAL_ROLES, ...BUSINESS_DEAL_ROLES, ...SERVICE_ROLES, 'other'] as const
 export type CPRole = (typeof VALID_CP_ROLES)[number] | null
 
 // User settings structure (stored in users.settings JSON column)

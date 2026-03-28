@@ -4,16 +4,15 @@
  */
 
 import { ingestEmailsForUser, ingestOutboundEmails } from './ingestion'
-import { processMessagesForThreading, rebuildConversationSummary } from './threading'
+import { processTimelineEntries, rebuildConversationSummary } from './threading'
 import { generateActionsForConversations } from './planning'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { trackLeadsForUser } from './lead-tracking'
-import { getUnprocessedMessages } from '@/lib/db/messages'
+import { getUnassignedTimelineEntries } from '@/lib/db/timeline'
 import { getConversationsForUser } from '@/lib/db/conversations'
 import { getUserById } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
-import { getChannelTypes } from '@/lib/db/channels'
 import type { ActionProposal } from '@/lib/supabase/types'
 
 export interface AgentRunResult {
@@ -159,19 +158,18 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     // Step 3: Get all unprocessed messages (including newly ingested + WhatsApp)
     // Steps 3-5 depend on each other but are isolated from steps 2/2.5/6
     try {
-      console.log(`[Agent] Step 3: Loading unprocessed messages`)
-      const unprocessedMessages = await getUnprocessedMessages(userId)
-      result.messagesProcessed = unprocessedMessages.length
-      const channelTypeMap = await getChannelTypes(unprocessedMessages.map(m => m.channel_id))
-      result.whatsappMessagesProcessed = unprocessedMessages.filter(
-        m => channelTypeMap.get(m.channel_id) === 'whatsapp'
+      console.log(`[Agent] Step 3: Loading unassigned timeline entries`)
+      const unassignedEntries = await getUnassignedTimelineEntries(userId)
+      result.messagesProcessed = unassignedEntries.length
+      result.whatsappMessagesProcessed = unassignedEntries.filter(
+        e => e.event_type === 'whatsapp'
       ).length
-      console.log(`[Agent] Step 3: Found ${unprocessedMessages.length} unprocessed (${result.whatsappMessagesProcessed} WhatsApp)`)
+      console.log(`[Agent] Step 3: Found ${unassignedEntries.length} unassigned (${result.whatsappMessagesProcessed} WhatsApp)`)
 
       // Step 4: Process messages into conversations
-      if (unprocessedMessages.length > 0) {
+      if (unassignedEntries.length > 0) {
         console.log(`[Agent] Step 4: Threading messages into conversations`)
-        const conversations = await processMessagesForThreading(unprocessedMessages)
+        const conversations = await processTimelineEntries(unassignedEntries)
         result.conversationsUpdated = conversations.size
         console.log(`[Agent] Step 4: Threaded into ${conversations.size} conversations`)
 
@@ -226,7 +224,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
             .update({ state: null })
             .in('id', flagged.map(f => f.id))
         } else {
-          console.log(`[Agent] Steps 4-5: Skipped — no unprocessed messages`)
+          console.log(`[Agent] Steps 4-5: Skipped — no unassigned timeline entries`)
         }
       }
     } catch (processingError) {

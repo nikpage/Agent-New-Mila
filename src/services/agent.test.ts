@@ -7,7 +7,8 @@ vi.mock('./ingestion', () => ({
 }))
 
 vi.mock('./threading', () => ({
-  processMessagesForThreading: vi.fn().mockResolvedValue(new Map()),
+  processTimelineEntries: vi.fn().mockResolvedValue(new Map()),
+  rebuildConversationSummary: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('./planning', () => ({
@@ -34,8 +35,8 @@ vi.mock('./lead-tracking', () => ({
   }),
 }))
 
-vi.mock('@/lib/db/messages', () => ({
-  getUnprocessedMessages: vi.fn().mockResolvedValue([]),
+vi.mock('@/lib/db/timeline', () => ({
+  getUnassignedTimelineEntries: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/lib/db/users', () => ({

@@ -385,3 +385,72 @@ export async function updateCPState(
     throw new Error(`Failed to update CP state: ${error.message}`)
   }
 }
+
+/**
+ * Look up a counterparty by phone number.
+ * Checks: primary_identifier, other_identifiers jsonb, and channels table (whatsapp).
+ */
+export async function getCPByPhone(userId: string, phone: string): Promise<CP | null> {
+  const { normalizePhoneNumber } = await import('@/lib/whatsapp/types')
+  const normalized = normalizePhoneNumber(phone)
+  const supabase = getSupabaseAdmin()
+
+  // Check primary_identifier (rare — usually email, but possible for WA-first CPs)
+  const { data: byPrimary } = await supabase
+    .from('cps')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('primary_identifier', normalized)
+    .limit(1)
+    .maybeSingle()
+
+  if (byPrimary) return byPrimary
+
+  // Check other_identifiers jsonb for phone match
+  const { data: allCps } = await supabase
+    .from('cps')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_blacklisted', false)
+
+  if (allCps) {
+    for (const cp of allCps) {
+      if (!cp.other_identifiers) continue
+      const identifiers = cp.other_identifiers as unknown
+      if (Array.isArray(identifiers)) {
+        for (const id of identifiers) {
+          if (typeof id === 'string' && normalizePhoneNumber(id) === normalized) {
+            return cp
+          }
+        }
+      }
+    }
+  }
+
+  // Check channels table for whatsapp channel with this number
+  const { data: channel } = await supabase
+    .from('channels')
+    .select('user_id')
+    .eq('user_id', userId)
+    .eq('type', 'whatsapp')
+    .eq('identifier', normalized)
+    .limit(1)
+    .maybeSingle()
+
+  if (channel) {
+    // Find the CP that has messages on this channel
+    const { data: msg } = await supabase
+      .from('messages')
+      .select('cp_id')
+      .eq('user_id', userId)
+      .not('cp_id', 'is', null)
+      .limit(1)
+      .maybeSingle()
+
+    if (msg?.cp_id) {
+      return getCPById(msg.cp_id)
+    }
+  }
+
+  return null
+}

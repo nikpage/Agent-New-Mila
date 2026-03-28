@@ -15,13 +15,14 @@
 import { getConversationsForUser, getRecentMessages } from '@/lib/db/conversations'
 import { hasPendingAction, createAction, calculatePriorityScore, getActionsForConversation } from '@/lib/db/actions'
 import { getCPById } from '@/lib/db/counterparties'
-import { getLatestMessageFromCP } from '@/lib/db/messages'
+import { getLatestInboundFromCP } from '@/lib/db/timeline'
 import { getUserSettings } from '@/lib/db/users'
 import { containsHighValueSignals } from '@/config/client'
 import { selectOfferMultiplier, computeDaysIgnored } from '@/shared/scoring'
 import { generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
 import { getChannelType } from '@/lib/db/channels'
 import type { ActionProposal, ConversationThread, UserSettings } from '@/lib/supabase/types'
+import { SERVICE_ROLES } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
 export interface LeadTrackingResult {
@@ -135,10 +136,13 @@ async function processConversationForLeadTracking(
   const cp = await getCPById(latestWithCP.cp_id)
   if (!cp || cp.is_blacklisted) return
 
+  // Service CPs don't go cold — skip lead tracking
+  if (cp.role && (SERVICE_ROLES as readonly string[]).includes(cp.role)) return
+
   // Measure days since last INBOUND message from the counterparty,
   // not conversation.last_updated (which resets on every summary rebuild).
-  const latestInbound = await getLatestMessageFromCP(userId, cp.id)
-  const daysSinceActivity = computeDaysIgnored(latestInbound?.timestamp, conversation.created_at)
+  const latestInbound = await getLatestInboundFromCP(userId, cp.id)
+  const daysSinceActivity = computeDaysIgnored(latestInbound?.occurred_at, conversation.created_at)
 
   const status = getLeadStatus(daysSinceActivity, settings)
 

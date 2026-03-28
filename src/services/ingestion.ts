@@ -21,6 +21,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { isMilaCommand, classifyCommand } from '@/lib/commands'
 import { executeCommand } from '@/lib/commands'
 import { writeAuditLog } from '@/lib/db/gdpr'
+import { createTimelineEntry } from '@/lib/db/timeline'
 
 /**
  * Senders that are always skipped — no message or CP is created for these.
@@ -353,6 +354,17 @@ async function processOneInboundEmail(
     }
   }
 
+  // Write to deal timeline
+  await createTimelineEntry({
+    user_id: userId,
+    cp_id: cp.id,
+    event_type: 'email',
+    direction: 'inbound',
+    occurred_at: email.date.toISOString(),
+    content: cleanMessageText(email.body, 'email').slice(0, 5000),
+    message_id: messageId,
+  })
+
   return {
     id: messageId,
     email,
@@ -484,6 +496,17 @@ async function processOneOutboundEmail(
       console.error(`[Embeddings] FAILED for outbound message ${messageId}:`, error)
     }
   }
+
+  // Write to deal timeline
+  await createTimelineEntry({
+    user_id: userId,
+    cp_id: cp.id,
+    event_type: 'email',
+    direction: 'outbound',
+    occurred_at: email.date.toISOString(),
+    content: cleanMessageText(email.body, 'email').slice(0, 5000),
+    message_id: messageId,
+  })
 
   return true
 }

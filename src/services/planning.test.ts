@@ -33,9 +33,9 @@ describe('validateDealType', () => {
 })
 
 describe('VALID_CP_ROLES', () => {
-  it('contains exactly: seller, buyer, landlord, tenant, agent, developer, other', () => {
+  it('contains exactly: buyer, seller, small-landlord, renter, investor, big-landlord, lawyer, notary, photographer, appraiser, inspector, repair-builder, other', () => {
     expect([...VALID_CP_ROLES]).toEqual([
-      'seller', 'buyer', 'landlord', 'tenant', 'agent', 'developer', 'other',
+      'buyer', 'seller', 'small-landlord', 'renter', 'investor', 'big-landlord', 'lawyer', 'notary', 'photographer', 'appraiser', 'inspector', 'repair-builder', 'other',
     ])
   })
 })
@@ -54,9 +54,9 @@ describe('selectOfferMultiplier', () => {
   })
 
   it('returns buyer multiplier for any non-seller role', () => {
-    expect(selectOfferMultiplier('landlord', 1.5, 1.0)).toBe(1.0)
+    expect(selectOfferMultiplier('small-landlord', 1.5, 1.0)).toBe(1.0)
     expect(selectOfferMultiplier('agent', 1.5, 1.0)).toBe(1.0)
-    expect(selectOfferMultiplier('tenant', 1.5, 1.0)).toBe(1.0)
+    expect(selectOfferMultiplier('renter', 1.5, 1.0)).toBe(1.0)
   })
 })
 
