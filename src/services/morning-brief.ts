@@ -4,7 +4,7 @@
  */
 
 import { getPendingActionsForBrief, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, getRecentlyCompletedActions } from '@/lib/db/actions'
-import { getUserById, getUsersDueBrief, getUserSettings } from '@/lib/db/users'
+import { getUserById, getUsersDueBrief, getUserSettings, updateUserSettings } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
 import { getEventsForToday, getUpcomingEvents } from '@/lib/db/events'
@@ -12,6 +12,7 @@ import { getTodosDueToday, getOverdueTodos } from '@/lib/db/todos'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefIntro, generateQuietBriefIntro, generateUrgentIntro } from '@/lib/ai/mila-voice'
 import { optimizeScheduleActions, scheduleSingleAction } from '@/services/scheduling'
+import { ensureBriefSchedules } from '@/lib/qstash/client'
 import { generateActionToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template';
 import { theme } from '@/config/theme'
@@ -49,6 +50,14 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     if (!user || !user.email_enabled || user.email_unsubscribed) {
       console.log(`[Brief] User ${userId}: skipped — ${!user ? 'not found' : user.email_unsubscribed ? 'unsubscribed' : 'email disabled'}`)
       return false
+    }
+
+    // Self-heal: verify QStash schedules exist, recreate if missing
+    const settings = await getUserSettings(userId)
+    try {
+      await ensureBriefSchedules(userId, settings, updateUserSettings)
+    } catch (scheduleError) {
+      console.error(`[Brief] User ${user.email || userId}: schedule self-heal failed:`, scheduleError)
     }
 
     // Run batch schedule optimizer BEFORE loading actions —

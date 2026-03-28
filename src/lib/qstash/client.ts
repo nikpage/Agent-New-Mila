@@ -4,6 +4,7 @@
  */
 
 import { Client } from '@upstash/qstash'
+import type { UserSettings } from '@/lib/supabase/types'
 
 const QSTASH_TOKEN = process.env.QSTASH_TOKEN
 
@@ -116,6 +117,70 @@ export async function updateBriefSchedules(
 ): Promise<BriefScheduleIds> {
   await deleteBriefSchedules(oldMorningId, oldAfternoonId)
   return createBriefSchedules(userId, morningTime, afternoonTime, timezone)
+}
+
+// ─── Self-Healing Schedule Check ────────────────────────────────────────────
+
+/**
+ * Verify that a user's QStash brief schedules exist and are healthy.
+ * If schedule IDs are missing from settings or the schedules no longer exist in QStash,
+ * recreates them and saves the new IDs. Called at the start of sendMorningBrief()
+ * so broken schedules are detected and repaired automatically.
+ *
+ * Returns true if schedules were recreated, false if they were already healthy.
+ */
+export async function ensureBriefSchedules(
+  userId: string,
+  settings: UserSettings,
+  updateSettings: (userId: string, patch: Record<string, unknown>) => Promise<void>,
+): Promise<boolean> {
+  if (!QSTASH_TOKEN) return false
+
+  const client = getClient()
+  const morningId = settings.qstash_morning_schedule_id
+  const afternoonId = settings.qstash_afternoon_schedule_id
+
+  // Check if both schedule IDs exist in settings and are still alive in QStash
+  let needsRecreate = false
+
+  if (!morningId || !afternoonId) {
+    needsRecreate = true
+  } else {
+    // Verify both schedules still exist in QStash
+    const [morningAlive, afternoonAlive] = await Promise.all([
+      client.schedules.get(morningId).then(() => true).catch(() => false),
+      client.schedules.get(afternoonId).then(() => true).catch(() => false),
+    ])
+
+    if (!morningAlive || !afternoonAlive) {
+      needsRecreate = true
+      // Clean up any surviving orphan
+      if (morningAlive && !afternoonAlive) {
+        await client.schedules.delete(morningId).catch(() => {})
+      }
+      if (!morningAlive && afternoonAlive) {
+        await client.schedules.delete(afternoonId).catch(() => {})
+      }
+    }
+  }
+
+  if (!needsRecreate) return false
+
+  console.log(`[QStash] Schedules missing or dead for user ${userId} — recreating`)
+
+  const morningTime = settings.morning_brief_time || '08:00'
+  const afternoonTime = settings.afternoon_brief_time || '13:00'
+  const tz = settings.timezone || 'Europe/Prague'
+
+  const scheduleIds = await createBriefSchedules(userId, morningTime, afternoonTime, tz)
+
+  await updateSettings(userId, {
+    qstash_morning_schedule_id: scheduleIds.morningScheduleId,
+    qstash_afternoon_schedule_id: scheduleIds.afternoonScheduleId,
+  })
+
+  console.log(`[QStash] Recreated schedules for ${userId}: morning=${scheduleIds.morningScheduleId}, afternoon=${scheduleIds.afternoonScheduleId}`)
+  return true
 }
 
 // ─── Instant Notify Polling ─────────────────────────────────────────────────
