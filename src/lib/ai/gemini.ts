@@ -126,7 +126,8 @@ export async function analyzeConversation(
     ? `${getAISystemPrompt(settings)}\n\n`
     : ''
 
-  const prompt = `${businessContext}Analyze this conversation and provide a JSON summary. All text field values MUST be in CZECH.
+  const analysisLang = settings?.ai_language || 'Czech'
+  const prompt = `${businessContext}Analyze this conversation and provide a JSON summary.
 
 CRITICAL — ROLE IDENTIFICATION:
 - Messages marked [outbound] are sent BY THE EMAIL ACCOUNT OWNER (your boss, the user you work for). Always the user, never the counterparty.
@@ -148,12 +149,12 @@ ${messageText}
 
 Respond with ONLY valid JSON in this exact format:
 {
-  "currentState": "Brief description of where this conversation/deal currently stands (in Czech, addressing user as vy)",
-  "risks": ["Risk 1 (in Czech)", "Risk 2 (in Czech)"],
-  "nextSteps": ["Next step 1 (in Czech)", "Next step 2 (in Czech)"],
-  "keyPoints": ["Key point 1 (in Czech)", "Key point 2 (in Czech)"],
+  "currentState": "Brief description of where this conversation/deal currently stands (addressing user as vy)",
+  "risks": ["Risk 1", "Risk 2"],
+  "nextSteps": ["Next step 1", "Next step 2"],
+  "keyPoints": ["Key point 1", "Key point 2"],
   "confidence": 0.75,
-  "confidenceReason": "Why you are this confident (in Czech)",
+  "confidenceReason": "Why you are this confident",
   "dealType": "sale"
 }
 
@@ -162,7 +163,9 @@ FIELD RULES:
 - confidenceReason: Explain WHY this confidence level — what evidence supports or limits your understanding. NOT how the analysis was done.
 - dealType: one of "sale", "purchase", "rental", "lease", "consultation", "other", or null if not a deal/transaction.
 
-Be concise. Focus on actionable insights.`
+Be concise. Focus on actionable insights.
+
+CRITICAL: You must generate ALL text field values in ${analysisLang}. Do not output English.`
 
   const text = await runAITask('analysis', prompt)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
@@ -207,6 +210,7 @@ export async function proposeAction(
   settings: UserSettings,
   channel: 'email' | 'whatsapp' = 'email'
 ): Promise<ProposedAction[]> {
+  const planningLang = settings.ai_language || 'Czech'
   console.log(`[AI:proposeAction] Running stage 'planning' for ${cpName || 'unknown CP'}`)
   // Planning.ts already caps messages at ~2000 chars of enriched text.
   // Do NOT truncate further — enriched text contains structured extractions
@@ -309,9 +313,9 @@ BAD examples (NEVER write like this):
 Respond with ONLY valid JSON — an array of one or more action objects:
 [{
   "actionType": "REPLY" | "SCHEDULE" | "TODO",
-  "rationale_cs": "One sentence in CZECH: the BUSINESS REASON this action is needed NOW. Focus on consequences, deadlines, or relationship risk. Example: 'Banka vyžaduje dokumenty do pátku — bez potvrzení hrozí zpoždění uzavření obchodu.' NEVER repeat what intent_cs says.",
-  "intent_cs": "PROACTIVE description in CZECH: what Mila HAS ALREADY DONE + what she WILL DO when user clicks UDĚLAT. Must contain SPECIFIC data from the conversation (names, dates, amounts, locations). For TODO: describe the concrete task the user must do themselves. Example: 'Zkontrolovala jsem kalendář a připravím pozvánku na schůzku s Martinem Králem v pondělí v 10:00 u notáře. Klikněte UDĚLAT a odešlu pozvánku.' NEVER repeat what rationale_cs says.",
-  "missingInfo": [{"label": "FULL question in Czech (e.g. 'Kolik má byt metrů čtverečních?')", "value": null}],
+  "rationale_cs": "One sentence in ${planningLang}: the BUSINESS REASON this action is needed NOW. Focus on consequences, deadlines, or relationship risk. NEVER repeat what intent_cs says.",
+  "intent_cs": "PROACTIVE description in ${planningLang}: what Mila HAS ALREADY DONE + what she WILL DO when user clicks UDĚLAT. Must contain SPECIFIC data from the conversation (names, dates, amounts, locations). For TODO: describe the concrete task the user must do themselves. NEVER repeat what rationale_cs says.",
+  "missingInfo": [{"label": "FULL question in ${planningLang}", "value": null}],
   "urgency": 1-10. ONLY use 7+ when a HARD DEADLINE exists (explicit date/day stated, contractual obligation, or stated consequence of delay). Soft/vague time references ("this week", "soon", "when you get a chance", "sometime next week") are NOT hard deadlines — cap at 5.
   Scale: 10 = hard deadline today, 9 = hard deadline tomorrow, 7-8 = hard deadline this week (specific day named or contractual), 5 = soft "this week" or "within a few days" (no specific day, no consequence), 3 = within 2 weeks or vague future, 1 = no time pressure.
   DEFAULT: If no deadline language appears in the conversation at all, urgency = 2. Only go to 3+ if there is SOME time-related language. Only go to 7+ if there is a HARD deadline with a specific day or consequence,
@@ -332,8 +336,10 @@ Rules:
 - ADDRESS INFERENCE for SCHEDULE: suggestedLocation is the MEETING VENUE — where people will physically meet. It is NOT the property/deal subject unless the meeting is at the property (e.g. a viewing). Priority: (1) explicit venue stated in conversation, (2) CP's office from their signature if meeting is at their place, (3) user's office (from system context) if CP says 'at your office', (4) property address only for viewings/inspections. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. If you only have a partial address, output it — Google Maps can often resolve it. Set locationConfidence to 'low' when the source is ambiguous.
 - For REPLY: intent_cs describes the email content Mila will prepare. missingInfo should contain questions CP asked.
 - For TODO: intent_cs describes what the user needs to do. No draft needed.
-- missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in Czech. Do NOT shorten to keywords. Examples: "Je tam sklep nebo komora?" not "Sklep/Komora".
-- Each action in the array is independent — urgency, weight, dollarValue can differ per action.`
+- missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in ${planningLang}. Do NOT shorten to keywords.
+- Each action in the array is independent — urgency, weight, dollarValue can differ per action.
+
+CRITICAL: You must generate ALL user-facing text (rationale_cs, intent_cs, missingInfo labels) in ${planningLang}. Do not output English.`
 
   const text = await runAITask('planning', prompt)
 
@@ -355,10 +361,11 @@ Rules:
  * Extract the topic of a conversation.
  * Stage: threading (gemini-2.5-flash → claude-sonnet)
  */
-export async function extractTopic(messages: { text: string }[]): Promise<string> {
+export async function extractTopic(messages: { text: string }[], settings?: UserSettings): Promise<string> {
   console.log(`[AI:extractTopic] Running stage 'threading'`)
+  const topicLang = settings?.ai_language || 'Czech'
   const messageTexts = messages.slice(0, 5).map(m => m.text.slice(0, 300)).join('\n---\n')
-  const prompt = `What is the main topic of this email conversation? Respond with ONLY a brief topic (3-7 words) in CZECH.\n\n${messageTexts}`
+  const prompt = `What is the main topic of this email conversation? Respond with ONLY a brief topic (3-7 words) in ${topicLang}.\n\n${messageTexts}`
   const text = await runAITask('threading', prompt)
   return text.trim()
 }

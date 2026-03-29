@@ -53,11 +53,11 @@ ${scheduling.conflicts?.length ? `- Calendar conflicts: ${scheduling.conflicts.m
 - Location: ${scheduling.locationStatus === 'confirmed' ? scheduling.locationText : scheduling.locationStatus === 'partial' ? `${scheduling.locationText} (unverified)` : 'not specified'}
 
 RULES:
-- Output in CZECH. Plain text only. No markdown.
+- Output in ${settings.ai_language || 'Czech'}. Plain text only. No markdown.
 - Address user as "vy" (you). Never "uživatel".
 - intent_cs: Combine the business stakes with the scheduling details. A human assistant wouldn't just say "I blocked a slot" — she'd say "Novotný needs signature by 5pm or the deal falls through. I blocked 9:00 at the notary."
 - Do NOT include the slot date/time separately (no "Termín: ..." line). The time is displayed by the card template. You can reference the time naturally in the narrative (e.g. "Rezervovala jsem hovor v 9:30") but do NOT repeat it as a standalone line.
-- missingInfo: array of questions. Each has "label" (full question in Czech) and "value": null.
+- missingInfo: array of questions. Each has "label" (full question in ${settings.ai_language || 'Czech'}) and "value": null.
 ${scheduling.locationStatus === 'missing' ? '- Location is missing — include a question about meeting location.' : ''}
 ${scheduling.locationStatus === 'partial' ? '- Location unverified — include a question to clarify.' : ''}
 ${!scheduling.hasHold ? '- No slot found — include a question asking for preferred time.' : ''}
@@ -106,7 +106,7 @@ DETAILS:
 - Follow-up number: ${followUpNumber + 1}
 
 RULES:
-- Output in CZECH. Plain text only. No markdown.
+- Output in ${settings.ai_language || 'Czech'}. Plain text only. No markdown.
 - Address user as "vy" (you). Never "uživatel".
 - intent_cs: describe what Mila will prepare (the follow-up message). Be specific about the channel and topic.
 - rationale_cs: one sentence explaining why this follow-up matters now.
@@ -159,7 +159,7 @@ PENDING ACTIONS (${actionCount} total):
 ${actionsText}
 
 RULES:
-- Output in CZECH. Plain text only. No markdown.
+- Output in ${settings.ai_language || 'Czech'}. Plain text only. No markdown.
 - Address user as "vy" (you). Never "uživatel".
 - greeting: a natural ${briefType === 'morning' ? 'morning' : 'afternoon'} greeting. Do NOT hardcode — let it be natural.
 - subject: concise email subject. Include action count naturally.
@@ -207,7 +207,7 @@ UPCOMING TODOS:
 ${todosText}
 
 RULES:
-- Output in CZECH. Plain text only. No markdown.
+- Output in ${settings.ai_language || 'Czech'}. Plain text only. No markdown.
 - Address user as "vy" (you). Never "uživatel".
 - greeting: a natural ${briefType === 'morning' ? 'morning' : 'afternoon'} greeting.
 - subject: concise email subject — convey "nothing urgent" positively. No fake urgency.
@@ -248,7 +248,7 @@ DETAILS:
 - Deal value: ${topAction.dollarValue > 0 ? `${topAction.dollarValue.toLocaleString()}` : 'unknown'}
 
 RULES:
-- Output in CZECH. Plain text only. No markdown.
+- Output in ${settings.ai_language || 'Czech'}. Plain text only. No markdown.
 - Address user as "vy" (you). Never "uživatel".
 - subject: concise, conveys urgency
 - header: short header for the email
@@ -286,12 +286,12 @@ export async function generateFinalDraft(
   const isWhatsApp = channel === 'whatsapp'
   const toneInstruction = isWhatsApp
     ? 'Write a short WhatsApp message. No subject line needed — set subject to empty string. Keep it conversational but professional.'
-    : `Write a professional email in CZECH.\nSign off with:\n${settings.ai_email_signature}`
+    : `Write a professional email in ${settings.ai_language || 'Czech'}.\nSign off with:\n${settings.ai_email_signature}`
 
   const prompt = `${systemContext}
 
 You are an executive assistant writing a ${isWhatsApp ? 'WhatsApp message' : 'email'} on behalf of your boss.
-Language: CZECH.
+Language: ${settings.ai_language || 'Czech'}.
 
 CONTEXT:
 ${JSON.stringify(conversationContext, null, 2)}
@@ -348,7 +348,7 @@ export async function generateConflictResolutionDraft(
 You are an executive assistant writing an email on behalf of your boss to inform a counterparty about a scheduling change.
 
 TONE: ${settings.ai_tone_cp}
-Language: CZECH.
+Language: ${settings.ai_language || 'Czech'}.
 
 RESOLUTION TYPE: ${resolutionType === 'reschedule' ? 'RESCHEDULE — the meeting is being moved to a new time' : 'CANCEL — the meeting is being cancelled'}
 
@@ -360,7 +360,7 @@ ${resolutionType === 'reschedule' && newTime ? `- New time: ${newTime}` : ''}
 ${dealContext ? `- Deal context: ${dealContext}` : ''}
 
 RULES:
-- Output in CZECH. Plain text only.
+- Output in ${settings.ai_language || 'Czech'}. Plain text only.
 - Sign off with: ${settings.ai_email_signature}
 ${resolutionType === 'reschedule'
     ? '- Politely inform about the time change, apologize for the inconvenience, confirm the new time.'

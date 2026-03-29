@@ -379,7 +379,7 @@ Operates on `deal_timeline` entries (not raw messages):
 
 ### Per-message enrichment (enrichMessage in gemini.ts)
 - Runs after cleaning, before threading. Extracts: who's involved, property/subject, message kind, deal numbers, core intent.
-- **Output language**: Matches ai_language setting. Enrichment prompt includes business context from UserSettings so domain-specific terms are interpreted correctly (e.g. Czech "statek" = farm/estate, not "ship").
+- **Output language**: Controlled via `CRITICAL` directive at end of prompt using `settings.ai_language` (same pattern as all other AI functions). Enrichment prompt includes business context from UserSettings so domain-specific terms are interpreted correctly (e.g. Czech "statek" = farm/estate, not "ship").
 - Saves to `messages.enriched_text` column. Embedding generated from enriched text (not raw body).
 - **Stage**: enrichment (gemini-2.5-flash-lite → gemini-2.5-flash). Cost-sensitive — runs per message.
 - Accepts optional UserSettings for business context injection. All callers (ingestion.ts, bulk-ingestion.ts, QStash worker) fetch and pass user settings.
@@ -459,6 +459,8 @@ When a new meeting conflicts with existing events:
 - User-created events default weight = 7 (treated as planned but movable for high-value deals)
 - Weight is NEVER null — every event has a weight value. Do not add null guards for weight
 - Conflict resolution handles rare conflicts with confirmed events — separate from batch optimization
+- **Resolution actions** (`/api/action/[id]/resolve-conflict`): `reschedule_existing` (move conflicting event to alt slot + confirm new), `cancel_existing` (cancel conflicting + confirm new), `keep_both` (accept overlap + confirm new + complete action), `move_new` (move new meeting to different slot, stays as hold for user to confirm via UDĚLAT)
+- All resolution actions except `move_new` confirm the new event and complete the action. `move_new` creates a new hold — user still needs to click UDĚLAT.
 
 **Design test case**: a W=100 personal event (doctor, kids' concert) against an nVal-max deal with a single possible time slot. An impossible situation. Mila surfaces the conflict, presents both sides, and the agent chooses. This is by design — Mila never resolves impossible conflicts silently.
 
@@ -616,6 +618,14 @@ Both normal and quiet briefs show what Mila already handled:
 - Each item enriched with CP name, topic, action type, intent
 - Normal brief: rendered as a "Co už Mila vyřídila" section below action cards (green left border)
 - Quiet brief: completed items enriched above the quiet/normal fork so both paths share the data
+
+### Action Ordering in Briefs
+Actions are grouped by conversation and ordered for the agent's workflow:
+1. **Conversations sorted by highest urgency** — most urgent conversation first, then by priority_score
+2. **Within a conversation, logical dependency order** — TODO (prep work) before REPLY/SCHEDULE (CP-facing action)
+3. **TODO suppresses CP action** — if a conversation has both a TODO (fact-gathering, document prep) and a REPLY/SCHEDULE, only the TODO appears in the brief. The CP action surfaces in a later brief after the TODO is marked done. Exception: if ALL actions in the conversation are urgent (>= 9), show everything.
+
+This prevents the brief from asking the user to send a reply they can't write yet (e.g., "confirm financing" before the user has checked with the bank).
 
 ### Parallelized Sending
 - `sendAllMorningBriefs()` processes users in batches of 10 (BRIEF_CONCURRENCY)

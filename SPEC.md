@@ -93,12 +93,11 @@ Mila sends two daily briefing emails — AM (default 7:00) and PM (default 11:30
 Each brief contains:
 - AI-generated headline summarizing priorities
 - Today's calendar events
-- Ranked list of pending action proposals, each with:
-  - Counterparty name and role
-  - Conversation topic
-  - What Mila proposes to do (intent)
-  - Priority score
-  - One-click APPROVE and EDIT buttons (HMAC-signed links)
+- Action proposals, grouped by conversation and ordered for the agent's workflow:
+  - **Conversations sorted by highest urgency** — most urgent first
+  - **Within a conversation**: TODO (prep) before REPLY/SCHEDULE (CP action)
+  - **Dependency filtering**: If a conversation has both a TODO (fact-gathering) and a REPLY/SCHEDULE, only the TODO appears. The CP action surfaces after the TODO is done. Exception: all urgent (>= 9) → show everything.
+  - Each action shows: counterparty name/role, conversation topic, Mila's intent, priority score, one-click APPROVE and EDIT buttons (HMAC-signed links)
 - **"Done" section**: Actions completed/approved in the last 24 hours — shows what Mila already handled (CP name, action type, topic)
 
 ### Quiet Brief
