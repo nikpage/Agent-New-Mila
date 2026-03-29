@@ -319,13 +319,20 @@ export async function POST(
     }
 
     if (resolutionAction === 'keep_both') {
-      // User accepts the overlap — remove conflict from payload, unblock UDĚLAT
+      // User accepts the overlap — resolve conflict, confirm new event, complete action
       const updatedConflicts = conflicts.map((c, i) => i === conflictIdx ? { ...c, resolved: true } : c)
       const freshAction = await getActionById(actionId)
       const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
       await updateAction(actionId, {
         payload: { ...freshPayload, conflicts: updatedConflicts } as unknown as Json,
       })
+
+      // Check if all conflicts are now resolved — if so, confirm the new event
+      const allResolved = updatedConflicts.every((c: Record<string, unknown>) => c.resolved)
+      if (allResolved) {
+        await confirmNewEventAndComplete(actionId, userId, payload, settings)
+      }
+
       return NextResponse.json({ success: true, resolution: 'keep_both' })
     }
 

@@ -61,7 +61,8 @@ export async function enrichMessage(
     ? 'sent BY the email account owner'
     : 'received FROM a counterparty'
 
-  const prompt = `${businessContext}Extract key information from this message the way a human assistant would read it. Output in CZECH. Only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text. Interpret terms in context of the business domain above — do NOT translate domain-specific words literally.
+  const outputLanguage = settings?.ai_language || 'Czech'
+  const prompt = `${businessContext}Extract key information from this message the way a human assistant would read it. Only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text. Interpret terms in context of the business domain above — do NOT translate domain-specific words literally.
 
 VOICE: Refer to the email account owner as "vy" (you), never as "uživatel" (the user). The counterparty is referred to by name or as "protistrana".
 FORMATTING: Plain text only. No markdown, no ** bold **, no # headers.
@@ -85,7 +86,9 @@ ${contextBlock}
 MESSAGE:
 ${cleanedText.slice(0, 3000)}
 
-Respond with ONLY the extracted information as concise structured text in CZECH. No JSON. No markdown headers. Just the facts.`
+Respond with ONLY the extracted information as concise structured text. No JSON. No markdown headers. Just the facts.
+
+CRITICAL: You must generate ALL output text in ${outputLanguage}. Do not output English.`
 
   const raw = (await runAITask('enrichment', prompt)).trim()
 

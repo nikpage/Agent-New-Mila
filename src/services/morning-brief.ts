@@ -254,6 +254,63 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       })
     }
 
+    // ─── Order and filter actions for the brief ─────────────────────────────
+    // 1. Group by conversation
+    // 2. Within each conversation: if both TODO (prep) and REPLY/SCHEDULE (CP action) exist,
+    //    show only the TODO unless both are urgent (>= 9). Prep first, then act.
+    // 3. Sort conversations by highest urgency action (most urgent first)
+    // 4. Within a conversation, logical order: TODO before REPLY/SCHEDULE
+    const conversationGroups = new Map<string, BriefAction[]>()
+    for (const ba of briefActions) {
+      const convId = ba.action.conversation_id
+      const group = conversationGroups.get(convId) || []
+      group.push(ba)
+      conversationGroups.set(convId, group)
+    }
+
+    const orderedBriefActions: BriefAction[] = []
+    const conversationEntries = Array.from(conversationGroups.entries())
+
+    // Sort conversations by highest urgency action descending
+    conversationEntries.sort((a, b) => {
+      const maxUrgencyA = Math.max(...a[1].map(ba => ba.action.urgency ?? 0))
+      const maxUrgencyB = Math.max(...b[1].map(ba => ba.action.urgency ?? 0))
+      if (maxUrgencyB !== maxUrgencyA) return maxUrgencyB - maxUrgencyA
+      const maxScoreA = Math.max(...a[1].map(ba => ba.action.priority_score ?? 0))
+      const maxScoreB = Math.max(...b[1].map(ba => ba.action.priority_score ?? 0))
+      return maxScoreB - maxScoreA
+    })
+
+    for (const [, group] of conversationEntries) {
+      // Sort within group: TODO first, then REPLY/SCHEDULE (logical dependency order)
+      group.sort((a, b) => {
+        const typeOrder = (t: string) => t === 'TODO' ? 0 : t === 'REPLY' ? 1 : t === 'SCHEDULE' ? 2 : 3
+        return typeOrder(a.action.action_type) - typeOrder(b.action.action_type)
+      })
+
+      const hasTodo = group.some(ba => ba.action.action_type === 'TODO')
+      const hasCpAction = group.some(ba => ba.action.action_type === 'REPLY' || ba.action.action_type === 'SCHEDULE')
+      const allUrgent = group.every(ba => (ba.action.urgency ?? 0) >= 9)
+
+      if (hasTodo && hasCpAction && !allUrgent) {
+        // Show only the TODO — CP action waits until prep is done
+        for (const ba of group) {
+          if (ba.action.action_type === 'TODO') {
+            orderedBriefActions.push(ba)
+          }
+        }
+      } else {
+        // Show all actions in the group
+        for (const ba of group) {
+          orderedBriefActions.push(ba)
+        }
+      }
+    }
+
+    // Replace briefActions with ordered+filtered version
+    briefActions.length = 0
+    briefActions.push(...orderedBriefActions)
+
     let greeting: string
     let headline: string
     let briefSubject: string
