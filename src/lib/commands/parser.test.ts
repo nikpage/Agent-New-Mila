@@ -37,73 +37,73 @@ describe('isMilaCommand', () => {
 
 describe('classifyCommand', () => {
   describe('new_contact', () => {
-    it('classifies "Mila: new contact"', () => {
-      const result = classifyCommand('Mila: new contact', 'Jan Novotný')
+    it('classifies "Mila: new contact"', async () => {
+      const result = await classifyCommand('Mila: new contact', 'Jan Novotný')
       expect(result.type).toBe('new_contact')
       expect(result.body).toBe('Jan Novotný')
     })
 
-    it('classifies "Mila: contact"', () => {
-      const result = classifyCommand('Mila: contact', 'Jan')
+    it('classifies "Mila: contact"', async () => {
+      const result = await classifyCommand('Mila: contact', 'Jan')
       expect(result.type).toBe('new_contact')
     })
 
-    it('classifies "Mila: kontakt"', () => {
-      const result = classifyCommand('mila: kontakt', 'Jan')
+    it('classifies "Mila: kontakt"', async () => {
+      const result = await classifyCommand('mila: kontakt', 'Jan')
       expect(result.type).toBe('new_contact')
     })
 
-    it('classifies "Mila: nový kontakt"', () => {
-      const result = classifyCommand('Mila: nový kontakt', 'Jan')
+    it('classifies "Mila: nový kontakt"', async () => {
+      const result = await classifyCommand('Mila: nový kontakt', 'Jan')
       expect(result.type).toBe('new_contact')
     })
   })
 
   describe('todo', () => {
-    it('classifies "Mila: todo"', () => {
-      const result = classifyCommand('Mila: todo', 'Call the notary')
+    it('classifies "Mila: todo"', async () => {
+      const result = await classifyCommand('Mila: todo', 'Call the notary')
       expect(result.type).toBe('todo')
       expect(result.body).toBe('Call the notary')
     })
 
-    it('classifies "Mila: task"', () => {
-      const result = classifyCommand('Mila: task', 'Follow up')
+    it('classifies "Mila: task"', async () => {
+      const result = await classifyCommand('Mila: task', 'Follow up')
       expect(result.type).toBe('todo')
     })
 
-    it('classifies "Mila: úkol"', () => {
-      const result = classifyCommand('Mila: úkol', 'Zavolat notáři')
+    it('classifies "Mila: úkol"', async () => {
+      const result = await classifyCommand('Mila: úkol', 'Zavolat notáři')
       expect(result.type).toBe('todo')
     })
 
-    it('classifies "Mila: ukol"', () => {
-      const result = classifyCommand('mila: ukol', 'Test')
+    it('classifies "Mila: ukol"', async () => {
+      const result = await classifyCommand('mila: ukol', 'Test')
       expect(result.type).toBe('todo')
     })
 
-    it('allows extra text after command keyword in subject', () => {
-      const result = classifyCommand('Mila: todo call the notary', 'about the deal')
+    it('allows extra text after command keyword in subject', async () => {
+      const result = await classifyCommand('Mila: todo call the notary', 'about the deal')
       expect(result.type).toBe('todo')
       expect(result.body).toBe('about the deal')
     })
   })
 
   describe('errors', () => {
-    it('throws CommandParseError for unknown command', () => {
-      expect(() => classifyCommand('Mila: dance', 'body')).toThrow(CommandParseError)
+    it('throws CommandParseError for unknown command', async () => {
+      await expect(classifyCommand('Mila: dance', 'body')).rejects.toThrow(CommandParseError)
     })
 
-    it('throws CommandParseError for empty body', () => {
-      expect(() => classifyCommand('Mila: todo', '')).toThrow(CommandParseError)
+    it('throws CommandParseError for empty body', async () => {
+      await expect(classifyCommand('Mila: todo', '')).rejects.toThrow(CommandParseError)
     })
 
-    it('throws CommandParseError for whitespace-only body', () => {
-      expect(() => classifyCommand('Mila: todo', '   ')).toThrow(CommandParseError)
+    it('throws CommandParseError for whitespace-only body', async () => {
+      await expect(classifyCommand('Mila: todo', '   ')).rejects.toThrow(CommandParseError)
     })
 
-    it('error message contains the unrecognized command', () => {
+    it('error message contains the unrecognized command', async () => {
       try {
-        classifyCommand('Mila: dance', 'body')
+        await classifyCommand('Mila: dance', 'body')
         expect.fail('Should have thrown')
       } catch (e) {
         expect(e).toBeInstanceOf(CommandParseError)
@@ -112,8 +112,8 @@ describe('classifyCommand', () => {
     })
   })
 
-  it('preserves original subject in result', () => {
-    const result = classifyCommand('  Mila: TODO  ', 'task body')
+  it('preserves original subject in result', async () => {
+    const result = await classifyCommand('  Mila: TODO  ', 'task body')
     expect(result.subject).toBe('Mila: TODO')
   })
 })
