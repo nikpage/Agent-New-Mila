@@ -393,6 +393,7 @@ export async function ingestOutboundEmails(
       maxResults: 50,
       labelIds: ['SENT'],
     })
+    console.log(`[Ingest:DEBUG] SENT fetch returned ${sentEmails.length} emails`)
 
     // Process outbound emails in parallel batches
     const OUTBOUND_CONCURRENCY = 5
@@ -430,22 +431,30 @@ async function processOneOutboundEmail(
 ): Promise<boolean> {
   // Skip if already processed
   if (await messageExists(userId, email.id)) {
+    console.log(`[Ingest:DEBUG] OUT skip: already exists — ${email.id}`)
     return false
   }
 
   // Sender is the user — extract recipients
   const senderEmail = extractEmailAddress(email.from)
   if (!isSameGmailAddress(senderEmail, userEmail)) {
+    console.log(`[Ingest:DEBUG] OUT skip: sender "${senderEmail}" ≠ user "${userEmail}" — ${email.id}`)
     return false // Not from user, skip
   }
 
   // Get the first recipient as CP
-  if (!email.to || email.to.length === 0) return false
+  if (!email.to || email.to.length === 0) {
+    console.log(`[Ingest:DEBUG] OUT skip: no recipients — ${email.id}`)
+    return false
+  }
   const recipientEmail = extractEmailAddress(email.to[0])
   const recipientName = extractName(email.to[0])
 
   // Skip if recipient is the user themselves
-  if (isSameGmailAddress(recipientEmail, userEmail)) return false
+  if (isSameGmailAddress(recipientEmail, userEmail)) {
+    console.log(`[Ingest:DEBUG] OUT skip: recipient is self "${recipientEmail}" — ${email.id}`)
+    return false
+  }
 
   // Skip blocked senders (in case user replies to automated)
   if (isBlockedSender(recipientEmail)) {
