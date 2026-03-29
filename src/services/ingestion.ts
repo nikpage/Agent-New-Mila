@@ -354,14 +354,15 @@ async function processOneInboundEmail(
     }
   }
 
-  // Write to deal timeline
+  // Write to deal timeline — prefer enriched text (has structured scheduling data),
+  // fall back to cleaned text if enrichment failed
   await createTimelineEntry({
     user_id: userId,
     cp_id: cp.id,
     event_type: 'email',
-    direction: 'inbound',
+    direction: 'in',
     occurred_at: email.date.toISOString(),
-    content: cleanMessageText(email.body, 'email').slice(0, 5000),
+    content: (enrichedText || cleanMessageText(email.body, 'email')).slice(0, 5000),
     message_id: messageId,
   })
 
@@ -380,19 +381,17 @@ async function processOneInboundEmail(
  * so Mila can proactively check calendar and prepare slots.
  */
 export async function ingestOutboundEmails(
-  userId: string,
-  since: Date
+  userId: string
 ): Promise<number> {
   const userEmail = await getNormalizedUserEmail(userId)
   const settings = await getUserSettings(userId)
   let ingested = 0
 
   try {
-    // Fetch recently sent emails
+    // Fetch sent emails — no time filter, dedup via messageExists()
     const sentEmails = await fetchRecentEmails(userId, {
-      maxResults: 20,
+      maxResults: 50,
       labelIds: ['SENT'],
-      after: since,
     })
 
     // Process outbound emails in parallel batches
@@ -497,14 +496,15 @@ async function processOneOutboundEmail(
     }
   }
 
-  // Write to deal timeline
+  // Write to deal timeline — prefer enriched text (has structured scheduling data),
+  // fall back to cleaned text if enrichment failed
   await createTimelineEntry({
     user_id: userId,
     cp_id: cp.id,
     event_type: 'email',
-    direction: 'outbound',
+    direction: 'out',
     occurred_at: email.date.toISOString(),
-    content: cleanMessageText(email.body, 'email').slice(0, 5000),
+    content: (enrichedText || cleanMessageText(email.body, 'email')).slice(0, 5000),
     message_id: messageId,
   })
 

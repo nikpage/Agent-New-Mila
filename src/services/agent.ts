@@ -111,13 +111,11 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
     // Steps 2, 2.1, 2.5 are INDEPENDENT ingestion steps — run in parallel.
     // Inbound emails, outbound emails, and calendar sync don't depend on each other.
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000) // last 24 hours
-
     console.log(`[Agent] Steps 2/2.1/2.5: Ingesting emails + calendar (parallel)`)
     const parallelStart = Date.now()
     const [inboundResult, outboundResult, calendarResult] = await Promise.allSettled([
       ingestEmailsForUser(userId),
-      ingestOutboundEmails(userId, since),
+      ingestOutboundEmails(userId),
       ingestCalendarEvents(userId),
     ])
     const parallelMs = Date.now() - parallelStart
