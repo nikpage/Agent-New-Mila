@@ -93,6 +93,13 @@ export async function generateActionProposal(
   const formattedMessages = allFormatted.slice(-planMsgCount)
 
   try {
+    // DEBUG: log what the planning AI will see
+    console.log(`[Planning:DEBUG] Context for ${cp.name || cp.primary_identifier}:`)
+    for (const m of formattedMessages) {
+      console.log(`[Planning:DEBUG]   [${m.direction}] ${m.text.slice(0, 200)}`)
+    }
+    console.log(`[Planning:DEBUG] Summary: ${JSON.stringify(summary)?.slice(0, 300)}`)
+
     // Get user settings for AI context
     const settings = await getUserSettings(conversation.user_id)
 

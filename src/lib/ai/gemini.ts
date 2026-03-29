@@ -316,9 +316,8 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "rationale_cs": "One sentence in ${planningLang}: the BUSINESS REASON this action is needed NOW. Focus on consequences, deadlines, or relationship risk. NEVER repeat what intent_cs says.",
   "intent_cs": "PROACTIVE description in ${planningLang}: what Mila HAS ALREADY DONE + what she WILL DO when user clicks UDĚLAT. Must contain SPECIFIC data from the conversation (names, dates, amounts, locations). For TODO: describe the concrete task the user must do themselves. NEVER repeat what rationale_cs says.",
   "missingInfo": [{"label": "FULL question in ${planningLang}", "value": null}],
-  "urgency": 1-10. ONLY use 7+ when a HARD DEADLINE exists (explicit date/day stated, contractual obligation, or stated consequence of delay). Soft/vague time references ("this week", "soon", "when you get a chance", "sometime next week") are NOT hard deadlines — cap at 5.
-  Scale: 10 = hard deadline today, 9 = hard deadline tomorrow, 7-8 = hard deadline this week (specific day named or contractual), 5 = soft "this week" or "within a few days" (no specific day, no consequence), 3 = within 2 weeks or vague future, 1 = no time pressure.
-  DEFAULT: If no deadline language appears in the conversation at all, urgency = 2. Only go to 3+ if there is SOME time-related language. Only go to 7+ if there is a HARD deadline with a specific day or consequence,
+  "urgency": 1-10 (see URGENCY RULES below),
+  "urgencyJustification": "Quote the EXACT words from the conversation that justify this urgency level. If urgency <= 2, write 'No deadline language found.'",
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
@@ -339,7 +338,26 @@ Rules:
 - missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in ${planningLang}. Do NOT shorten to keywords.
 - Each action in the array is independent — urgency, weight, dollarValue can differ per action.
 
-CRITICAL: You must generate ALL user-facing text (rationale_cs, intent_cs, missingInfo labels) in ${planningLang}. Do not output English.`
+CRITICAL: You must generate ALL user-facing text (rationale_cs, intent_cs, missingInfo labels) in ${planningLang}. Do not output English.
+
+CRITICAL — URGENCY RULES (MUST FOLLOW EXACTLY):
+Urgency is based ONLY on deadline language explicitly stated in the conversation. Do NOT infer urgency from deal size, importance, or your own judgment about what "should" be urgent.
+
+Scale:
+  10 = HARD deadline TODAY (explicit: "dnes", "today", "do 17:00")
+  9 = HARD deadline TOMORROW (explicit: "zítra", "tomorrow")
+  7-8 = HARD deadline THIS WEEK with a SPECIFIC DAY named ("do pátku", "ve středu") or stated consequence ("jinak odstoupím")
+  5 = SOFT time reference ("tento týden", "brzy", "v nejbližších dnech") — NO specific day, NO consequence
+  3-4 = Within 2-4 weeks ("příští měsíc", "do konce dubna", "v průběhu příštích týdnů")
+  2 = DEFAULT. Use this when NO deadline language exists in the conversation AT ALL.
+  1 = Explicitly stated no rush ("žádný spěch", "není kam spěchat", "no rush")
+
+HARD RULES:
+- If the conversation contains "žádný spěch", "no rush", or equivalent → urgency MUST be 1. No exceptions.
+- If there is NO deadline language at all → urgency MUST be 2. Not 3, not 5, not 7. Exactly 2.
+- urgency 7+ requires you to quote a HARD DEADLINE with a specific date/day or stated consequence in urgencyJustification.
+- "do dubna" when today is late March = urgency 3-4 (weeks away), NOT 9-10.
+- A large deal value does NOT increase urgency. A 45M deal with no deadline is urgency 2.`
 
   const text = await runAITask('planning', prompt)
 
@@ -347,14 +365,54 @@ CRITICAL: You must generate ALL user-facing text (rationale_cs, intent_cs, missi
   const arrayMatch = text.match(/\[[\s\S]*\]/)
   if (arrayMatch) {
     const parsed = JSON.parse(arrayMatch[0])
-    return Array.isArray(parsed) ? parsed : [parsed]
+    const actions = Array.isArray(parsed) ? parsed : [parsed]
+    return actions.map(clampUrgency)
   }
 
   // Fallback: single object (old model behavior)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) throw new Error('Failed to parse action proposal')
 
-  return [JSON.parse(jsonMatch[0])]
+  return [clampUrgency(JSON.parse(jsonMatch[0]))]
+}
+
+/**
+ * Post-process AI urgency to enforce rules the LLM may ignore.
+ * The AI returns urgencyJustification — if it doesn't match the claimed urgency, clamp it.
+ */
+function clampUrgency(action: ProposedAction & { urgencyJustification?: string }): ProposedAction {
+  const justification = (action.urgencyJustification || '').toLowerCase()
+  let urgency = action.urgency || 2
+
+  // No deadline language → cap at 2
+  const noDeadlinePatterns = ['no deadline', 'žádný termín', 'no deadline language', 'nebyl nalezen']
+  if (noDeadlinePatterns.some(p => justification.includes(p)) || justification.length === 0) {
+    urgency = Math.min(urgency, 2)
+  }
+
+  // Explicit "no rush" → force to 1
+  const noRushPatterns = ['žádný spěch', 'no rush', 'není kam spěchat', 'nespěchá', 'no hurry']
+  if (noRushPatterns.some(p => justification.includes(p))) {
+    urgency = 1
+  }
+
+  // 7+ requires hard deadline words (specific day, date, or consequence)
+  if (urgency >= 7) {
+    const hardDeadlinePatterns = [
+      'dnes', 'today', 'zítra', 'tomorrow', 'ihned', 'immediately',
+      'do pátku', 'do čtvrtka', 'do středy', 'do úterý', 'do pondělí',
+      'jinak', 'otherwise', 'padne', 'falls through', 'odstoupí', 'walk away',
+      'do 17', 'do 18', 'do 16', 'do 15', 'by 5pm', 'by end of day',
+    ]
+    const hasHardDeadline = hardDeadlinePatterns.some(p => justification.includes(p))
+    if (!hasHardDeadline) {
+      urgency = Math.min(urgency, 5)
+      console.log(`[Planning] Urgency clamped ${action.urgency} → ${urgency} (no hard deadline in justification: "${action.urgencyJustification}")`)
+    }
+  }
+
+  action.urgency = urgency
+  return action
 }
 
 /**
