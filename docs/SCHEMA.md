@@ -35,6 +35,12 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 **`message_embeddings`** — message_id, embedding (vector 768-dim)
 
+## Deal Timeline
+
+**`deal_timeline`** — id, user_id, cp_id (NOT NULL), conversation_id (nullable, written after assignment), parent_id (self-ref, links voice notes to call logs), event_type (text: 'email'/'whatsapp'/'call_log'/'voice_note'), direction (text: 'in'/'out'/'internal'), occurred_at (timestamptz, sort key), ingested_at (timestamptz), content (text), message_id (FK messages, nullable, unique partial index), metadata (jsonb)
+
+Indexes: (user_id, cp_id, occurred_at DESC) for CP timeline queries; partial on conversation_id IS NULL for unassigned entries; unique partial on message_id WHERE NOT NULL for dedup. See `migrations/001_deal_timeline.sql` and `docs/DEAL-TIMELINE-SPEC.md`.
+
 ## Actions & Execution
 
 **`action_proposals`** — id, user_id, cp_id, conversation_id, action_type (REPLY/SCHEDULE/TODO/WAIT/ARCHIVE), status, rationale, rationale_cs, intent_cs, missing_info (jsonb), payload (jsonb), draft_subject, draft_body_text, user_notes, priority_score (numeric), dollar_value (numeric), urgency (numeric), weight (numeric), offer_multiplier (numeric), queued_for_brief, last_notified_at, created_at
@@ -69,7 +75,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 - **`conversation_threads.deal_type`** — set by AI during planning (`proposeAction` → `planning.ts`). Values: `sale`, `purchase`, `rental`, `lease`, `consultation`, `other`, or `null`. Type: `DealType` in `types.ts`.
 - **`action_proposals.offer_multiplier`** — set during planning from user settings based on CP role. `cp.role === 'seller'` → `offer_multiplier_seller` (default 1.5), otherwise `offer_multiplier_buyer` (default 1.0). Flows into `calculatePriorityScore()`.
 - **`action_proposals.dollar_value`** — AI estimates in user's configured currency (from `typical_deal_size_currency`, default CZK). High-value signal detection (`containsHighValueSignals`) flags conversations for the AI to prioritize estimation.
-- **CP `role`** — typed as `CPRole`: `seller`, `buyer`, `landlord`, `tenant`, `agent`, `developer`, `other`, or `null`.
+- **CP `role`** — typed as `CPRole`. Three tiers: RetailDeal (`buyer`, `seller`, `small-landlord`, `renter`), BusinessDeal (`investor`, `big-landlord`), Service (`lawyer`, `notary`, `photographer`, `appraiser`, `inspector`, `repair-builder`), plus `other` and `null`. AI assigns roles; user can approve/edit. Service CPs are skipped by lead tracking.
 - **`payload.action_metadata`** — includes `deal_type`, `offer_multiplier`, `weight`, and `is_high_value` boolean for downstream consumers.
 
 ## Required Migrations
@@ -108,3 +114,6 @@ CREATE INDEX idx_messages_enriched_null
 ALTER TABLE events ADD COLUMN conversation_id uuid REFERENCES conversation_threads(id) ON DELETE SET NULL;
 CREATE INDEX idx_events_conversation ON events(conversation_id) WHERE conversation_id IS NOT NULL;
 ```
+
+### Deal Timeline
+See `migrations/001_deal_timeline.sql` for the full CREATE TABLE + indexes + RLS policy.

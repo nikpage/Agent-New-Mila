@@ -75,7 +75,7 @@ src/
 │   ├── agent.ts                # Main pipeline — 7-step orchestration (parallel ingestion)
 │   ├── scheduling.ts           # Calendar slot finding (1511 lines) ⚠️ LARGEST
 │   ├── planning.ts             # Action generation with channel detection (parallel batches of 5)
-│   ├── threading.ts            # Email/WA conversation grouping (enriched embeddings + external thread ID)
+│   ├── threading.ts            # Conversation assignment (timeline-based: external thread ID → CP count → density heuristic → AI)
 │   ├── ingestion.ts            # Email ingestion (parallel batches of 5)
 │   ├── bulk-ingestion.ts       # Historical backfill — 5-phase: fetch → enrich → thread → classify → report
 │   ├── backfill-report.ts      # "Welcome to Mila" report email after bulk ingestion (772 lines)
@@ -84,7 +84,7 @@ src/
 │   └── morning-brief.ts        # Daily summary email + instant notifications (886 lines)
 │
 ├── lib/                        # Shared utilities & integrations
-│   ├── db/                     # Supabase CRUD — 11 files, ~2500 lines total
+│   ├── db/                     # Supabase CRUD — 12 files, ~2800 lines total
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
 │   ├── supabase/               # Client + types (types.ts = 804 lines)
 │   ├── ai/
@@ -137,7 +137,7 @@ Pure functions used by multiple services. Extracted to prevent the circular regr
 | `scoring.ts` | `computeDaysIgnored(latestInboundTimestamp, conversationCreatedAt)` | planning.ts + lead-tracking.ts (duplicated, diverged) | planning, lead-tracking |
 | `deal-types.ts` | `validateDealType(value)` | planning.ts | planning, threading |
 
-**computeDaysIgnored**: Single source of truth for "days since last CP contact". Fallback chain: `latestInbound.timestamp` → `conversation.created_at` → `now`. Uses `created_at` (not `last_updated`) because `last_updated` resets on every summary rebuild. Clamps to `Math.max(0, ...)`.
+**computeDaysIgnored**: Single source of truth for "days since last CP contact". Fallback chain: `latestInbound.occurred_at` (from `deal_timeline`) → `conversation.created_at` → `now`. Uses `created_at` (not `last_updated`) because `last_updated` resets on every summary rebuild. Clamps to `Math.max(0, ...)`. Both planning and lead-tracking now use `getLatestInboundFromCP()` from `@/lib/db/timeline` instead of `getLatestMessageFromCP()` from messages — this means phone calls and voice notes reset the "days ignored" counter.
 
 **Why this exists**: Before extraction, planning.ts fell back to `conversation.last_updated` while lead-tracking.ts fell back to `conversation.created_at`. This divergence caused a fix-A-break-B cycle — fixing the calculation in one service left the other stale.
 
@@ -146,14 +146,14 @@ Pure functions used by multiple services. Extracted to prevent the circular regr
 Step 1: Verify user exists + has Google credentials (early return if fail)
 Step 0: purgeUserAsCp — remove any CP records matching user's own identity (user can't be their own counterparty)
 Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
-  Step 2: Ingest inbound emails from Gmail (clean → enrich → embed enriched text)
-  Step 2.1: Ingest outbound emails from Gmail (clean → enrich → embed enriched text)
+  Step 2: Ingest inbound emails from Gmail (clean → enrich → embed → write to deal_timeline)
+  Step 2.1: Ingest outbound emails from Gmail (clean → enrich → embed → write to deal_timeline)
   Step 2.5: Sync Google Calendar events, detect invitations, filter personal events
-Step 3: Get all unprocessed messages (email + WhatsApp)
-Step 4: Thread messages into conversations (uses enriched_text for embedding similarity)
+Step 3: Get all unassigned timeline entries (deal_timeline WHERE conversation_id IS NULL)
+Step 4: Assign timeline entries to conversations (external thread ID → CP count → density heuristic → AI)
 Step 4.5: Force-rebuild conversation summaries for all updated conversations (threading only rebuilds after 5 new messages, but planning needs fresh summaries even after 1)
-Step 5: Generate action proposals for updated conversations — one conversation may produce multiple actions (e.g. REPLY + SCHEDULE + TODO). Channel-aware, adaptive context, batched ×5. Can propose SNOOZE if waiting on third party.
-Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10). Ignores conversations where current_date < snooze_until.
+Step 5: Generate action proposals for updated conversations — uses timeline context (includes call logs, voice notes). One conversation may produce multiple actions (e.g. REPLY + SCHEDULE + TODO). Channel-aware, adaptive context, batched ×5.
+Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10). Ignores conversations where current_date < snooze_until. Skips service CPs entirely. Uses deal_timeline for activity detection (phone calls reset the counter).
 ```
 
 Result type includes: emailsIngested, whatsappMessagesProcessed, calendarEventsSynced, calendarInvitationsDetected, messagesProcessed, conversationsUpdated, actionsGenerated, followUpsGenerated, coolingLeads, coldLeads.
@@ -199,7 +199,7 @@ Instead of reading these files, use this index:
 | File | Contents |
 |------|----------|
 | users.ts | getUserById, getUserByEmail, upsertUser, getUserSettings, updateUserSettings, getUsersWithEmailEnabled, getUsersDueBrief, updateUserGoogleTokens, getUserGoogleTokens |
-| counterparties.ts | normalizeGmailAddress, isSameGmailAddress, purgeUserAsCp, getCPById, getCPByIdentifier, getCPsByIds, getCPsForUser, upsertCP, findOrCreateCP, updateCP, blacklistCP, getCPState, updateCPState |
+| counterparties.ts | normalizeGmailAddress, isSameGmailAddress, purgeUserAsCp, getCPById, getCPByIdentifier, getCPsByIds, getCPsForUser, getCPByPhone, upsertCP, findOrCreateCP, updateCP, blacklistCP, getCPState, updateCPState |
 | conversations.ts | getConversationById, getConversationsForUser, createConversation, updateConversation, updateConversationSummary, incrementMessageCount, getMessagesForConversation, getRecentMessages, addParticipant, getParticipants, findConversationByExternalThread |
 | messages.ts | getMessageById, getMessageByExternalId, messageExists, createMessage, createMessages, updateMessage, getMessagesInRange, getUnprocessedMessages, assignMessageToConversation, getLatestMessageFromCP, countMessagesInConversation |
 | actions.ts | getActionById, getActionsForUser, getPendingActionsForBrief, getRecentlyCompletedActions, createAction, updateAction, updateActionStatus, approveAction, completeAction, dismissAction, dismissAllPendingActions, updateActionDraft, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, calculatePriorityScore, getActionsForConversation, hasPendingAction, getPendingScheduleActions, getPendingActionTypes, hasPendingActionForCP |
@@ -208,6 +208,7 @@ Instead of reading these files, use this index:
 | channels.ts | getOrCreateChannel, getChannelType, getChannelTypes (batch) |
 | embeddings.ts | saveMessageEmbedding, saveConversationEmbedding, getConversationsWithEmbeddingsByCP |
 | gdpr.ts | writeAuditLog, exportAllUserData, deleteAllUserData, enforceRetentionPolicy |
+| timeline.ts | createTimelineEntry, getUnassignedTimelineEntries, assignTimelineEntry, getTimelineForConversation, getTimelineForCP, getLatestInboundFromCP, getRecentDensityByConversation, getTimelineContextForConversations, getOrphanCallLogs |
 | locks.ts | tryAcquireUserLock, releaseUserLock |
 | index.ts | Barrel re-exports (do not read) |
 
@@ -246,12 +247,14 @@ Priority escalation is handled entirely by the `daysIgnored^1.5` factor in the m
 
 **Snooze Bypass**: Ignores any conversation where `current_date < snooze_until`. This prevents Mila from panicking and flagging a deal as "Dead" when it's just sitting in the land registry or waiting on a bank.
 
-Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation — after three unanswered nudges, the deal still appears in lead tracking but Mila stops generating new follow-up actions. Uses `selectOfferMultiplier()` from `@/shared/scoring` to apply seller/buyer role-based multiplier to follow-up priority scores. Uses `computeDaysIgnored()` from `@/shared/scoring` for consistent days-since-contact calculation (same logic as planning). High-value conversations (matching `highValueSignals`) are flagged to the AI during planning for better dollar value estimation.
+**Service CP bypass**: Skips conversations where the primary CP has a service role (`lawyer`, `notary`, `photographer`, `appraiser`, `inspector`, `repair-builder`). Service CPs don't "go cold" — a lawyer who hasn't emailed in 10 days is just not needed yet.
+
+Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation — after three unanswered nudges, the deal still appears in lead tracking but Mila stops generating new follow-up actions. Uses `selectOfferMultiplier()` from `@/shared/scoring` to apply seller/buyer role-based multiplier to follow-up priority scores. Uses `computeDaysIgnored()` from `@/shared/scoring` for consistent days-since-contact calculation (same logic as planning). Activity detection uses `getLatestInboundFromCP()` from `deal_timeline` — phone calls and voice notes count as activity. High-value conversations (matching `highValueSignals`) are flagged to the AI during planning for better dollar value estimation.
 
 ## Database Schema
 Full schema reference (all tables, columns, deal property model, migrations): See docs/SCHEMA.md
 
-Key tables: users, cps, channels, conversation_threads, messages, action_proposals, events, todos, emails, audit_logs, user_agent_locks. All tables have user_id — always filter by it in queries. The `channels` table maps channel UUIDs to types ('email', 'whatsapp', etc.) — `messages.channel_id` is a UUID FK to `channels.id`.
+Key tables: users, cps, channels, conversation_threads, messages, deal_timeline, action_proposals, events, todos, emails, audit_logs, user_agent_locks. All tables have user_id — always filter by it in queries. The `channels` table maps channel UUIDs to types ('email', 'whatsapp', etc.) — `messages.channel_id` is a UUID FK to `channels.id`. The `deal_timeline` table is the chronological record of all CP interactions (emails, WhatsApp, calls, voice notes) — see Deal Timeline section below.
 
 Conversation statuses are stored in `conversation_threads.status`: active or archived. Snoozed deals remain active — `snooze_until` suppresses lead tracking temporarily, deal resumes normal monitoring on expiry.
 
@@ -312,7 +315,7 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 
 **DO NOT REMOVE OR CHANGE** the formula or wiring without explicit user permission.
 
-**Wiring**: Both `planning.ts` and `lead-tracking.ts` import `selectOfferMultiplier` and `computeDaysIgnored` from `@/shared/scoring` — never from each other. Both pass sellerMultiplier (from CP role), kcHighValue (from user settings), and daysIgnored (from shared computation) to `calculatePriorityScore()`. `planning.ts` additionally passes weight (from AI response). Lead tracking passes no boost multipliers — escalation is handled entirely by daysIgnored^1.5 via the main formula.
+**Wiring**: Both `planning.ts` and `lead-tracking.ts` import `selectOfferMultiplier` and `computeDaysIgnored` from `@/shared/scoring` — never from each other. Both import `getLatestInboundFromCP` from `@/lib/db/timeline` for activity detection (replaces the old `getLatestMessageFromCP` from messages). Both pass sellerMultiplier (from CP role), kcHighValue (from user settings), and daysIgnored (from shared computation) to `calculatePriorityScore()`. `planning.ts` additionally passes weight (from AI response). Lead tracking passes no boost multipliers — escalation is handled entirely by daysIgnored^1.5 via the main formula.
 
 ## AI Model Configuration
 **Config**: `src/config/ai-models.ts` — 7 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
@@ -347,10 +350,32 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 
 **Draft endpoint payload writes**: `src/app/api/action/[id]/draft/route.ts` batches all payload field updates (location, is_online, editedTo) into a single write using a freshly fetched payload. This prevents race conditions where sequential writes with stale payload overwrite each other.
 
-## Embeddings & Semantic Threading
+## Deal Timeline (src/lib/db/timeline.ts)
+
+Every communication event between the user and a counterparty is written to `deal_timeline` — a single chronological table. This is the context source for conversation assignment, action proposals, and lead tracking.
+
+**Table**: `deal_timeline` — id, user_id, cp_id, conversation_id (nullable, written after assignment), parent_id (links voice notes to call logs), event_type ('email'/'whatsapp'/'call_log'/'voice_note'), direction ('in'/'out'/'internal'), occurred_at (sort key), ingested_at, content (cleaned text), message_id (FK to messages, nullable), metadata (jsonb).
+
+**Write path**: Email/WhatsApp ingestion writes to both `messages` AND `deal_timeline`. Call logs and voice notes write to `deal_timeline` only (no `messages` row). Filter-skip and non-actionable messages (cp_id = null) do NOT get timeline entries.
+
+**Read path**: Steps 3-6 of the agent pipeline read from `deal_timeline` instead of `messages`. Planning uses timeline entries for context (includes calls and voice notes). Lead tracking uses timeline for activity detection. `messages.conversation_id` is always kept in sync via writeback.
+
+Full spec: See docs/DEAL-TIMELINE-SPEC.md
+
+## Conversation Assignment (src/services/threading.ts)
 
 ### Purpose
-Assign incoming messages to existing conversations when external thread ID doesn't match. Supports cross-channel matching (WhatsApp message finds its email conversation).
+Unified conversation tracking across channels, email threads, and senders. An email from Jan Novotny, a forwarded email from his assistant, and a WhatsApp from the same Jan — all about the same deal — land in ONE conversation.
+
+### Pipeline
+Operates on `deal_timeline` entries (not raw messages):
+1. **External thread ID match (fast path)** — if the timeline entry has a linked message with external_thread_id, use `findConversationByExternalThread()`. Same-channel email fast path.
+2. **CP conversation count** — count active conversations for this CP. Zero = create new. One = assign immediately. Multiple = proceed to heuristic.
+3. **Density/recency heuristic** — count timeline entries per candidate conversation in the last 15 minutes. If one conversation has >= 3 recent entries and others have 0, assign without AI.
+4. **AI assignment** — feed up to 10 recent timeline entries per candidate conversation to the AI (stage: threading). AI responds with conversation ID or "NEW".
+5. **Writeback** — write conversation_id to `deal_timeline` entry and linked `messages` row. Increment message count, add CP as participant.
+
+**Legacy path**: The old embedding-based assignment (cosine similarity with thresholds 0.78/0.55) is preserved as `processMessagesForThreading` for backward compatibility with bulk ingestion.
 
 ### Per-message enrichment (enrichMessage in gemini.ts)
 - Runs after cleaning, before threading. Extracts: who's involved, property/subject, message kind, deal numbers, core intent.
@@ -360,24 +385,12 @@ Assign incoming messages to existing conversations when external thread ID doesn
 - Accepts optional UserSettings for business context injection. All callers (ingestion.ts, bulk-ingestion.ts, QStash worker) fetch and pass user settings.
 - Runs in both regular ingestion (ingestion.ts) and bulk historical ingestion (bulk-ingestion.ts). Bulk enrichment runs in Phase 2 (Phase2EnrichResult tracks enriched, enrichmentFailed, embedded, embeddingFailed).
 
-### Purpose
-Unified conversation tracking across channels, email threads, and senders. An email from Jan Novotny, a forwarded email from his assistant, and a WhatsApp from the same Jan — all about the same deal — land in ONE conversation. This is the core intelligence that lets Mila see the full picture.
-
-### Pipeline (src/services/threading.ts)
-1. **External thread ID match (primary)** — exact match on external_thread_id (Gmail thread ID, Exchange conversation ID, wa:+phone). Only matches messages already assigned to a conversation (conversation_id IS NOT NULL) — unassigned messages are skipped to prevent 1:1 message-to-conversation creation during bulk ingestion.
-2. **Enriched embedding similarity (secondary)** — cosine similarity of enriched message embedding against conversation embeddings, same CP only
-3. **New conversation (fallback)** — if nothing matches. Creates thin-conversation ToDo if enrichment yielded < 100 chars.
-
-**Thresholds**:
-- ≥ 0.78 → auto-join conversation (no AI needed)
-- 0.55 – 0.78 → AI tiebreak via `shouldJoinConversation()`
-- < 0.55 → new conversation
-
-**WhatsApp threading**: By phone number — external_thread_id = `wa:+phone`
-
 **Conversation summaries** (`analyzeConversation` in gemini.ts) use enriched messages (adaptive count: enough to reach ~1500 chars). Falls back to cleaned_text for older un-enriched messages. Embedding generated from summary text. Accepts optional UserSettings — when provided, the AI receives business context and explicit role mapping: [outbound] = user (email account owner), [inbound] = counterparty. All output matches ai_language.
 
 **Deal context narrative**: Each conversation maintains a running narrative — not a message log, but a summary: where the deal stands, how it got there, key facts, and what needs to happen next. This is what appears on action cards so the agent can step back into a deal they haven't thought about in weeks.
+
+## Embeddings
+Per-message embeddings (`message_embeddings`) and per-conversation embeddings (`conversation_threads.embedding`) are still generated but are no longer used for conversation assignment. The timeline-based algorithm replaced embedding-based threading. Embeddings remain for potential future semantic search.
 
 ### Channel-aware cleaning (cleanMessageText in generate.ts)
 - **email/email/gmail**: Full cleaning (signatures, quoted replies, disclaimers, tracking pixels)
@@ -640,6 +653,7 @@ Actions with urgency >= 9 get an immediate email notification (same action card 
 - **docs/BULK-INGESTION.md** — Bulk ingestion pipeline, QStash worker chaining, backfill report
 - **docs/WHATSAPP.md** — WhatsApp daemon API, message flow, scaling
 - **docs/COMMANDS.md** — Self-email command interface, supported commands, architecture
+- **docs/DEAL-TIMELINE-SPEC.md** — Unified Deal Timeline technical specification, migration SQL, conversation assignment algorithm, CP role tiers
 
 ## GDPR Compliance
 **Implementation**: `src/lib/db/gdpr.ts` — deleteAllUserData (FK-safe cascade across 13 tables), exportAllUserData, writeAuditLog (never throws), enforceRetentionPolicy.

@@ -2,8 +2,9 @@
  * Layer 2: Threading Behavior Pinning
  *
  * Pins the exact similarity thresholds, cosine similarity math, and
- * decision flow (external thread ID → embedding → new conversation).
- * If someone changes these values or the branching logic, these tests fail.
+ * decision flow for timeline-based conversation assignment.
+ *
+ * Algorithm: external thread ID → CP conversation count → density heuristic → AI assignment.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { cosineSimilarity, SIMILARITY_THRESHOLD, TIEBREAKER_THRESHOLD } from './threading'
@@ -35,6 +36,10 @@ vi.mock('@/lib/ai/gemini', () => ({
   shouldJoinConversation: vi.fn(),
 }))
 
+vi.mock('@/lib/ai/runner', () => ({
+  runAITask: vi.fn().mockResolvedValue('NEW'),
+}))
+
 vi.mock('@/lib/embeddings/generate', () => ({
   generateConversationEmbedding: vi.fn(),
   generateMessageEmbedding: vi.fn(),
@@ -43,6 +48,12 @@ vi.mock('@/lib/embeddings/generate', () => ({
 vi.mock('@/lib/db/embeddings', () => ({
   saveConversationEmbedding: vi.fn(),
   getConversationsWithEmbeddingsByCP: vi.fn(),
+}))
+
+vi.mock('@/lib/db/timeline', () => ({
+  assignTimelineEntry: vi.fn(),
+  getRecentDensityByConversation: vi.fn().mockResolvedValue(new Map()),
+  getTimelineContextForConversations: vi.fn().mockResolvedValue(new Map()),
 }))
 
 vi.mock('@/lib/db/todos', () => ({
@@ -55,6 +66,27 @@ vi.mock('@/lib/db/users', () => ({
 
 vi.mock('@/shared/deal-types', () => ({
   validateDealType: vi.fn(),
+}))
+
+vi.mock('@/lib/supabase/client', () => ({
+  getSupabaseAdmin: vi.fn().mockReturnValue({
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            data: [],
+            error: null,
+          }),
+          in: () => ({
+            eq: () => ({
+              data: [],
+              error: null,
+            }),
+          }),
+        }),
+      }),
+    }),
+  }),
 }))
 
 vi.mock('uuid', () => ({
@@ -130,224 +162,341 @@ describe('Threading — Cosine Similarity Pinning', () => {
   })
 })
 
-// ── Threading Decision Flow Pinning ─────────────────────────────────────────
+// ── Timeline-Based Decision Flow Pinning ──────────────────────────────────
 
 describe('Threading — Decision Flow Pinning', () => {
-  // Grab mocked modules for per-test control
   let findConversationByExternalThread: ReturnType<typeof vi.fn>
+  let getMessageById: ReturnType<typeof vi.fn>
   let updateMessage: ReturnType<typeof vi.fn>
   let incrementMessageCount: ReturnType<typeof vi.fn>
   let addParticipant: ReturnType<typeof vi.fn>
   let getConversationById: ReturnType<typeof vi.fn>
   let createConversation: ReturnType<typeof vi.fn>
-  let generateMessageEmbedding: ReturnType<typeof vi.fn>
-  let getConversationsWithEmbeddingsByCP: ReturnType<typeof vi.fn>
-  let shouldJoinConversation: ReturnType<typeof vi.fn>
+  let assignTimelineEntry: ReturnType<typeof vi.fn>
+  let getRecentDensityByConversation: ReturnType<typeof vi.fn>
+  let getTimelineContextForConversations: ReturnType<typeof vi.fn>
+  let runAITask: ReturnType<typeof vi.fn>
   let getCPById: ReturnType<typeof vi.fn>
   let createTodo: ReturnType<typeof vi.fn>
+  let getSupabaseAdmin: ReturnType<typeof vi.fn>
   let assignToConversation: Awaited<typeof import('./threading')>['assignToConversation']
 
   const FAKE_CONV = {
     id: 'conv-1',
     user_id: 'user-1',
-    topic: 'Test',
+    topic: 'Test deal',
     state: 'active',
     messages_since_rebuild: 0,
   }
 
-  const baseMessage = {
-    id: 'msg-1',
+  const baseEntry = {
+    id: 'entry-1',
     user_id: 'user-1',
     cp_id: 'cp-1',
-    external_thread_id: null as string | null,
-    enriched_text: 'Enriched text for testing that is definitely longer than one hundred characters so that we can test the thin conversation threshold properly and completely',
-    cleaned_text: 'cleaned text',
-    raw_text: 'raw text',
-    tag_primary: null as string | null,
-    conversation_id: null,
-    channel_id: null,
-    direction: 'inbound',
-    timestamp: new Date().toISOString(),
+    conversation_id: null as string | null,
+    parent_id: null,
+    event_type: 'email',
+    direction: 'in',
+    occurred_at: new Date().toISOString(),
+    ingested_at: new Date().toISOString(),
+    content: 'This is a test email with enough content to pass the thin conversation threshold check which requires more than one hundred characters of text',
+    message_id: 'msg-1' as string | null,
+    metadata: null,
   }
 
   beforeEach(async () => {
     vi.clearAllMocks()
 
-    // Dynamic import to get mocked versions
     const convDb = await import('@/lib/db/conversations')
     const msgDb = await import('@/lib/db/messages')
     const cpDb = await import('@/lib/db/counterparties')
-    const embedDb = await import('@/lib/db/embeddings')
-    const ai = await import('@/lib/ai/gemini')
-    const embedGen = await import('@/lib/embeddings/generate')
+    const timelineDb = await import('@/lib/db/timeline')
+    const aiRunner = await import('@/lib/ai/runner')
     const todoDb = await import('@/lib/db/todos')
+    const supabaseClient = await import('@/lib/supabase/client')
     const threading = await import('./threading')
 
     findConversationByExternalThread = vi.mocked(convDb.findConversationByExternalThread)
+    getMessageById = vi.mocked(msgDb.getMessageById)
     updateMessage = vi.mocked(msgDb.updateMessage)
     incrementMessageCount = vi.mocked(convDb.incrementMessageCount)
     addParticipant = vi.mocked(convDb.addParticipant)
     getConversationById = vi.mocked(convDb.getConversationById)
     createConversation = vi.mocked(convDb.createConversation)
-    generateMessageEmbedding = vi.mocked(embedGen.generateMessageEmbedding)
-    getConversationsWithEmbeddingsByCP = vi.mocked(embedDb.getConversationsWithEmbeddingsByCP)
-    shouldJoinConversation = vi.mocked(ai.shouldJoinConversation)
+    assignTimelineEntry = vi.mocked(timelineDb.assignTimelineEntry)
+    getRecentDensityByConversation = vi.mocked(timelineDb.getRecentDensityByConversation)
+    getTimelineContextForConversations = vi.mocked(timelineDb.getTimelineContextForConversations)
+    runAITask = vi.mocked(aiRunner.runAITask)
     getCPById = vi.mocked(cpDb.getCPById)
     createTodo = vi.mocked(todoDb.createTodo)
+    getSupabaseAdmin = vi.mocked(supabaseClient.getSupabaseAdmin)
     assignToConversation = threading.assignToConversation
 
-    // Default: getConversationById returns the fake conversation
     getConversationById.mockResolvedValue(FAKE_CONV)
+    getMessageById.mockResolvedValue(null)
   })
 
-  it('external thread ID match joins existing conversation without embedding check', async () => {
-    const message = { ...baseMessage, external_thread_id: 'thread-gmail-123' }
+  it('external thread ID match joins existing conversation via message_id lookup', async () => {
+    const entry = { ...baseEntry, message_id: 'msg-1' }
 
+    // message_id lookup returns a message with external_thread_id
+    getMessageById.mockResolvedValue({
+      id: 'msg-1',
+      external_thread_id: 'thread-gmail-123',
+    })
     findConversationByExternalThread.mockResolvedValue(FAKE_CONV)
 
-    const result = await assignToConversation(message as any)
+    const result = await assignToConversation(entry as any)
 
+    expect(getMessageById).toHaveBeenCalledWith('msg-1')
     expect(findConversationByExternalThread).toHaveBeenCalledWith('user-1', 'thread-gmail-123')
+    expect(assignTimelineEntry).toHaveBeenCalledWith('entry-1', 'conv-1')
     expect(updateMessage).toHaveBeenCalledWith('msg-1', { conversation_id: 'conv-1' })
     expect(incrementMessageCount).toHaveBeenCalledWith('conv-1')
-    // Embedding should NOT have been called
-    expect(generateMessageEmbedding).not.toHaveBeenCalled()
     expect(result.id).toBe('conv-1')
   })
 
-  it('high similarity (≥ 0.78) auto-joins without AI tiebreak', async () => {
-    const message = { ...baseMessage, external_thread_id: null }
+  it('entry without message_id skips external thread ID lookup', async () => {
+    const entry = { ...baseEntry, message_id: null }
 
-    findConversationByExternalThread.mockResolvedValue(null)
-
-    // Return an embedding that will produce high similarity
-    const fakeEmbedding = [1, 0, 0]
-    generateMessageEmbedding.mockResolvedValue(fakeEmbedding)
-
-    // Return a candidate with identical embedding (similarity = 1.0 > 0.78)
-    getConversationsWithEmbeddingsByCP.mockResolvedValue([
-      { id: 'conv-1', embedding: [1, 0, 0] },
-    ])
-
-    const result = await assignToConversation(message as any)
-
-    expect(updateMessage).toHaveBeenCalledWith('msg-1', { conversation_id: 'conv-1' })
-    // AI tiebreaker should NOT be called
-    expect(shouldJoinConversation).not.toHaveBeenCalled()
-    expect(result.id).toBe('conv-1')
-  })
-
-  it('mid similarity (0.55–0.78) calls AI tiebreaker', async () => {
-    const message = { ...baseMessage, external_thread_id: null }
-
-    findConversationByExternalThread.mockResolvedValue(null)
-
-    // Craft vectors with cosine similarity ~0.65 (between 0.55 and 0.78)
-    // cos(θ) = 0.65 → use vectors [1, 0] and [0.65, sqrt(1-0.65²)]
-    const msgEmb = [1, 0]
-    const candEmb = [0.65, Math.sqrt(1 - 0.65 * 0.65)]
-    generateMessageEmbedding.mockResolvedValue(msgEmb)
-    getConversationsWithEmbeddingsByCP.mockResolvedValue([
-      { id: 'conv-1', embedding: candEmb },
-    ])
-    getCPById.mockResolvedValue({ name: 'Test CP', primary_identifier: 'test@test.com' })
-
-    // AI says: yes, join
-    shouldJoinConversation.mockResolvedValue(true)
-
-    const result = await assignToConversation(message as any)
-
-    expect(shouldJoinConversation).toHaveBeenCalled()
-    expect(updateMessage).toHaveBeenCalledWith('msg-1', { conversation_id: 'conv-1' })
-    expect(result.id).toBe('conv-1')
-  })
-
-  it('low similarity (< 0.55) creates new conversation', async () => {
-    const message = { ...baseMessage, external_thread_id: null }
-
-    findConversationByExternalThread.mockResolvedValue(null)
-
-    // Craft vectors with low similarity (orthogonal ≈ 0)
-    generateMessageEmbedding.mockResolvedValue([1, 0])
-    getConversationsWithEmbeddingsByCP.mockResolvedValue([
-      { id: 'conv-other', embedding: [0, 1] }, // similarity = 0
-    ])
-
+    // No CP conversations exist → create new
     const newConv = { ...FAKE_CONV, id: 'conv-new' }
     createConversation.mockResolvedValue(newConv)
     getConversationById.mockResolvedValue(newConv)
 
-    const result = await assignToConversation(message as any)
+    const result = await assignToConversation(entry as any)
 
-    // Should NOT have tried to join anything
-    expect(shouldJoinConversation).not.toHaveBeenCalled()
-    // Should have created a new conversation
+    expect(getMessageById).not.toHaveBeenCalled()
+    expect(findConversationByExternalThread).not.toHaveBeenCalled()
     expect(createConversation).toHaveBeenCalled()
     expect(result.id).toBe('conv-new')
   })
 
-  it('message without cp_id skips embedding and creates new conversation', async () => {
-    const message = { ...baseMessage, cp_id: null, external_thread_id: null }
+  it('zero CP conversations creates new conversation', async () => {
+    const entry = { ...baseEntry, message_id: null }
 
-    findConversationByExternalThread.mockResolvedValue(null)
-
-    const newConv = { ...FAKE_CONV, id: 'conv-no-cp' }
+    // Supabase returns no thread_participants for this CP
+    const newConv = { ...FAKE_CONV, id: 'conv-new' }
     createConversation.mockResolvedValue(newConv)
     getConversationById.mockResolvedValue(newConv)
 
-    const result = await assignToConversation(message as any)
+    const result = await assignToConversation(entry as any)
 
-    expect(generateMessageEmbedding).not.toHaveBeenCalled()
-    expect(getConversationsWithEmbeddingsByCP).not.toHaveBeenCalled()
     expect(createConversation).toHaveBeenCalled()
-    expect(result.id).toBe('conv-no-cp')
+    expect(result.id).toBe('conv-new')
   })
 
-  // ── tag_primary read-behavior pinning ───────────────────────────────────
+  it('one CP conversation assigns directly without AI', async () => {
+    const entry = { ...baseEntry, message_id: null }
 
-  it('tag_primary=bulk_import suppresses thin-conversation ToDo', async () => {
-    const message = {
-      ...baseMessage,
-      external_thread_id: null,
-      cp_id: 'cp-1',
-      tag_primary: 'bulk_import',
-      enriched_text: 'Short', // < 100 chars — would trigger ToDo normally
-    }
+    // Mock supabase to return one active conversation for this CP
+    const mockFrom = vi.fn().mockImplementation((table: string) => {
+      if (table === 'thread_participants') {
+        return {
+          select: () => ({
+            eq: () => ({
+              data: [{ thread_id: 'conv-1' }],
+              error: null,
+            }),
+          }),
+        }
+      }
+      if (table === 'conversation_threads') {
+        return {
+          select: () => ({
+            eq: vi.fn().mockReturnValue({
+              in: () => ({
+                eq: () => ({
+                  data: [{ id: 'conv-1' }],
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return { select: () => ({ eq: () => ({ data: [], error: null }) }) }
+    })
+    getSupabaseAdmin.mockReturnValue({ from: mockFrom } as any)
 
-    findConversationByExternalThread.mockResolvedValue(null)
-    generateMessageEmbedding.mockRejectedValue(new Error('no embedding'))
+    const result = await assignToConversation(entry as any)
 
-    const newConv = { ...FAKE_CONV, id: 'conv-bulk' }
+    // Should assign directly — no AI, no density check
+    expect(assignTimelineEntry).toHaveBeenCalledWith('entry-1', 'conv-1')
+    expect(runAITask).not.toHaveBeenCalled()
+    expect(result.id).toBe('conv-1')
+  })
+
+  it('multiple conversations with density burst assigns to active conversation', async () => {
+    const entry = { ...baseEntry, message_id: null }
+
+    // Mock supabase to return two active conversations
+    const mockFrom = vi.fn().mockImplementation((table: string) => {
+      if (table === 'thread_participants') {
+        return {
+          select: () => ({
+            eq: () => ({
+              data: [{ thread_id: 'conv-1' }, { thread_id: 'conv-2' }],
+              error: null,
+            }),
+          }),
+        }
+      }
+      if (table === 'conversation_threads') {
+        return {
+          select: () => ({
+            eq: vi.fn().mockReturnValue({
+              in: () => ({
+                eq: () => ({
+                  data: [{ id: 'conv-1' }, { id: 'conv-2' }],
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return { select: () => ({ eq: () => ({ data: [], error: null }) }) }
+    })
+    getSupabaseAdmin.mockReturnValue({ from: mockFrom } as any)
+
+    // Density: conv-1 has 5 recent entries, conv-2 has 0
+    getRecentDensityByConversation.mockResolvedValue(new Map([
+      ['conv-1', 5],
+    ]))
+
+    const result = await assignToConversation(entry as any)
+
+    // Should assign to conv-1 (density winner) without AI
+    expect(assignTimelineEntry).toHaveBeenCalledWith('entry-1', 'conv-1')
+    expect(runAITask).not.toHaveBeenCalled()
+    expect(result.id).toBe('conv-1')
+  })
+
+  it('multiple conversations without clear density winner falls through to AI', async () => {
+    const entry = { ...baseEntry, message_id: null }
+
+    // Mock supabase to return two active conversations
+    const mockFrom = vi.fn().mockImplementation((table: string) => {
+      if (table === 'thread_participants') {
+        return {
+          select: () => ({
+            eq: () => ({
+              data: [{ thread_id: 'conv-1' }, { thread_id: 'conv-2' }],
+              error: null,
+            }),
+          }),
+        }
+      }
+      if (table === 'conversation_threads') {
+        return {
+          select: () => ({
+            eq: vi.fn().mockReturnValue({
+              in: () => ({
+                eq: () => ({
+                  data: [{ id: 'conv-1' }, { id: 'conv-2' }],
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return { select: () => ({ eq: () => ({ data: [], error: null }) }) }
+    })
+    getSupabaseAdmin.mockReturnValue({ from: mockFrom } as any)
+
+    // No clear density winner (both have similar counts)
+    getRecentDensityByConversation.mockResolvedValue(new Map([
+      ['conv-1', 1],
+      ['conv-2', 1],
+    ]))
+
+    // AI picks conv-2
+    getConversationById.mockImplementation(async (id: string) => {
+      if (id === 'conv-1') return { ...FAKE_CONV, id: 'conv-1', topic: 'Deal A' }
+      if (id === 'conv-2') return { ...FAKE_CONV, id: 'conv-2', topic: 'Deal B' }
+      return FAKE_CONV
+    })
+    getTimelineContextForConversations.mockResolvedValue(new Map())
+    runAITask.mockResolvedValue('conv-2')
+
+    const result = await assignToConversation(entry as any)
+
+    expect(runAITask).toHaveBeenCalled()
+    expect(assignTimelineEntry).toHaveBeenCalledWith('entry-1', 'conv-2')
+    expect(result.id).toBe('conv-2')
+  })
+
+  it('AI returning NEW creates a new conversation', async () => {
+    const entry = { ...baseEntry, message_id: null }
+
+    // Mock supabase to return two active conversations
+    const mockFrom = vi.fn().mockImplementation((table: string) => {
+      if (table === 'thread_participants') {
+        return {
+          select: () => ({
+            eq: () => ({
+              data: [{ thread_id: 'conv-1' }, { thread_id: 'conv-2' }],
+              error: null,
+            }),
+          }),
+        }
+      }
+      if (table === 'conversation_threads') {
+        return {
+          select: () => ({
+            eq: vi.fn().mockReturnValue({
+              in: () => ({
+                eq: () => ({
+                  data: [{ id: 'conv-1' }, { id: 'conv-2' }],
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return { select: () => ({ eq: () => ({ data: [], error: null }) }) }
+    })
+    getSupabaseAdmin.mockReturnValue({ from: mockFrom } as any)
+
+    getRecentDensityByConversation.mockResolvedValue(new Map())
+    getConversationById.mockImplementation(async (id: string) => {
+      if (id === 'conv-1') return { ...FAKE_CONV, id: 'conv-1' }
+      if (id === 'conv-2') return { ...FAKE_CONV, id: 'conv-2' }
+      if (id === 'conv-new') return { ...FAKE_CONV, id: 'conv-new' }
+      return FAKE_CONV
+    })
+    getTimelineContextForConversations.mockResolvedValue(new Map())
+    runAITask.mockResolvedValue('NEW')
+
+    const newConv = { ...FAKE_CONV, id: 'conv-new' }
     createConversation.mockResolvedValue(newConv)
-    getConversationById.mockResolvedValue(newConv)
-    getCPById.mockResolvedValue({ name: 'Bulk CP', primary_identifier: 'bulk@test.com' })
 
-    await assignToConversation(message as any)
+    const result = await assignToConversation(entry as any)
 
-    // ToDo should NOT be created for bulk_import messages
-    expect(createTodo).not.toHaveBeenCalled()
+    expect(runAITask).toHaveBeenCalled()
+    expect(createConversation).toHaveBeenCalled()
+    expect(result.id).toBe('conv-new')
   })
 
-  it('short enriched_text without bulk_import DOES create thin-conversation ToDo', async () => {
-    const message = {
-      ...baseMessage,
-      external_thread_id: null,
-      cp_id: 'cp-1',
-      tag_primary: null,
-      enriched_text: 'Short', // < 100 chars
-    }
+  // ── Thin conversation ToDo pinning ────────────────────────────────────────
 
-    findConversationByExternalThread.mockResolvedValue(null)
-    generateMessageEmbedding.mockRejectedValue(new Error('no embedding'))
+  it('short content creates thin-conversation ToDo', async () => {
+    const entry = {
+      ...baseEntry,
+      message_id: null,
+      content: 'Short',  // < 100 chars
+    }
 
     const newConv = { ...FAKE_CONV, id: 'conv-thin' }
     createConversation.mockResolvedValue(newConv)
     getConversationById.mockResolvedValue(newConv)
     getCPById.mockResolvedValue({ name: 'Thin CP', primary_identifier: 'thin@test.com' })
 
-    await assignToConversation(message as any)
+    await assignToConversation(entry as any)
 
-    // ToDo SHOULD be created
     expect(createTodo).toHaveBeenCalledWith(
       expect.objectContaining({
         user_id: 'user-1',
@@ -358,25 +507,51 @@ describe('Threading — Decision Flow Pinning', () => {
     )
   })
 
-  it('null enriched_text does NOT create thin-conversation ToDo (not enriched ≠ thin)', async () => {
-    const message = {
-      ...baseMessage,
-      external_thread_id: null,
-      cp_id: 'cp-1',
-      tag_primary: null,
-      enriched_text: null,
+  it('empty content does NOT create thin-conversation ToDo', async () => {
+    const entry = {
+      ...baseEntry,
+      message_id: null,
+      content: '',  // empty
     }
 
-    findConversationByExternalThread.mockResolvedValue(null)
-    generateMessageEmbedding.mockRejectedValue(new Error('no embedding'))
-
-    const newConv = { ...FAKE_CONV, id: 'conv-no-enrich' }
+    const newConv = { ...FAKE_CONV, id: 'conv-empty' }
     createConversation.mockResolvedValue(newConv)
     getConversationById.mockResolvedValue(newConv)
 
-    await assignToConversation(message as any)
+    await assignToConversation(entry as any)
 
-    // No ToDo — null enriched_text means enrichment didn't run
+    expect(createTodo).not.toHaveBeenCalled()
+  })
+
+  it('null content does NOT create thin-conversation ToDo', async () => {
+    const entry = {
+      ...baseEntry,
+      message_id: null,
+      content: null,
+    }
+
+    const newConv = { ...FAKE_CONV, id: 'conv-null' }
+    createConversation.mockResolvedValue(newConv)
+    getConversationById.mockResolvedValue(newConv)
+
+    await assignToConversation(entry as any)
+
+    expect(createTodo).not.toHaveBeenCalled()
+  })
+
+  it('long content does NOT create thin-conversation ToDo', async () => {
+    const entry = {
+      ...baseEntry,
+      message_id: null,
+      // content already > 100 chars from baseEntry
+    }
+
+    const newConv = { ...FAKE_CONV, id: 'conv-long' }
+    createConversation.mockResolvedValue(newConv)
+    getConversationById.mockResolvedValue(newConv)
+
+    await assignToConversation(entry as any)
+
     expect(createTodo).not.toHaveBeenCalled()
   })
 })

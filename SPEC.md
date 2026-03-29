@@ -23,15 +23,16 @@ Mila runs on a trigger — a 5-minute QStash polling schedule hitting `/api/agen
 
 ```
 Step 1: Verify user + credentials (early return if fail)
-Step 2: Purge user-as-counterparty (user can't be their own counterparty)
-Steps 3 + 3.1 + 3.5 run IN PARALLEL (Promise.allSettled):
-  Step 3: Ingest inbound emails from Gmail (batched ×5)
-  Step 3.1: Ingest outbound emails from Gmail (batched ×5)
-  Step 3.5: Sync calendar events from Google Calendar, detect invitations
-Step 4: Get all unprocessed messages (email + WhatsApp)
-Step 5: Thread messages into conversations (Gmail thread ID → embedding similarity → AI tiebreak)
-Step 6: For each updated conversation → AI proposes one or more actions (e.g. REPLY + SCHEDULE + TODO from one email) (batched ×5). Can propose SNOOZE if waiting on third party.
-Step 7: Lead tracking — scan ALL conversations for cooling/cold/dead leads (batched ×10). Ignores conversations where current_date < snooze_until.
+Step 0: Purge user-as-counterparty (user can't be their own counterparty)
+Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
+  Step 2: Ingest inbound emails from Gmail (batched ×5, writes to messages + deal_timeline)
+  Step 2.1: Ingest outbound emails from Gmail (batched ×5, writes to messages + deal_timeline)
+  Step 2.5: Sync calendar events from Google Calendar, detect invitations
+Step 3: Get all unassigned timeline entries (deal_timeline WHERE conversation_id IS NULL)
+Step 4: Assign timeline entries to conversations (external thread ID → CP count → density heuristic → AI)
+Step 4.5: Force-rebuild conversation summaries
+Step 5: For each updated conversation → AI proposes actions using timeline context (includes calls, voice notes) (batched ×5)
+Step 6: Lead tracking — scan ALL conversations for cooling/cold/dead leads (batched ×10). Skips service CPs. Uses deal_timeline for activity detection.
 ```
 
 **Concurrency**: The pipeline uses a strict DB-level lock (user_agent_locks table) to prevent duplicate runs across Vercel serverless instances. Lock auto-expires after 10 minutes for crash safety. Aborts if DB lock fails.
@@ -140,11 +141,11 @@ Secondary channel. Architecture:
 WhatsApp messages flow through the same pipeline as email. The AI receives channel context and adjusts tone — shorter, more conversational for WhatsApp vs. formal for email.
 
 ## Lead Tracking
-The core anti-churn mechanism. Runs as Step 7 of every pipeline execution.
+The core anti-churn mechanism. Runs as Step 6 of every pipeline execution.
 
 ### How It Works
-1. Scans all conversations for the user
-2. Calculates days since last activity for each conversation
+1. Scans all conversations for the user. **Skips service CPs** (lawyers, notaries, photographers, etc.) — they don't "go cold."
+2. Calculates days since last activity using `deal_timeline` (includes phone calls and voice notes, not just email/WA)
 3. Classifies lead status:
    - **Active** (< 2 days) — no intervention
    - **Cooling** (2-5 days) — gentle check-in needed
@@ -179,18 +180,19 @@ All per-user configuration is stored in the `users.settings` JSONB column and co
 
 The `clientConfig` object in that file is legacy and not consumed at runtime.
 
-## Conversation Threading
+## Deal Timeline & Conversation Threading
 
-### Purpose
-Unified conversation tracking across channels, email threads, and senders. An email from Jan Novotny, a forwarded email from his assistant, and a WhatsApp from the same Jan — all about the same deal — land in ONE conversation. This is the core intelligence that lets Mila see the full picture.
+### Deal Timeline
+Every communication event between the user and a counterparty is written to `deal_timeline` — a single chronological table. Emails, WhatsApp messages, phone call logs, and voice notes all land here. This is the context source for conversation assignment, action proposals, lead tracking, and draft writing.
 
-Messages are assigned to conversations using a 3-tier strategy:
-1. **Gmail thread ID** (exact match on external_thread_id)
-2. **Embedding similarity** (cosine similarity against conversation embeddings for same counterparty)
-   - ≥ 0.78: auto-join (no AI needed)
-   - 0.55 - 0.78: AI tiebreak via `shouldJoinConversation()`
-   - < 0.55: create new conversation
-3. **WhatsApp**: threaded by phone number (`wa:+phone`)
+### Conversation Assignment
+Timeline entries are assigned to conversations using a 4-step algorithm:
+1. **External thread ID match (fast path)** — if the entry has a linked email message with a Gmail thread ID, match immediately. Works within same-channel email threads.
+2. **CP conversation count** — count active conversations for this CP. Zero = create new. One = assign immediately (most common case for retail deal CPs). Multiple = proceed to heuristic.
+3. **Density/recency heuristic** — count recent timeline entries per candidate conversation (15-minute window). A burst of activity in one conversation = assign without AI.
+4. **AI assignment** — feed recent timeline entries from each candidate conversation to the AI. AI picks the right conversation or says "NEW" to create a new one.
+
+This replaced the previous embedding-based approach (cosine similarity). The timeline algorithm handles cross-channel assignment (WhatsApp message finds its email conversation) more reliably because it uses comprehension, not vector similarity.
 
 Conversation summaries are rebuilt after N new messages. Each summary includes: current state, risks, next steps, key points.
 
