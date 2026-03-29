@@ -987,10 +987,23 @@ async function main() {
       )
       allGmailIds.push(...evaHistoryIds)
 
-      // Run agent once to process history — creates conversations + context
-      log('history', 'Running agent to process history emails...')
-      const historyRun = await runAgent(USER_ID, 'H0')
-      log('history', `History processed: ${historyRun.emailsIngested} emails, ${historyRun.conversationsUpdated} conversations`)
+      // Run bulk ingestion to process history — ingest, enrich, thread, summarize.
+      // NO action generation — history is context only, not new work.
+      log('history', 'Running bulk ingestion to process history emails...')
+      const sinceDate = new Date()
+      sinceDate.setDate(sinceDate.getDate() - 14) // cover all history emails
+      const bulkRes = await fetch(`${BASE_URL}/api/ingest/bulk`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': API_KEY },
+        body: JSON.stringify({ userId: USER_ID, since: sinceDate.toISOString(), maxTotal: 50 }),
+        signal: AbortSignal.timeout(300_000),
+      })
+      const bulkText = await bulkRes.text()
+      const bulkLines = bulkText.trim().split('\n').filter(Boolean)
+      for (const line of bulkLines.slice(-3)) {
+        log('history', `  ${line.trim()}`)
+      }
+      log('history', 'History processed via bulk ingestion (no actions generated)')
 
       // Brief pause for Gmail indexing before Round 1 emails
       await new Promise(r => setTimeout(r, 2000))
