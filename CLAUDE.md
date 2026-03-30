@@ -148,6 +148,22 @@ Pure functions used by multiple services. Extracted to prevent the circular regr
 
 **Why this exists**: Before extraction, planning.ts fell back to `conversation.last_updated` while lead-tracking.ts fell back to `conversation.created_at`. This divergence caused a fix-A-break-B cycle — fixing the calculation in one service left the other stale.
 
+## Agent Dispatcher (src/app/api/agent/dispatch/route.ts)
+A global QStash schedule (`*/5 * * * *`, schedule ID `scd_6hCJK1oH54Qa6jHLwRBHb2AiUtzL`) hits `GET /api/agent/dispatch` every 5 minutes. The dispatcher:
+
+1. Fetches all active users with credentials (single Supabase query via `getUsersWithEmailEnabled()`)
+2. Calls Gmail `history.list(startHistoryId)` per user in parallel batches of 100 — cost: 2 quota units per user
+3. For users with new mail: publishes a QStash message to `POST /api/agent/run` with staggered delivery (1s intervals to limit Supabase connections)
+4. Updates `last_checked_at` for all checked users, `last_activity_at` for users with new mail
+5. If >1000 users: chains to itself with `offset` param for the next page
+
+**Key fields** (on `users` table):
+- `gmail_history_id` — Gmail incremental sync cursor, written by agent run after successful ingestion
+- `last_checked_at` — last time dispatcher checked this user
+- `last_activity_at` — last time new mail was detected
+
+**Auth**: CRON_SECRET (same as other cron endpoints). **No per-user setup needed** — new users are automatically included.
+
 ## Agent Pipeline (src/services/agent.ts)
 ```
 Step 1: Verify user exists + has Google credentials (early return if fail)
@@ -205,7 +221,7 @@ Instead of reading these files, use this index:
 
 | File | Contents |
 |------|----------|
-| users.ts | getUserById, getUserByEmail, upsertUser, getUserSettings, updateUserSettings, getUsersWithEmailEnabled, getUsersDueBrief, updateUserGoogleTokens, getUserGoogleTokens |
+| users.ts | getUserById, getUserByEmail, upsertUser, getUserSettings, updateUserSettings, getUsersWithEmailEnabled, getUsersDueBrief, updateUserGoogleTokens, getUserGoogleTokens, updateUserHistoryId, updateUsersLastChecked, updateUsersLastActivity |
 | counterparties.ts | normalizeGmailAddress, isSameGmailAddress, purgeUserAsCp, getCPById, getCPByIdentifier, getCPsByIds, getCPsForUser, getCPByPhone, upsertCP, findOrCreateCP, updateCP, blacklistCP, getCPState, updateCPState |
 | conversations.ts | getConversationById, getConversationsForUser, createConversation, updateConversation, updateConversationSummary, incrementMessageCount, getMessagesForConversation, getRecentMessages, addParticipant, getParticipants, findConversationByExternalThread |
 | messages.ts | getMessageById, getMessageByExternalId, messageExists, createMessage, createMessages, updateMessage, getMessagesInRange, getUnprocessedMessages, assignMessageToConversation, getLatestMessageFromCP, countMessagesInConversation |
@@ -262,6 +278,8 @@ Skips conversations with existing pending actions. Caps at 3 auto follow-ups per
 Full schema reference (all tables, columns, deal property model, migrations): See docs/SCHEMA.md
 
 Key tables: users, cps, channels, conversation_threads, messages, deal_timeline, action_proposals, events, todos, emails, audit_logs, user_agent_locks. All tables have user_id — always filter by it in queries. The `channels` table maps channel UUIDs to types ('email', 'whatsapp', etc.) — `messages.channel_id` is a UUID FK to `channels.id`. The `deal_timeline` table is the chronological record of all CP interactions (emails, WhatsApp, calls, voice notes) — see Deal Timeline section below.
+
+The `users` table includes dispatcher fields: `gmail_history_id` (Gmail sync cursor, written by agent run), `last_checked_at` (last dispatcher poll), `last_activity_at` (last time new mail detected).
 
 Conversation statuses are stored in `conversation_threads.status`: active or archived. Snoozed deals remain active — `snooze_until` suppresses lead tracking temporarily, deal resumes normal monitoring on expiry.
 
@@ -575,7 +593,7 @@ User sends email to themselves with "Mila:" subject prefix → intercepted in in
 ### API Protection
 All API endpoints are protected by one of:
 - **API Key** (MILA_USER_API_KEY) — For /api/agent/run, /api/ingest, /api/ingest/bulk, /api/gdpr/*
-- **Cron Secret** (CRON_SECRET) — For /api/cron/*, /api/ingest/bulk/worker
+- **Cron Secret** (CRON_SECRET) — For /api/cron/*, /api/agent/dispatch, /api/ingest/bulk/worker
 - **Action Token** (HMAC-signed) — For /api/action/[id]/* (email links)
 - **Superadmin Key** — For /api/superadmin/*
 
@@ -671,6 +689,8 @@ Actions with urgency >= 9 get an immediate email notification (same action card 
 - **docs/WHATSAPP.md** — WhatsApp daemon API, message flow, scaling
 - **docs/COMMANDS.md** — Self-email command interface, supported commands, architecture
 - **docs/DEAL-TIMELINE-SPEC.md** — Unified Deal Timeline technical specification, migration SQL, conversation assignment algorithm, CP role tiers
+- **docs/DISPATCHER-SPEC.md** — Agent dispatcher architecture, Gmail history.list polling, QStash fan-out, scaling to 5000+ users
+- **docs/COST-ESTIMATE.md** — Per-user monthly cost breakdown, AI model assignments, scaling scenarios, cost reduction levers
 
 ## GDPR Compliance
 **Implementation**: `src/lib/db/gdpr.ts` — deleteAllUserData (FK-safe cascade across 13 tables), exportAllUserData, writeAuditLog (never throws), enforceRetentionPolicy.
@@ -689,6 +709,7 @@ All services use batched Promise.allSettled for fault isolation — one item's f
 
 | Service | Pattern | Concurrency | Notes |
 |---------|---------|-------------|-------|
+| dispatch/route.ts | Gmail history.list per user, QStash fan-out | 100 (check), 1/sec (publish) | Pages at 1000 users; staggered agent run delivery |
 | agent.ts | Steps 2/2.1/2.5 in parallel | 3 | Inbound, outbound, calendar are independent |
 | planning.ts | Conversations batched | 5 | Each involves an AI call (proposeAction) |
 | ingestion.ts | Emails batched (inbound + outbound) | 5 | classifyEmail AI call is the bottleneck |
