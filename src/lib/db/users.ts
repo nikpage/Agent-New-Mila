@@ -217,3 +217,53 @@ export async function updateUserSettings(
     throw new Error(`Failed to update settings: ${error.message}`)
   }
 }
+
+/**
+ * Update a user's Gmail historyId after a successful agent run.
+ */
+export async function updateUserHistoryId(
+  userId: string,
+  historyId: string
+): Promise<void> {
+  const supabase = getSupabaseAdmin()
+  const { error } = await supabase
+    .from('users')
+    .update({ gmail_history_id: historyId })
+    .eq('id', userId)
+
+  if (error) {
+    throw new Error(`Failed to update historyId: ${error.message}`)
+  }
+}
+
+/**
+ * Batch-update last_checked_at for multiple users.
+ */
+export async function updateUsersLastChecked(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return
+  const supabase = getSupabaseAdmin()
+  const { error } = await supabase
+    .from('users')
+    .update({ last_checked_at: new Date().toISOString() })
+    .in('id', userIds)
+
+  if (error) {
+    throw new Error(`Failed to update last_checked_at: ${error.message}`)
+  }
+}
+
+/**
+ * Batch-update last_activity_at for users with new mail.
+ */
+export async function updateUsersLastActivity(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return
+  const supabase = getSupabaseAdmin()
+  const { error } = await supabase
+    .from('users')
+    .update({ last_activity_at: new Date().toISOString() })
+    .in('id', userIds)
+
+  if (error) {
+    throw new Error(`Failed to update last_activity_at: ${error.message}`)
+  }
+}

@@ -547,6 +547,57 @@ function escapeICalText(text: string): string {
 }
 
 /**
+ * Check if a user has new Gmail activity since a given historyId.
+ * Returns { hasNew, historyId } — historyId is the latest one for future checks.
+ * If startHistoryId is null (first run), returns hasNew: true so the agent runs.
+ * Cost: 2 Gmail API quota units (cheapest read operation).
+ */
+export async function checkForNewMail(
+  userId: string,
+  startHistoryId: string | null,
+): Promise<{ hasNew: boolean; historyId: string | null }> {
+  if (!startHistoryId) {
+    // No stored historyId — first run or migration. Force agent run.
+    return { hasNew: true, historyId: null }
+  }
+
+  const gmail = await getGmailClient(userId)
+
+  try {
+    const response = await gmail.users.history.list({
+      userId: 'me',
+      startHistoryId,
+      historyTypes: ['messageAdded'],
+    })
+
+    const history = response.data.history || []
+    const latestHistoryId = response.data.historyId || startHistoryId
+
+    return {
+      hasNew: history.length > 0,
+      historyId: latestHistoryId,
+    }
+  } catch (error: unknown) {
+    // 404 means startHistoryId is too old (expired). Treat as "has new".
+    if (error && typeof error === 'object' && 'code' in error && (error as { code: number }).code === 404) {
+      return { hasNew: true, historyId: null }
+    }
+    throw error
+  }
+}
+
+/**
+ * Get the current Gmail historyId for a user (for bootstrapping).
+ * Calls getProfile which returns the latest historyId.
+ * Cost: 2 Gmail API quota units.
+ */
+export async function getCurrentHistoryId(userId: string): Promise<string | null> {
+  const gmail = await getGmailClient(userId)
+  const profile = await gmail.users.getProfile({ userId: 'me' })
+  return profile.data.historyId || null
+}
+
+/**
  * Gmail category labels that indicate non-primary mail.
  * Messages with these labels are skipped during bulk ingestion.
  */

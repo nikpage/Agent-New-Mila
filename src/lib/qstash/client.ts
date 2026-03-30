@@ -216,3 +216,64 @@ export async function deleteInstantNotifySchedule(
   const client = getClient()
   await client.schedules.delete(scheduleId)
 }
+
+// ─── Agent Dispatcher ─────────────────────────────────────────────────────────
+
+/**
+ * Create a global QStash schedule that triggers the agent dispatcher
+ * every 5 minutes to check all users for new Gmail activity.
+ */
+export async function createDispatcherSchedule(): Promise<string> {
+  const client = getClient()
+
+  const headers: Record<string, string> = {}
+  if (CRON_SECRET) {
+    headers['Authorization'] = `Bearer ${CRON_SECRET}`
+  }
+
+  const result = await client.schedules.create({
+    destination: `${APP_BASE_URL}/api/agent/dispatch`,
+    cron: '*/5 * * * *',
+    headers,
+  })
+
+  return result.scheduleId
+}
+
+/**
+ * Publish a single agent run to QStash with optional delay for staggering.
+ * Used by the dispatcher to fan out agent runs to users with new mail.
+ */
+export async function publishAgentRun(
+  userId: string,
+  delaySeconds?: number,
+): Promise<string> {
+  const client = getClient()
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  const apiKey = process.env['MILA_USER_API_KEY']
+  if (apiKey) {
+    headers['x-api-key'] = apiKey
+  }
+
+  const result = await client.publishJSON({
+    url: `${APP_BASE_URL}/api/agent/run`,
+    body: { userId },
+    headers,
+    ...(delaySeconds ? { delay: delaySeconds } : {}),
+  })
+
+  return result.messageId
+}
+
+/**
+ * Delete the agent dispatcher schedule.
+ */
+export async function deleteDispatcherSchedule(
+  scheduleId: string
+): Promise<void> {
+  const client = getClient()
+  await client.schedules.delete(scheduleId)
+}

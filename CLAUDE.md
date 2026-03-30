@@ -56,7 +56,8 @@ After making changes, run `npm test && npm run build` to verify nothing is broke
 ```
 src/
 ├── app/                        # Next.js App Router (pages + API routes)
-│   ├── api/agent/run/          # Main agent orchestration endpoint (polled every 5 mins via QStash)
+│   ├── api/agent/dispatch/     # Dispatcher — checks all users for new Gmail activity, fans out agent runs via QStash
+│   ├── api/agent/run/          # Main agent orchestration endpoint (triggered by dispatcher via QStash)
 │   ├── api/action/[id]/        # Action CRUD + execute/draft/todo/blacklist
 │   ├── api/auth/               # OAuth connect + callback
 │   ├── api/cron/morning-brief/ # Brief endpoint (called by QStash per-user schedules)

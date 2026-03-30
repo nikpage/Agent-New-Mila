@@ -11,7 +11,8 @@ import { trackLeadsForUser } from './lead-tracking'
 import { runReflection } from './reflection'
 import { getUnassignedTimelineEntries } from '@/lib/db/timeline'
 import { getConversationsForUser } from '@/lib/db/conversations'
-import { getUserById, updateUserSettings } from '@/lib/db/users'
+import { getUserById, updateUserSettings, updateUserHistoryId } from '@/lib/db/users'
+import { getCurrentHistoryId } from '@/lib/google/gmail'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
 import { getActiveJournalEntries, expireTemporalEntries } from '@/lib/db/journal'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
@@ -171,6 +172,18 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     }
     console.log(`[Agent] Steps 2/2.1/2.5 completed in ${(parallelMs / 1000).toFixed(1)}s`)
 
+    // Save Gmail historyId for dispatcher's incremental check.
+    // Done after ingestion so the dispatcher knows where we left off.
+    try {
+      const historyId = await getCurrentHistoryId(userId)
+      if (historyId) {
+        await updateUserHistoryId(userId, historyId)
+      }
+    } catch (historyErr) {
+      // Non-fatal — dispatcher will treat missing historyId as "has changes"
+      console.error('[Agent] Failed to save Gmail historyId:', historyErr instanceof Error ? historyErr.message : historyErr)
+    }
+
     // Step 3: Get all unprocessed messages (including newly ingested + WhatsApp)
     // Steps 3-5 depend on each other but are isolated from steps 2/2.5/6
     try {
@@ -289,14 +302,5 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
   return result
 }
 
-/**
- * Run the agent for all active users
- */
-export async function runAgentForAllUsers(): Promise<Map<string, AgentRunResult>> {
-  const results = new Map<string, AgentRunResult>()
-
-  // This would get all users with email enabled and run the agent for each
-  // For now, this is a placeholder
-
-  return results
-}
+// runAgentForAllUsers removed — replaced by /api/agent/dispatch endpoint
+// which uses Gmail history.list to check for new mail and fans out via QStash.
