@@ -17,7 +17,7 @@ Stored in `users.settings` column. Accessed via `getUserSettings(userId)`.
 
 ## Core Tables
 
-**`users`** — id, email, mila_name, public_name, email_timezone, email_enabled, email_unsubscribed, settings (jsonb), google_oauth_tokens (jsonb), encrypted_google_tokens (text), created_at
+**`users`** — id, email, mila_name, public_name, email_timezone, email_enabled, email_unsubscribed, settings (jsonb), google_oauth_tokens (jsonb), encrypted_google_tokens (text), gmail_history_id (text), last_checked_at (timestamptz), last_activity_at (timestamptz), created_at
 
 **`cps`** (counterparties) — id, user_id, name, primary_identifier, other_identifiers (jsonb), role, locations (jsonb), is_blacklisted, created_at
 
@@ -114,6 +114,16 @@ CREATE INDEX idx_messages_enriched_null
 ALTER TABLE events ADD COLUMN conversation_id uuid REFERENCES conversation_threads(id) ON DELETE SET NULL;
 CREATE INDEX idx_events_conversation ON events(conversation_id) WHERE conversation_id IS NOT NULL;
 ```
+
+### Agent Dispatcher (users table)
+```sql
+ALTER TABLE users ADD COLUMN gmail_history_id text;
+ALTER TABLE users ADD COLUMN last_checked_at timestamptz;
+ALTER TABLE users ADD COLUMN last_activity_at timestamptz;
+```
+- `gmail_history_id` — Gmail incremental sync cursor, written by agent run after successful ingestion
+- `last_checked_at` — updated by dispatcher on every poll
+- `last_activity_at` — updated by dispatcher when new mail is detected
 
 ### Deal Timeline
 See `migrations/001_deal_timeline.sql` for the full CREATE TABLE + indexes + RLS policy.
