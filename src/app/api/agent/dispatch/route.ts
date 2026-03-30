@@ -29,7 +29,7 @@ const STAGGER_INTERVAL_SEC = 1
  */
 const PAGE_SIZE = 1000
 
-export async function GET(request: NextRequest) {
+export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get('authorization')
     const token = authHeader?.replace('Bearer ', '')
