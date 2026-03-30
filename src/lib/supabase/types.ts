@@ -307,6 +307,8 @@ export interface Database {
           offer_multiplier: number | null
           queued_for_brief: boolean | null
           last_notified_at: string | null
+          original_draft_body: string | null
+          original_intent_cs: string | null
           created_at: string
         }
         Insert: {
@@ -331,6 +333,8 @@ export interface Database {
           offer_multiplier?: number | null
           queued_for_brief?: boolean | null
           last_notified_at?: string | null
+          original_draft_body?: string | null
+          original_intent_cs?: string | null
           created_at?: string
         }
         Update: {
@@ -355,6 +359,8 @@ export interface Database {
           offer_multiplier?: number | null
           queued_for_brief?: boolean | null
           last_notified_at?: string | null
+          original_draft_body?: string | null
+          original_intent_cs?: string | null
           created_at?: string
         }
       }
@@ -577,6 +583,62 @@ export interface Database {
           expires_at?: string
         }
       }
+      journal_entries: {
+        Row: {
+          id: string
+          user_id: string
+          scope: string
+          scope_ref: string | null
+          type: string
+          topic: string
+          content: string
+          confirm_count: number
+          conflict_count: number
+          weight: number
+          recency_score: number | null
+          language: string
+          expires_at: string | null
+          is_stale: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          scope: string
+          scope_ref?: string | null
+          type?: string
+          topic: string
+          content: string
+          confirm_count?: number
+          conflict_count?: number
+          weight?: number
+          recency_score?: number | null
+          language?: string
+          expires_at?: string | null
+          is_stale?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          scope?: string
+          scope_ref?: string | null
+          type?: string
+          topic?: string
+          content?: string
+          confirm_count?: number
+          conflict_count?: number
+          weight?: number
+          recency_score?: number | null
+          language?: string
+          expires_at?: string | null
+          is_stale?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
       deal_timeline: {
         Row: {
           id: string
@@ -651,6 +713,8 @@ export type AuditLog = Database['public']['Tables']['audit_logs']['Row']
 export type UserAgentLock = Database['public']['Tables']['user_agent_locks']['Row']
 export type DealTimelineEntry = Database['public']['Tables']['deal_timeline']['Row']
 export type DealTimelineInsert = Database['public']['Tables']['deal_timeline']['Insert']
+export type JournalEntry = Database['public']['Tables']['journal_entries']['Row']
+export type JournalEntryInsert = Database['public']['Tables']['journal_entries']['Insert']
 
 // Insert types
 export type UserInsert = Database['public']['Tables']['users']['Insert']
@@ -764,6 +828,12 @@ export interface UserSettings {
   // QStash schedule IDs (managed automatically)
   qstash_morning_schedule_id: string | null
   qstash_afternoon_schedule_id: string | null
+
+  // Journal & Learning
+  last_reflection_at: string | null
+  belief_audit_schedule_id: string | null
+  belief_audit_created_at: string | null
+  onboarding_seed_count: number
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -856,6 +926,12 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   // QStash schedule IDs
   qstash_morning_schedule_id: null,
   qstash_afternoon_schedule_id: null,
+
+  // Journal & Learning
+  last_reflection_at: null,
+  belief_audit_schedule_id: null,
+  belief_audit_created_at: null,
+  onboarding_seed_count: 0,
 }
 
 // Conversation summary JSON structure

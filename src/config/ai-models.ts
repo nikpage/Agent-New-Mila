@@ -13,6 +13,11 @@ export type AIStage =
   | 'analysis'
   | 'planning'
   | 'drafting'
+  | 'reflection'
+  | 'draft_edit'
+  | 'contradiction_analysis'
+  | 'contradiction_escalation'
+  | 'belief_audit'
 
 export interface ModelChain {
   primary: string
@@ -75,5 +80,45 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
     primary: 'gemini-2.5-flash',
     fallback1: 'claude-sonnet-4-6',
     fallback2: null,
+  },
+
+  // Reflection — journal observation extraction (Haiku primary for reliable Czech)
+  reflection: {
+    primary: 'claude-haiku-4-5-20251001',
+    fallback1: 'claude-sonnet-4-6',
+    fallback2: null,
+    temperature: 0,
+  },
+
+  // Draft edit — gap-fill + spell/grammar on user save (Haiku primary for reliable Czech)
+  draft_edit: {
+    primary: 'claude-haiku-4-5-20251001',
+    fallback1: 'claude-sonnet-4-6',
+    fallback2: null,
+    temperature: 0,
+  },
+
+  // Contradiction analysis — resolve conflicting beliefs (thinking enabled)
+  contradiction_analysis: {
+    primary: 'claude-sonnet-4-6',
+    fallback1: 'gemini-2.5-flash',
+    fallback2: null,
+    thinkingBudget: 4096,
+  },
+
+  // Contradiction escalation — Opus fallback for unresolved contradictions
+  contradiction_escalation: {
+    primary: 'claude-opus-4-6',
+    fallback1: 'claude-sonnet-4-6',
+    fallback2: null,
+    thinkingBudget: 8192,
+  },
+
+  // Belief audit — monthly/quarterly full belief review
+  belief_audit: {
+    primary: 'claude-opus-4-6',
+    fallback1: 'claude-sonnet-4-6',
+    fallback2: null,
+    thinkingBudget: 8192,
   },
 }

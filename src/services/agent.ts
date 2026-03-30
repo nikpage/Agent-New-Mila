@@ -8,12 +8,14 @@ import { processTimelineEntries, rebuildConversationSummary } from './threading'
 import { generateActionsForConversations } from './planning'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { trackLeadsForUser } from './lead-tracking'
+import { runReflection } from './reflection'
 import { getUnassignedTimelineEntries } from '@/lib/db/timeline'
 import { getConversationsForUser } from '@/lib/db/conversations'
-import { getUserById } from '@/lib/db/users'
+import { getUserById, updateUserSettings } from '@/lib/db/users'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
+import { getActiveJournalEntries, expireTemporalEntries } from '@/lib/db/journal'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
-import type { ActionProposal } from '@/lib/supabase/types'
+import type { ActionProposal, JournalEntry } from '@/lib/supabase/types'
 
 export interface AgentRunResult {
   success: boolean
@@ -27,6 +29,8 @@ export interface AgentRunResult {
   followUpsGenerated: number
   coolingLeads: number
   coldLeads: number
+  reflectionObservations: number
+  replyDraftsGenerated: number
   actions: ActionProposal[]
   errors: string[]
   logs: string[]
@@ -78,6 +82,8 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     followUpsGenerated: 0,
     coolingLeads: 0,
     coldLeads: 0,
+    reflectionObservations: 0,
+    replyDraftsGenerated: 0,
     actions: [],
     errors: [],
     logs,
@@ -107,6 +113,18 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     } catch (purgeError) {
       console.error('[Agent] Step 0: Purge error:', purgeError)
       result.errors.push(`Purge: ${purgeError instanceof Error ? purgeError.message : 'Unknown error'}`)
+    }
+
+    // Step 0.5: Load journal context for this cycle
+    let journalEntries: JournalEntry[] = []
+    try {
+      console.log(`[Agent] Step 0.5: Loading journal entries + expiring temporal`)
+      journalEntries = await getActiveJournalEntries(userId, { limit: 50 })
+      const expired = await expireTemporalEntries()
+      console.log(`[Agent] Step 0.5: ${journalEntries.length} active entries, ${expired} temporal expired`)
+    } catch (journalError) {
+      console.error('[Agent] Step 0.5: Journal load error:', journalError)
+      result.errors.push(`Journal: ${journalError instanceof Error ? journalError.message : 'Unknown error'}`)
     }
 
     // Steps 2, 2.1, 2.5 are INDEPENDENT ingestion steps — run in parallel.
@@ -245,6 +263,19 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     } catch (leadError) {
       console.error('[Agent] Step 6 FAILED:', leadError instanceof Error ? leadError.message : leadError)
       result.errors.push(`Lead tracking: ${leadError instanceof Error ? leadError.message : 'Unknown error'}`)
+    }
+
+    // Step 7: Reflection — observe patterns, write to journal
+    try {
+      console.log(`[Agent] Step 7: Running reflection`)
+      const reflectionResult = await runReflection(userId)
+      result.reflectionObservations = reflectionResult.observationsWritten
+      await updateUserSettings(userId, { last_reflection_at: new Date().toISOString() })
+      console.log(`[Agent] Step 7: Reflection complete — ${reflectionResult.observationsWritten} observations`)
+    } catch (err) {
+      console.error(`[Agent] Step 7: Reflection failed —`, err)
+      result.errors.push(`Reflection: ${err instanceof Error ? err.message : 'Unknown error'}`)
+      // Non-fatal: don't fail the pipeline
     }
 
     result.success = true

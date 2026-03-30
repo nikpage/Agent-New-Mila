@@ -251,6 +251,26 @@ describe('DEFAULT_USER_SETTINGS — Full Snapshot', () => {
   })
 
   // -------------------------------------------------------------------------
+  // Journal & Learning
+  // -------------------------------------------------------------------------
+
+  it('last_reflection_at = null', () => {
+    expect(DEFAULT_USER_SETTINGS.last_reflection_at).toBeNull()
+  })
+
+  it('belief_audit_schedule_id = null', () => {
+    expect(DEFAULT_USER_SETTINGS.belief_audit_schedule_id).toBeNull()
+  })
+
+  it('belief_audit_created_at = null', () => {
+    expect(DEFAULT_USER_SETTINGS.belief_audit_created_at).toBeNull()
+  })
+
+  it('onboarding_seed_count = 0', () => {
+    expect(DEFAULT_USER_SETTINGS.onboarding_seed_count).toBe(0)
+  })
+
+  // -------------------------------------------------------------------------
   // Business context defaults (empty — filled per user)
   // -------------------------------------------------------------------------
 
@@ -283,6 +303,6 @@ describe('DEFAULT_USER_SETTINGS — Full Snapshot', () => {
   it('has exactly the expected number of fields', () => {
     const fieldCount = Object.keys(DEFAULT_USER_SETTINGS).length
     // If you add a new field to UserSettings, add a test above AND update this count
-    expect(fieldCount).toBe(59)
+    expect(fieldCount).toBe(63)
   })
 })

@@ -35,8 +35,21 @@ vi.mock('./lead-tracking', () => ({
   }),
 }))
 
+vi.mock('./reflection', () => ({
+  runReflection: vi.fn().mockResolvedValue({ observationsWritten: 0 }),
+}))
+
 vi.mock('@/lib/db/timeline', () => ({
   getUnassignedTimelineEntries: vi.fn().mockResolvedValue([]),
+}))
+
+vi.mock('@/lib/db/counterparties', () => ({
+  purgeUserAsCp: vi.fn().mockResolvedValue(0),
+}))
+
+vi.mock('@/lib/db/journal', () => ({
+  getActiveJournalEntries: vi.fn().mockResolvedValue([]),
+  expireTemporalEntries: vi.fn().mockResolvedValue(0),
 }))
 
 vi.mock('@/lib/db/users', () => ({
@@ -45,10 +58,7 @@ vi.mock('@/lib/db/users', () => ({
     email: 'test@test.com',
     google_oauth_tokens: { access_token: 'token' },
   }),
-}))
-
-vi.mock('@/lib/db/counterparties', () => ({
-  purgeUserAsCp: vi.fn().mockResolvedValue(0),
+  updateUserSettings: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/lib/db/conversations', () => ({
