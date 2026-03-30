@@ -303,19 +303,22 @@ sellerMultiplier and urgency fall back to 1 if 0/null to prevent score collapse.
 ## AI Architecture
 
 ### Model Configuration
-7 pipeline stages, each with a 2-model fallback chain:
+12 pipeline stages, each with a 2-model fallback chain. **Rule**: structured JSON output → Gemini primary. Czech prose output → Claude primary.
 
-| Stage | Purpose |
-|-------|---------|
-| preFilter | Spam/junk detection (cheapest model) |
-| classify | Email category + priority |
-| enrichment | Per-message key info extraction |
-| threading | Topic extraction, conversation joining |
-| analysis | Conversation analysis (state, risks, next steps) |
-| planning | Action proposal (type, rationale, intent) |
-| drafting | Final draft generation, morning brief headline |
-
-Current chain: preFilter/classify use gemini-2.5-flash-lite primary; all other stages use gemini-2.5-flash. Fallbacks currently repeat the same model (no cross-model redundancy).
+| Stage | Purpose | Primary → Fallback |
+|-------|---------|-------------------|
+| filter | Spam/junk detection | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
+| classify | Email category + priority | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
+| enrichment | Per-message key info extraction | gemini-2.5-flash → claude-haiku-4-5-20251001 |
+| threading | Topic extraction, conversation joining | gemini-2.5-flash → claude-sonnet-4-6 |
+| analysis | Conversation analysis (state, risks, next steps) | gemini-2.5-flash → claude-sonnet-4-6 |
+| planning | Action proposal (type, rationale, intent) | claude-haiku-4-5-20251001 → gemini-2.5-flash |
+| drafting | Final draft generation, morning brief headline | claude-sonnet-4-6 → gemini-2.5-flash |
+| reflection | Journal observation extraction | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
+| draft_edit | Gap fill + spell/grammar on save | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
+| contradiction_analysis | Resolve conflicting beliefs | claude-sonnet-4-6 → gemini-2.5-flash |
+| contradiction_escalation | Opus fallback for unresolved contradictions | claude-opus-4-6 → claude-sonnet-4-6 |
+| belief_audit | Monthly/quarterly full belief review | claude-opus-4-6 → claude-sonnet-4-6 |
 
 **Runner** (`src/lib/ai/runner.ts`): `runAITask(stage, prompt)` auto-cascades on failure, logs which model succeeded.
 

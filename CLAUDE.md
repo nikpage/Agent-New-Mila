@@ -325,9 +325,11 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 **Wiring**: Both `planning.ts` and `lead-tracking.ts` import `selectOfferMultiplier` and `computeDaysIgnored` from `@/shared/scoring` — never from each other. Both import `getLatestInboundFromCP` from `@/lib/db/timeline` for activity detection (replaces the old `getLatestMessageFromCP` from messages). Both pass sellerMultiplier (from CP role), kcHighValue (from user settings), and daysIgnored (from shared computation) to `calculatePriorityScore()`. `planning.ts` additionally passes weight (from AI response). Lead tracking passes no boost multipliers — escalation is handled entirely by daysIgnored^1.5 via the main formula.
 
 ## AI Model Configuration
-**Config**: `src/config/ai-models.ts` — 7 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
+**Config**: `src/config/ai-models.ts` — 12 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
 
 **Runner**: `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, retries 429s with exponential backoff (1s, 2s, 4s), logs which model succeeded.
+
+**Model selection rule**: Structured JSON output → Gemini. Czech prose output → Claude. This ensures reliable Czech text generation.
 
 | Stage | Purpose | Primary → Fallback1 → Fallback2 |
 |-------|---------|--------------------------------|
@@ -336,8 +338,13 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 | enrichment | Per-message key info extraction | gemini-2.5-flash → claude-haiku-4-5-20251001 |
 | threading | extractTopic, shouldJoinConversation | gemini-2.5-flash → claude-sonnet-4-6 |
 | analysis | analyzeConversation | gemini-2.5-flash → claude-sonnet-4-6 |
-| planning | proposeAction (type, rationale, intent) | gemini-2.5-flash → claude-sonnet-4-6 |
-| drafting | All mila-voice.ts functions (generateFinalDraft, generateBriefIntro, generateSchedulingIntent, generateLeadFollowUpIntent, generateUrgentIntro) | gemini-2.5-flash → claude-sonnet-4-6 |
+| planning | proposeAction (type, rationale, intent) | claude-haiku-4-5-20251001 → gemini-2.5-flash |
+| drafting | All mila-voice.ts functions (generateFinalDraft, generateBriefIntro, generateSchedulingIntent, generateLeadFollowUpIntent, generateUrgentIntro) | claude-sonnet-4-6 → gemini-2.5-flash |
+| reflection | Journal observation extraction | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
+| draft_edit | Gap fill + spell/grammar on save | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
+| contradiction_analysis | Resolve conflicting beliefs | claude-sonnet-4-6 → gemini-2.5-flash |
+| contradiction_escalation | Opus fallback for unresolved contradictions | claude-opus-4-6 → claude-sonnet-4-6 |
+| belief_audit | Monthly/quarterly full belief review | claude-opus-4-6 → claude-sonnet-4-6 |
 
 **Rate limit handling**: On 429/RESOURCE_EXHAUSTED errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
 

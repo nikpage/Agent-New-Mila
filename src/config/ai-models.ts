@@ -69,16 +69,16 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
 
   // Planning — proposeAction (thinking enabled for complex multi-action reasoning)
   planning: {
-    primary: 'gemini-2.5-flash',
-    fallback1: 'claude-sonnet-4-6',
+    primary: 'claude-haiku-4-5-20251001',
+    fallback1: 'gemini-2.5-flash',
     fallback2: null,
     thinkingBudget: 8192,
   },
 
   // Drafting — generateFinalDraft, generateBriefHeadline
   drafting: {
-    primary: 'gemini-2.5-flash',
-    fallback1: 'claude-sonnet-4-6',
+    primary: 'claude-sonnet-4-6',
+    fallback1: 'gemini-2.5-flash',
     fallback2: null,
   },
 

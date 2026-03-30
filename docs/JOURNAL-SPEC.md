@@ -923,8 +923,8 @@ export * from './journal'
 | enrichment | Message extraction | gemini-2.5-flash | claude-haiku-4-5-20251001 | 0 | — |
 | threading | Conversation grouping | gemini-2.5-flash | claude-sonnet-4-6 | 0 | — |
 | analysis | Conversation summary | gemini-2.5-flash | claude-sonnet-4-6 | — | — |
-| planning | Action proposals | gemini-2.5-flash | claude-sonnet-4-6 | — | 8192 |
-| drafting | Email/message drafting | gemini-2.5-flash | claude-sonnet-4-6 | — | — |
+| planning | Action proposals | claude-haiku-4-5-20251001 | gemini-2.5-flash | — | 8192 |
+| drafting | Email/message drafting | claude-sonnet-4-6 | gemini-2.5-flash | — | — |
 | **reflection** | **Journal observations** | **claude-haiku-4-5-20251001** | **claude-sonnet-4-6** | **0** | **—** |
 | **draft_edit** | **Gap fill + grammar** | **claude-haiku-4-5-20251001** | **claude-sonnet-4-6** | **0** | **—** |
 | **contradiction_analysis** | **Resolve conflicts** | **claude-sonnet-4-6** | **gemini-2.5-flash** | **—** | **4096** |
