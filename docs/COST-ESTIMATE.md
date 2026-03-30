@@ -3,13 +3,31 @@
 ## Assumptions
 
 - **20 emails/day** (~10 inbound, ~10 outbound)
+- **20 WhatsApp messages/day**
+- **20 phone notes/day**
+- **Total: 60 messages/day, ~30 per run**
 - **2 agent runs/day** (aligned with AM/PM briefs)
-- **~10 new emails per run** (half the daily volume)
-- **~5 actionable emails per run** (rest filtered/skipped)
-- **~5 conversations updated per run**
-- **1-2 SCHEDULE actions per day** (not every user, every day)
+- **~8 conversations updated per run** (30 messages across ~8 active deals)
+- **1-2 SCHEDULE actions per day**
 - **1-3 cooling/cold leads flagged per run**
 - **30 days/month**
+
+### AI Model Assignments
+
+| Stage | Model | Reason |
+|-------|-------|--------|
+| filter | Gemini Flash Lite | structured output |
+| classify | Gemini Flash Lite | structured output |
+| enrichment | Gemini Flash | structured JSON |
+| threading | Gemini Flash | structured output |
+| analysis | Gemini Flash | structured JSON |
+| planning | Claude Sonnet | Czech prose (intent_cs) |
+| drafting | Claude Sonnet | Czech prose to user |
+| reflection | Claude Haiku | Czech prose to journal |
+| draft_edit | Claude Haiku | Czech prose to user |
+| contradiction_analysis | Claude Sonnet | Czech reasoning |
+| contradiction_escalation | Claude Opus | Czech reasoning (rare) |
+| belief_audit | Claude Opus | Czech reasoning (monthly) |
 
 ---
 
@@ -59,81 +77,88 @@ At 5000 users: ~1.6M quota units/day. Well within the 1B/day project quota.
 
 ## 4. AI — Gemini (Per Agent Run)
 
+Gemini handles filter, classify, enrichment, threading, analysis, and embeddings.
+
 ### Token estimates per call
 
 | Stage | Model | Input tokens | Output tokens | Calls/run |
 |-------|-------|-------------|--------------|-----------|
-| filter | gemini-2.5-flash-lite | ~500 | ~50 | ~10 |
-| classify | gemini-2.5-flash-lite | ~1,500 | ~200 | ~8 |
-| enrichment | gemini-2.5-flash | ~3,500 | ~300 | ~10 |
-| threading (topic + assign) | gemini-2.5-flash | ~2,000 | ~200 | ~2 |
-| analysis (conversation summary) | gemini-2.5-flash | ~4,000 | ~500 | ~5 |
-| planning (proposeAction + thinking) | gemini-2.5-flash | ~4,000 | ~1,000 + 8,192 thinking | ~5 |
-| drafting (brief intro) | gemini-2.5-flash | ~1,000 | ~200 | 1 |
-| drafting (lead follow-up) | gemini-2.5-flash | ~2,000 | ~300 | ~2 |
-| drafting (scheduling intent) | gemini-2.5-flash | ~2,000 | ~300 | ~1 |
-| embeddings | gemini-embedding-001 | ~500 | N/A | ~15 |
+| filter | gemini-2.5-flash-lite | ~500 | ~50 | ~10 (emails only) |
+| classify | gemini-2.5-flash-lite | ~1,500 | ~200 | ~8 (emails only, post-filter) |
+| enrichment | gemini-2.5-flash | ~3,500 | ~300 | ~30 (all message types) |
+| threading (topic + assign) | gemini-2.5-flash | ~2,000 | ~200 | ~5 |
+| analysis (conversation summary) | gemini-2.5-flash | ~4,000 | ~500 | ~8 |
+| embeddings | gemini-embedding-001 | ~500 | N/A | ~38 (30 message + 8 conversation) |
 
-### Gemini pricing (as of early 2025 — verify current rates)
+### Gemini pricing (approximate — verify current rates)
 
-| Model | Input (per 1M tokens) | Output (per 1M tokens) | Thinking (per 1M tokens) |
-|-------|----------------------|----------------------|------------------------|
-| gemini-2.5-flash-lite | $0.075 | $0.30 | N/A |
-| gemini-2.5-flash | $0.15 | $0.60 | $0.70 (thinking) |
-| gemini-embedding-001 | Free or ~$0.00015/1K chars | N/A | N/A |
-
-**NOTE**: Gemini pricing changes frequently. These numbers are approximate — verify against current Google AI pricing page before making decisions.
+| Model | Input (per 1M tokens) | Output (per 1M tokens) |
+|-------|----------------------|----------------------|
+| gemini-2.5-flash-lite | $0.075 | $0.30 |
+| gemini-2.5-flash | $0.15 | $0.60 |
+| gemini-embedding-001 | Free or ~$0.00015/1K chars | N/A |
 
 ### Per-run Gemini cost estimate
 
-| Stage | Input cost | Output cost | Thinking cost | Total/run |
-|-------|-----------|-------------|---------------|-----------|
-| filter (10× flash-lite) | $0.000375 | $0.000150 | — | $0.000525 |
-| classify (8× flash-lite) | $0.000900 | $0.000480 | — | $0.001380 |
-| enrichment (10× flash) | $0.005250 | $0.001800 | — | $0.007050 |
-| threading (2× flash) | $0.000600 | $0.000240 | — | $0.000840 |
-| analysis (5× flash) | $0.003000 | $0.001500 | — | $0.004500 |
-| planning (5× flash + thinking) | $0.003000 | $0.003000 | $0.028672 | $0.034672 |
-| drafting (4× flash) | $0.001200 | $0.000660 | — | $0.001860 |
-| embeddings (15×) | ~$0.000100 | — | — | $0.000100 |
+| Stage | Input cost | Output cost | Total/run |
+|-------|-----------|-------------|-----------|
+| filter (10× flash-lite) | $0.000375 | $0.000150 | $0.000525 |
+| classify (8× flash-lite) | $0.000900 | $0.000480 | $0.001380 |
+| enrichment (30× flash) | $0.015750 | $0.005400 | $0.021150 |
+| threading (5× flash) | $0.001500 | $0.000600 | $0.002100 |
+| analysis (8× flash) | $0.004800 | $0.002400 | $0.007200 |
+| embeddings (38×) | ~$0.000200 | — | $0.000200 |
 
-**Gemini cost per run: ~$0.051**
-**Gemini cost per day (2 runs): ~$0.102**
-**Gemini cost per month: ~$3.06**
-
-**Planning stage (proposeAction with thinking tokens) is ~68% of the total Gemini cost.**
+**Gemini cost per run: ~$0.033**
+**Gemini cost per day (2 runs): ~$0.065**
+**Gemini cost per month: ~$1.95**
 
 ---
 
 ## 5. AI — Anthropic Claude (Per Agent Run)
 
-Claude is fallback for most stages but primary for reflection.
+Claude handles planning, drafting, reflection, and rare escalation stages.
 
-| Stage | Model | Calls/run | Input tokens | Output tokens |
-|-------|-------|-----------|-------------|--------------|
-| reflection | claude-haiku-4-5 | 1 | ~3,000 | ~500 |
-| draft_edit (user-triggered) | claude-haiku-4-5 | ~0.5/day avg | ~2,000 | ~300 |
-| Gemini fallback (occasional) | claude-haiku-4-5 or claude-sonnet-4-6 | ~0-2/run | varies | varies |
-
-### Claude pricing
+### Claude pricing (approximate — verify current rates)
 
 | Model | Input (per 1M tokens) | Output (per 1M tokens) |
 |-------|----------------------|----------------------|
 | claude-haiku-4-5 | $0.80 | $4.00 |
 | claude-sonnet-4-6 | $3.00 | $15.00 |
+| claude-opus-4-6 | $15.00 | $75.00 |
 
-**NOTE**: Verify against current Anthropic pricing page.
+### Per-run Claude calls
 
-### Per-day Claude cost estimate
+| Stage | Model | Calls/run | Input tokens | Output tokens |
+|-------|-------|-----------|-------------|--------------|
+| planning (proposeAction) | sonnet | ~8 | ~4,000 | ~1,000 |
+| drafting (brief intro + lead follow-ups + scheduling) | sonnet | ~5 | ~2,000 | ~300 |
+| reflection | haiku | 1 | ~3,000 | ~500 |
+| draft_edit (user-triggered) | haiku | ~0.5/day avg | ~2,000 | ~300 |
 
-| Stage | Cost/call | Calls/day | Total/day |
-|-------|-----------|-----------|-----------|
-| reflection (haiku) | $0.0044 | 2 | $0.0088 |
-| draft_edit (haiku, user-triggered) | $0.0028 | ~0.5 | $0.0014 |
-| Fallback (assume 2 haiku/day) | $0.0044 | 2 | $0.0088 |
+### Per-run Claude cost estimate
 
-**Claude cost per day: ~$0.019**
-**Claude cost per month: ~$0.57**
+| Stage | Input cost | Output cost | Total/run |
+|-------|-----------|-------------|-----------|
+| planning (8× sonnet) | $0.096 | $0.120 | $0.216 |
+| drafting (5× sonnet) | $0.030 | $0.023 | $0.053 |
+| reflection (1× haiku) | $0.002 | $0.002 | $0.004 |
+
+**Claude cost per run: ~$0.273**
+**Claude cost per day (2 runs + ~0.5 draft_edit): ~$0.549**
+**Claude cost per month: ~$16.47**
+
+**Planning on Sonnet is 79% of Claude cost and 70% of total AI cost.**
+
+### Rare Claude stages (not per-run)
+
+| Stage | Model | Frequency | Est. cost/month |
+|-------|-------|-----------|----------------|
+| contradiction_analysis | sonnet | ~2-4/month | ~$0.10 |
+| contradiction_escalation | opus | ~0-1/month | ~$0.15 |
+| belief_audit | opus | ~1/quarter | ~$0.05 |
+
+These are negligible in the monthly total.
 
 ---
 
@@ -197,27 +222,50 @@ At 5000 users: 600K messages/month = ~$6/month total = **$0.001/user/month**
 
 | Category | Cost/user/month | % of total |
 |----------|----------------|-----------|
-| **Gemini AI** | **$3.06** | **56%** |
-| **Vercel compute** | **$0.94** | **17%** |
-| **Google Maps** | **$0.75** | **14%** |
-| **Claude AI** | **$0.57** | **10%** |
+| **Claude AI (planning + drafting)** | **$16.47** | **81%** |
+| **Gemini AI (filter→analysis)** | **$1.95** | **10%** |
+| **Vercel compute** | **$0.94** | **5%** |
+| **Google Maps** | **$0.75** | **4%** |
 | Gmail/Calendar API | $0.00 | 0% |
 | QStash | ~$0.00 | 0% |
 | Supabase (shared) | ~$0.03 | <1% |
 | Dispatcher overhead | ~$0.00 | 0% |
-| **TOTAL** | **~$5.35** | |
+| **TOTAL** | **~$20.14** | |
 
 ---
 
-## Scaling Scenarios
+## Cost Sensitivity: Planning Model Choice
+
+Planning is 70% of total cost. The model choice here dominates everything:
+
+| Planning model | Planning cost/month | Total cost/month | Difference |
+|---------------|-------------------|-----------------|-----------|
+| **Sonnet** | $12.96 | **$20.14** | baseline |
+| **Haiku** | $1.30 | **$8.48** | -58% |
+
+Haiku would bring total cost under $10/user/month. Whether it can handle the planning task (deal assessment, urgency, dollar value estimation, Czech prose) needs testing with real conversations.
+
+---
+
+## Scaling Scenarios (with Sonnet planning)
 
 | Users | AI cost | Vercel | Maps | Total/month | Per user |
 |-------|---------|--------|------|-------------|----------|
-| 10 | $36 | $20 (Pro base) | $8 | ~$64 | $6.40 |
-| 100 | $363 | $114 | $75 | ~$552 | $5.52 |
-| 500 | $1,815 | $490 | $375 | ~$2,680 | $5.36 |
-| 1,000 | $3,630 | $960 | $750 | ~$5,340 | $5.34 |
-| 5,000 | $18,150 | $4,700 | $3,750 | ~$26,600 | $5.32 |
+| 10 | $184 | $20 (Pro base) | $8 | ~$212 | $21.20 |
+| 100 | $1,842 | $114 | $75 | ~$2,031 | $20.31 |
+| 500 | $9,210 | $490 | $375 | ~$10,075 | $20.15 |
+| 1,000 | $18,420 | $960 | $750 | ~$20,130 | $20.13 |
+| 5,000 | $92,100 | $4,700 | $3,750 | ~$100,550 | $20.11 |
+
+## Scaling Scenarios (with Haiku planning)
+
+| Users | AI cost | Vercel | Maps | Total/month | Per user |
+|-------|---------|--------|------|-------------|----------|
+| 10 | $78 | $20 (Pro base) | $8 | ~$106 | $10.60 |
+| 100 | $780 | $114 | $75 | ~$969 | $9.69 |
+| 500 | $3,900 | $490 | $375 | ~$4,765 | $9.53 |
+| 1,000 | $7,800 | $960 | $750 | ~$9,510 | $9.51 |
+| 5,000 | $39,000 | $4,700 | $3,750 | ~$47,450 | $9.49 |
 
 AI dominates cost at every scale. Infrastructure is cheap relative to AI.
 
@@ -268,12 +316,13 @@ If 500 out of 5000 users have new mail, QStash enqueues 500 agent runs.
 
 ## Cost Reduction Levers
 
-1. **Planning thinking tokens** — 68% of AI cost. Reducing `thinkingBudget` from 8192 to 4096 would cut ~$0.86/user/month
+1. **Planning model: Haiku instead of Sonnet** — Drops total from $20/month to ~$9/month. The single biggest lever. Needs quality testing with real conversations
 2. **Skip agent run when no new mail** — The dispatcher already does this. Users with no activity cost $0 in AI per skipped run
-3. **Batch enrichment** — Currently 1 AI call per email. Batching 3-5 emails into one call could cut enrichment costs 60-80%
-4. **Reduce embedding calls** — Embeddings are no longer used for threading. Could be disabled entirely to save ~15 Gemini calls/run
+3. **Batch enrichment** — Currently 1 AI call per message. Batching 3-5 messages into one call could cut enrichment costs 60-80% (saves ~$0.80/month)
+4. **Reduce embedding calls** — Embeddings are no longer used for threading. Could be disabled entirely to save ~38 Gemini calls/run
 5. **Maps caching** — Cache travel times for repeated routes (office → common meeting locations). Could cut Maps costs 50%+
 6. **Run agent once/day instead of twice** — Halves AI cost. Brief can still run twice using cached data from the single agent run
+7. **Prompt caching (Claude)** — If planning/drafting prompts share a long system prefix, Anthropic's prompt caching could reduce input token costs significantly for repeated calls within a session
 
 ---
 
