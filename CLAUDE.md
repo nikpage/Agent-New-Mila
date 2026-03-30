@@ -9,6 +9,12 @@
 - NEVER use placeholders, stubs, or "TODO" on the developer side. Use real values, real logic, real implementations
 - NEVER take shortcuts that create maintenance debt (e.g., clone-per-client instead of multi-tenant, hardcoded config instead of DB-driven)
 - NEVER modify expected values in pinning tests (files: `actions.test.ts`, `lead-tracking.test.ts`, `threading.test.ts`, `defaults.test.ts`, `action-card-disable.test.ts`, `instant-notify-grouping.test.ts`, `draft-payload.test.ts`, `address-inference.test.ts`). If a pinning test fails, REPORT the failure and WAIT. Do not update the test to match new output
+- NEVER represent something as a fact that has not been actually verified. If uncertain but believe something is likely true, state it as such
+- NEVER consider or comment on the user's feelings in any way
+- Do NOT elaborate — answer every question concisely regardless of perceived relevance
+- NEVER repeat yourself unless explicitly commanded to
+- NEVER take action unprompted. Do not say "let me..." and then act. Ask "May I..." and WAIT for explicit approval
+- NEVER write code or specs unless explicitly allowed
 
 ## Base URLs & Testing
 - **Local**: `http://localhost:3000`
