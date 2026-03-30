@@ -189,7 +189,7 @@ export async function updateActionStatus(
   const supabase = getSupabaseAdmin()
   const { error } = await supabase
     .from('action_proposals')
-    .update({ status })
+    .update({ status, updated_at: new Date().toISOString() })
     .eq('id', actionId)
 
   if (error) {
@@ -225,7 +225,7 @@ export async function dismissAllPendingActions(userId: string): Promise<number> 
   const supabase = getSupabaseAdmin()
   const { data, error } = await supabase
     .from('action_proposals')
-    .update({ status: 'dismissed' })
+    .update({ status: 'dismissed', updated_at: new Date().toISOString() })
     .eq('user_id', userId)
     .eq('status', 'pending')
     .select('id')

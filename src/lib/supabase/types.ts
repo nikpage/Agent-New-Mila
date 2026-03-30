@@ -310,6 +310,7 @@ export interface Database {
           original_draft_body: string | null
           original_intent_cs: string | null
           created_at: string
+          updated_at: string
         }
         Insert: {
           id?: string
@@ -336,6 +337,7 @@ export interface Database {
           original_draft_body?: string | null
           original_intent_cs?: string | null
           created_at?: string
+          updated_at?: string
         }
         Update: {
           id?: string
@@ -362,6 +364,7 @@ export interface Database {
           original_draft_body?: string | null
           original_intent_cs?: string | null
           created_at?: string
+          updated_at?: string
         }
       }
       todos: {
