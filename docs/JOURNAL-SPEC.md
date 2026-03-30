@@ -329,8 +329,8 @@ export type AIStage =
 
 | Stage | Primary | Fallback 1 | Temperature | Thinking |
 |-------|---------|-----------|-------------|----------|
-| reflection | claude-haiku-4-5-20251001 | gemini-2.5-flash-lite | 0 | — |
-| draft_edit | claude-haiku-4-5-20251001 | gemini-2.5-flash-lite | 0 | — |
+| reflection | claude-haiku-4-5-20251001 | claude-sonnet-4-6 | 0 | — |
+| draft_edit | claude-haiku-4-5-20251001 | claude-sonnet-4-6 | 0 | — |
 | contradiction_analysis | claude-sonnet-4-6 | gemini-2.5-flash | — | 4096 |
 | contradiction_escalation | claude-opus-4-6 | claude-sonnet-4-6 | — | 8192 |
 | belief_audit | claude-opus-4-6 | claude-sonnet-4-6 | — | 8192 |
@@ -356,10 +356,10 @@ Step 3:   Load unassigned timeline entries (unchanged)
 Step 4:   Thread into conversations (unchanged)
 Step 4.5: Rebuild conversation summaries (unchanged)
 Step 5:   Generate action proposals (MODIFIED — receives journal entries)
-Step 5.5: GENERATE REPLY DRAFTS — for all new REPLY actions from step 5.
+Step 5.5: GENERATE REPLY DRAFTS — for new REPLY actions from step 5.
+          Cap: 15 drafts per cycle (3 batches x5). Remainder handled JIT.
           Call generateFinalDraft() for each REPLY action.
           Write draft_body_text + draft_subject + original_draft_body.
-          Batched x5 (same as planning concurrency).
           SCHEDULE actions skipped here (JIT at brief time).
 Step 6:   Lead tracking (unchanged)
 Step 7:   REFLECTION — call runReflection(userId).
@@ -380,7 +380,11 @@ Pass `journalEntries` to `generateActionsForConversations()`. The planning stage
 **Step 5.5 detail:**
 ```typescript
 // Generate REPLY drafts immediately after planning
-const replyActions = newActions.filter(a => a.action_type === 'REPLY')
+// Cap at 15 drafts per cycle to avoid timeout. Remainder handled JIT at brief/execute time.
+const MAX_REPLY_DRAFTS_PER_CYCLE = 15
+const replyActions = newActions
+  .filter(a => a.action_type === 'REPLY')
+  .slice(0, MAX_REPLY_DRAFTS_PER_CYCLE)
 const DRAFT_CONCURRENCY = 5
 for (const chunk of chunks(replyActions, DRAFT_CONCURRENCY)) {
   await Promise.allSettled(chunk.map(async (action) => {
@@ -396,6 +400,8 @@ for (const chunk of chunks(replyActions, DRAFT_CONCURRENCY)) {
   }))
 }
 ```
+
+**Cap rationale:** 15 drafts = 3 batches of 5 at ~5 seconds each = ~15 seconds. Beyond that, remaining REPLY actions get their drafts generated JIT at brief time or execution time via the existing fallback path.
 
 **Step 7 detail:**
 ```typescript
@@ -919,8 +925,8 @@ export * from './journal'
 | analysis | Conversation summary | gemini-2.5-flash | claude-sonnet-4-6 | — | — |
 | planning | Action proposals | gemini-2.5-flash | claude-sonnet-4-6 | — | 8192 |
 | drafting | Email/message drafting | gemini-2.5-flash | claude-sonnet-4-6 | — | — |
-| **reflection** | **Journal observations** | **claude-haiku-4-5-20251001** | **gemini-2.5-flash-lite** | **0** | **—** |
-| **draft_edit** | **Gap fill + grammar** | **claude-haiku-4-5-20251001** | **gemini-2.5-flash-lite** | **0** | **—** |
+| **reflection** | **Journal observations** | **claude-haiku-4-5-20251001** | **claude-sonnet-4-6** | **0** | **—** |
+| **draft_edit** | **Gap fill + grammar** | **claude-haiku-4-5-20251001** | **claude-sonnet-4-6** | **0** | **—** |
 | **contradiction_analysis** | **Resolve conflicts** | **claude-sonnet-4-6** | **gemini-2.5-flash** | **—** | **4096** |
 | **contradiction_escalation** | **Opus fallback** | **claude-opus-4-6** | **claude-sonnet-4-6** | **—** | **8192** |
 | **belief_audit** | **Full belief review** | **claude-opus-4-6** | **claude-sonnet-4-6** | **—** | **8192** |
@@ -952,7 +958,7 @@ Step 3:   Load unassigned timeline entries
 Step 4:   Thread into conversations
 Step 4.5: Rebuild conversation summaries
 Step 5:   Generate action proposals (MODIFIED — journal context in prompt)
-Step 5.5: GENERATE REPLY DRAFTS (new) — Sonnet, batched x5
+Step 5.5: GENERATE REPLY DRAFTS (new) — Sonnet, batched x5, cap 15/cycle
 Step 6:   Lead tracking
 Step 7:   REFLECTION (new) — Haiku, async-safe
 ```
