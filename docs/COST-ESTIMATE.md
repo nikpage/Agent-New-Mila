@@ -235,26 +235,34 @@ AI dominates cost at every scale. Infrastructure is cheap relative to AI.
 | Publish QStash messages for users with changes | ~1-2s |
 | **Total** | **~7-13s** |
 
-Well within 5-minute Vercel timeout. Even at 10,000 users, under 30s.
+**IMPORTANT: The above timing assumes a bulk token fetch (see Required Refactors below).** The current `getAuthenticatedClient()` does one Supabase SELECT per user — at 5000 users that's 5000 sequential DB queries (~150 seconds), which would blow the timeout. The dispatcher must use a single `SELECT id, encrypted_google_tokens FROM users WHERE email_enabled = true` query instead.
 
-**Key constraint**: Each `history.list` call requires the user's OAuth token. The dispatcher needs to fetch tokens for all users from Supabase (one bulk query) and construct per-user Gmail clients. The token cache in `auth.ts` is in-memory and won't persist across serverless invocations — but the dispatcher is a single invocation that processes all users, so it can build its own cache within the request.
+The in-memory token cache in `auth.ts` won't help — it's per-serverless-instance and cold on every dispatcher invocation. The dispatcher must build its own token map within the request from the bulk query result.
 
 ### Agent run (existing, unchanged)
 
-| Step | Typical time |
-|------|-------------|
-| Steps 2/2.1/2.5 (parallel ingestion) | 30-60s |
-| Steps 3-4 (threading) | 10-20s |
-| Step 4.5 (summary rebuild) | 10-30s |
-| Step 5 (planning) | 15-30s |
-| Step 6 (lead tracking) | 5-15s |
-| **Total** | **70-155s (1-2.5 min)** |
+| Step | Typical time | Notes |
+|------|-------------|-------|
+| Steps 2/2.1/2.5 (parallel ingestion) | 30-60s | Gmail `messages.get` is serial (see below) |
+| Steps 3-4 (threading) | 10-20s | Threading is intentionally serial to prevent duplicate conversations |
+| Step 4.5 (summary rebuild) | 10-30s | 1 AI call per conversation |
+| Step 5 (planning) | 15-30s | Bottleneck: proposeAction with thinkingBudget=8192 |
+| Step 6 (lead tracking) | 5-15s | Concurrency 10 |
+| **Total** | **70-155s (1-2.5 min)** | |
 
-Fits within 5-minute Vercel timeout with margin.
+Fits within 5-minute Vercel timeout with margin. Idle users (no new mail) complete in 2-5 seconds. Heavy users (20+ emails, 10+ conversations) can push 90-180s.
+
+**Gmail serial fetch bottleneck**: `fetchRecentEmails` in `gmail.ts` fetches each message individually in a `for` loop. 50 messages = 50 sequential HTTP calls at ~50ms each = 2.5 seconds of pure I/O. Not a blocker, but a future optimization target (Gmail supports HTTP batch requests of up to 100 sub-requests).
 
 ### Concurrent agent runs
 
-If 500 out of 5000 users have new mail, QStash enqueues 500 agent runs. Vercel Pro allows 1000 concurrent functions. 500 concurrent runs is feasible but pushes limits. If needed, QStash can rate-limit delivery (e.g., 50/second) to smooth the burst.
+If 500 out of 5000 users have new mail, QStash enqueues 500 agent runs.
+
+**Vercel concurrency**: Pro plan allows 1000 concurrent functions per region (up to 3000 with support). 500 concurrent runs fits, but only just.
+
+**Supabase connection pool is the real bottleneck**: Pro tier has ~200 direct connections via PgBouncer. 500 concurrent agent runs each holding a connection will saturate this. **QStash must rate-limit delivery** — e.g., 50-100 concurrent agent runs max. QStash supports this via delivery rate limiting.
+
+**Memory**: Each agent invocation uses ~50-200MB (email bodies, AI responses, embeddings). Default 1024MB per function on Vercel Pro is sufficient.
 
 ---
 
@@ -269,19 +277,69 @@ If 500 out of 5000 users have new mail, QStash enqueues 500 agent runs. Vercel P
 
 ---
 
+## Scaling Constraints (Verified from Code)
+
+### 1. Supabase connection pool
+- Pro tier: ~200 direct connections via PgBouncer
+- 500 concurrent agent runs = 500 connections = pool exhaustion
+- **Mitigation**: QStash delivery rate limiting (50-100 concurrent max)
+
+### 2. QStash schedule limits
+- Current architecture: 2 QStash schedules per user (AM + PM brief)
+- At 5000 users: 10,000 QStash schedules
+- QStash free tier: 500 schedules. Paid tiers allow more, but 10,000 is aggressive
+- Self-healing code (`ensureBriefSchedules`) already exists because schedules can disappear
+- **Risk**: Must verify QStash plan limits before committing to per-user schedules at this scale
+- **Alternative**: Replace per-user brief schedules with a single global cron + paging dispatcher (same pattern as the agent dispatcher)
+
+### 3. In-memory token cache is per-instance
+- `auth.ts` uses a module-level `Map` as cache — does NOT share across serverless instances
+- 500 concurrent agent runs = 500 cold caches = 500 simultaneous Supabase queries just for token fetch
+- **Mitigation**: Bulk token fetch in dispatcher; agent runs can keep the per-instance cache since each run only needs one user's tokens
+
+### 4. Existing 100-user ceiling acknowledgment
+- `morning-brief.ts` line 382: "At ~10s per user and concurrency=10, this handles ~100 users before the deadline"
+- The current `sendAllMorningBriefs` processes users in batches of 10 within a single function — does not scale beyond ~100 users
+- **Mitigation**: Brief sending needs the same dispatcher fan-out pattern as agent runs
+
+### 5. Gmail messages.get is serial
+- `fetchRecentEmails` fetches each message in a `for` loop — no parallelism
+- 50 messages = 2.5s of serial I/O
+- Not a blocker (within timeout), but a future optimization (Gmail HTTP batch API supports 100 sub-requests per batch)
+
+### 6. Threading is intentionally serial
+- `processTimelineEntries` runs entries one at a time to prevent duplicate conversation creation
+- 20 unassigned entries = 20 sequential AI/DB operations = 20+ seconds
+- This is correct behavior, not a bug — but it means heavy users take longer
+
+---
+
 ## What Needs to Be Built
 
 ### New: Dispatcher endpoint (`/api/agent/dispatch`)
-- Cron via QStash every 5-10 minutes
-- Fetches all active users + their stored `historyId`
-- Calls Gmail `history.list(startHistoryId)` per user in parallel batches
-- For users with changes: publishes QStash message to `/api/agent/run`
-- Updates `last_checked_at` on every user
-- Updates `last_activity_at` on users with new mail
+- Global QStash cron every 5-10 minutes
+- Single bulk Supabase query: `SELECT id, encrypted_google_tokens, gmail_history_id FROM users WHERE email_enabled = true`
+- Decrypt tokens in-memory, build per-user Gmail clients
+- Call `history.list(startHistoryId)` per user in parallel batches of 100
+- For users with changes: publish QStash message to `/api/agent/run` with rate limiting
+- Update `last_checked_at` on every user checked
+- Update `last_activity_at` on users with new mail
+- At 5000+ users: split into paged QStash-chained invocations (500 users per page), same pattern as bulk ingestion worker
+
+### Required refactor: Bulk token fetch
+- Current `getAuthenticatedClient()` does per-user Supabase SELECT — unusable for dispatcher
+- New function: `getAllUserTokens()` → single query, returns Map<userId, GoogleTokens>
+- Dispatcher uses this instead of per-user `getAuthenticatedClient`
+- Token refresh during dispatcher: if a token is near-expiry, either refresh inline or skip and let the agent run handle it
 
 ### Modified: Agent run (`/api/agent/run`)
 - After successful run, save the latest `historyId` from Gmail to user record
-- No other changes needed
+- No other changes to the pipeline itself
+
+### Modified: Brief sending (future, for >100 users)
+- Replace `sendAllMorningBriefs` batch-in-one-function with dispatcher fan-out
+- Single global cron → queries users due for brief → enqueues per-user QStash messages
+- Replaces per-user QStash schedules (avoids 10,000 schedule limit)
 
 ### New: User record fields
 - `gmail_history_id` (text) — last known Gmail historyId
@@ -291,3 +349,10 @@ If 500 out of 5000 users have new mail, QStash enqueues 500 agent runs. Vercel P
 ### New: QStash schedule
 - Global dispatcher schedule: `*/5 * * * *` or `*/10 * * * *`
 - Created via `createDispatcherSchedule()` in qstash/client.ts
+
+### Migration SQL (draft)
+```sql
+ALTER TABLE users ADD COLUMN gmail_history_id text;
+ALTER TABLE users ADD COLUMN last_checked_at timestamptz;
+ALTER TABLE users ADD COLUMN last_activity_at timestamptz;
+```
