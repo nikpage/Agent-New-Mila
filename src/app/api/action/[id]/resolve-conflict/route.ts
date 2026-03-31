@@ -8,11 +8,11 @@ import { getConversationById } from '@/lib/db/conversations'
 import { generateConflictResolutionDraft } from '@/lib/ai/mila-voice'
 import { confirmSlot, findBestSlots, blockSlotForProposal } from '@/services/scheduling'
 import { updateCalendarEvent, deleteCalendarEvent } from '@/lib/google/calendar'
-// sendEmail removed — resolution drafts are stored for user approval, not sent autonomously
+import { sendEmail } from '@/lib/google/gmail'
 import type { ConflictCardData } from '@/components/action/action-card-template'
 import type { Json } from '@/lib/supabase/types'
 
-type ResolutionAction = 'reschedule_existing' | 'cancel_existing' | 'move_new' | 'keep_both'
+type ResolutionAction = 'reschedule_existing' | 'cancel_existing' | 'move_new' | 'keep_both' | 'send_draft'
 
 /**
  * GET — Load conflict resolution details + generate draft on-demand.
@@ -41,7 +41,7 @@ export async function GET(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
-    if (!resolutionAction || !['reschedule_existing', 'cancel_existing', 'move_new', 'keep_both'].includes(resolutionAction)) {
+    if (!resolutionAction || !['reschedule_existing', 'cancel_existing', 'move_new', 'keep_both', 'send_draft'].includes(resolutionAction)) {
       return NextResponse.json({ error: 'Invalid resolution action' }, { status: 400 })
     }
 
@@ -263,6 +263,29 @@ export async function POST(
 
     // Allow re-resolution — user may want to change their decision
 
+    const userId = actionRecord.user_id
+    const settings = await getUserSettings(userId)
+
+    // send_draft: user approved the notification email — send it now.
+    // Must be BEFORE event-gone check because the event IS gone after resolution.
+    if (resolutionAction === 'send_draft') {
+      const storedDraft = (payload?.resolution_draft as { to: string; subject: string; body: string }) || null
+      const draftToSend = edited_draft || storedDraft
+      if (!draftToSend?.subject || !draftToSend?.body || !storedDraft?.to) {
+        return NextResponse.json({ error: 'No draft to send' }, { status: 400 })
+      }
+      await sendEmail(userId, {
+        to: storedDraft.to,
+        subject: draftToSend.subject,
+        body: draftToSend.body,
+      })
+      const freshAction = await getActionById(actionId)
+      const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
+      delete freshPayload.resolution_draft
+      await updateAction(actionId, { payload: freshPayload as unknown as Json })
+      return NextResponse.json({ success: true, resolution: 'send_draft', emailSent: true })
+    }
+
     // Re-check existing event is still there
     const existingEvent = await getEventById(conflict.event_id)
     if (!existingEvent || existingEvent.status === 'cancelled') {
@@ -275,9 +298,6 @@ export async function POST(
       })
       return NextResponse.json({ success: true, message: 'Conflict already resolved', resolved: true })
     }
-
-    const userId = actionRecord.user_id
-    const settings = await getUserSettings(userId)
 
     // ── Duration changes (optional, before main resolution) ────────────
     if (existing_duration && existing_duration > 0) {
@@ -340,17 +360,31 @@ export async function POST(
 
       await rescheduleEvent(userId, conflict.event_id, altStart, altEnd, updateCalendarEvent)
 
-      // 2. Store notification draft for user approval (Mila never sends CP-facing emails autonomously)
-      if ((conflict.event_has_guests || conflict.event_cp_name) && edited_draft) {
+      // 2. Store draft for user to review + send via Odeslat
+      let draftForReview: { to: string; subject: string; body: string } | null = null
+      if (conflict.event_has_guests || conflict.event_cp_name) {
         const cpEmail = await getCpEmailFromEvent(existingEvent, conflict)
         if (cpEmail) {
+          const tz = settings.timezone || 'Europe/Prague'
+          const newTimeStr = formatTimeRange(altStart.toISOString(), altEnd.toISOString(), tz)
+          const conversation = actionRecord.conversation_id
+            ? await getConversationById(actionRecord.conversation_id)
+            : null
+          const freshDraft = edited_draft || await generateConflictResolutionDraft(
+            'reschedule',
+            conflict.event_title,
+            formatTimeRange(conflict.event_start, conflict.event_end, tz),
+            newTimeStr,
+            conflict.event_cp_name || 'participant',
+            conflict.deal_context,
+            settings,
+            conversation?.summary_json
+          )
+          draftForReview = { to: cpEmail, subject: freshDraft.subject, body: freshDraft.body }
           const freshAction = await getActionById(actionId)
           const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
           await updateAction(actionId, {
-            payload: {
-              ...freshPayload,
-              resolution_draft: { to: cpEmail, subject: edited_draft.subject, body: edited_draft.body },
-            } as unknown as Json,
+            payload: { ...freshPayload, resolution_draft: draftForReview } as unknown as Json,
           })
         }
       }
@@ -358,23 +392,43 @@ export async function POST(
       // 3. Confirm the NEW event + complete the action
       await confirmNewEventAndComplete(actionId, userId, payload, settings)
 
-      return NextResponse.json({ success: true, resolution: 'reschedule_existing' })
+      return NextResponse.json({ success: true, resolution: 'reschedule_existing', draft: draftForReview })
 
     } else if (resolutionAction === 'cancel_existing') {
-      // 1. Cancel existing event
+      // 1. Cancel existing event — delete from Google Calendar + DB
+      if (existingEvent.google_event_id) {
+        try {
+          await deleteCalendarEvent(userId, existingEvent.google_event_id, 'all')
+        } catch (e) {
+          console.error('[ResolveConflict] Failed to delete from GCal:', e)
+        }
+      }
       await cancelEventWithCleanup(conflict.event_id)
 
-      // 2. Store cancellation draft for user approval (Mila never sends CP-facing emails autonomously)
-      if ((conflict.event_has_guests || conflict.event_cp_name) && edited_draft) {
+      // 2. Store draft for user to review + send via Odeslat
+      let draftForReview: { to: string; subject: string; body: string } | null = null
+      if (conflict.event_has_guests || conflict.event_cp_name) {
         const cpEmail = await getCpEmailFromEvent(existingEvent, conflict)
         if (cpEmail) {
+          const conversation = actionRecord.conversation_id
+            ? await getConversationById(actionRecord.conversation_id)
+            : null
+          const tz = settings.timezone || 'Europe/Prague'
+          const freshDraft = edited_draft || await generateConflictResolutionDraft(
+            'cancel',
+            conflict.event_title,
+            formatTimeRange(conflict.event_start, conflict.event_end, tz),
+            null,
+            conflict.event_cp_name || 'participant',
+            conflict.deal_context,
+            settings,
+            conversation?.summary_json
+          )
+          draftForReview = { to: cpEmail, subject: freshDraft.subject, body: freshDraft.body }
           const freshAction = await getActionById(actionId)
           const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
           await updateAction(actionId, {
-            payload: {
-              ...freshPayload,
-              resolution_draft: { to: cpEmail, subject: edited_draft.subject, body: edited_draft.body },
-            } as unknown as Json,
+            payload: { ...freshPayload, resolution_draft: draftForReview } as unknown as Json,
           })
         }
       }
@@ -382,7 +436,7 @@ export async function POST(
       // 3. Confirm the NEW event + complete the action
       await confirmNewEventAndComplete(actionId, userId, payload, settings)
 
-      return NextResponse.json({ success: true, resolution: 'cancel_existing' })
+      return NextResponse.json({ success: true, resolution: 'cancel_existing', draft: draftForReview })
 
     } else if (resolutionAction === 'move_new') {
       // 1. Delete current hold for the new event (DB + Google Calendar)
@@ -559,11 +613,6 @@ async function confirmNewEventAndComplete(
     )
   }
 
-  // Remove conflicts from payload and complete
-  const freshAction = await getActionById(actionId)
-  const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
-  await updateAction(actionId, {
-    payload: { ...freshPayload, conflicts: [] } as unknown as Json,
-  })
+  // Complete the action (conflicts stay marked resolved, not wiped — allows reopen)
   await completeAction(actionId)
 }
