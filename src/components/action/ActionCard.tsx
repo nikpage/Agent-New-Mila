@@ -288,48 +288,83 @@ export function ActionCard({
       ) : null}
 
       {/* ─── ACTION CONTROLS ───────────────────────────────────────── */}
-      <div style={{
-        padding: `${theme.spacing.md} ${theme.spacing.lg}`,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        borderTop: `1px solid ${theme.colors.border}`
-      }}>
-        <div style={{ display: 'flex', gap: theme.spacing.sm }}>
+      {hasConflicts ? (
+        /* Conflict cards: only show VYŘEŠIT KOLIZI — no standard CTAs */
+        <div style={{
+          padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderTop: `1px solid ${theme.colors.border}`
+        }}>
           <Button
-            variant={doItDisabled ? 'secondary' : 'primary'}
+            variant="primary"
             onClick={run('doit', onDoIt)}
             loading={loading === 'doit'}
-            disabled={doItDisabled}
-            title={doItDisabled ? 'Nejdříve vyplňte požadované údaje přes UPRAVIT' : hasConflicts ? 'Schůzka koliduje s jinou — klikněte pro potvrzení i tak' : undefined}
-            style={doItDisabled ? { opacity: 0.5, cursor: 'not-allowed' } : hasConflicts ? { borderColor: '#dc2626', boxShadow: '0 0 0 1px #dc2626' } : undefined}
+            style={{ backgroundColor: '#dc2626', borderColor: '#dc2626' }}
           >
-            {hasConflicts && !doItDisabled ? '⚠ UDĚLAT' : 'UDĚLAT'}
+            ⚠ VYŘEŠIT KOLIZI
           </Button>
-          <Button variant={doItDisabled ? 'primary' : 'secondary'} onClick={() => setEditOpen(!editOpen)}>
-            UPRAVIT
-          </Button>
-          <Button variant="outline"  onClick={run('illdoit', onIllDoIt)} loading={loading === 'illdoit'}>
-            UDĚLÁM SÁM
-          </Button>
+          {onBlacklist && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={run('blacklist', async () => {
+                if (confirm(`Zablokovat ${cp.name || cp.primary_identifier}? Nebudete dostávat další karty pro tento kontakt.`)) {
+                  await onBlacklist()
+                }
+              })}
+              loading={loading === 'blacklist'}
+              style={{ color: theme.colors.textMuted }}
+            >
+              Zablokovat CP
+            </Button>
+          )}
         </div>
+      ) : (
+        <div style={{
+          padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          borderTop: `1px solid ${theme.colors.border}`
+        }}>
+          <div style={{ display: 'flex', gap: theme.spacing.sm }}>
+            <Button
+              variant={doItDisabled ? 'secondary' : 'primary'}
+              onClick={run('doit', onDoIt)}
+              loading={loading === 'doit'}
+              disabled={doItDisabled}
+              title={doItDisabled ? 'Nejdříve vyplňte požadované údaje přes UPRAVIT' : undefined}
+              style={doItDisabled ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+            >
+              UDĚLAT
+            </Button>
+            <Button variant={doItDisabled ? 'primary' : 'secondary'} onClick={() => setEditOpen(!editOpen)}>
+              UPRAVIT
+            </Button>
+            <Button variant="outline"  onClick={run('illdoit', onIllDoIt)} loading={loading === 'illdoit'}>
+              UDĚLÁM SÁM
+            </Button>
+          </div>
 
-        {onBlacklist && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={run('blacklist', async () => {
-              if (confirm(`Zablokovat ${cp.name || cp.primary_identifier}? Nebudete dostávat další karty pro tento kontakt.`)) {
-                await onBlacklist()
-              }
-            })}
-            loading={loading === 'blacklist'}
-            style={{ color: theme.colors.textMuted }}
-          >
-            Zablokovat CP
-          </Button>
-        )}
-      </div>
+          {onBlacklist && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={run('blacklist', async () => {
+                if (confirm(`Zablokovat ${cp.name || cp.primary_identifier}? Nebudete dostávat další karty pro tento kontakt.`)) {
+                  await onBlacklist()
+                }
+              })}
+              loading={loading === 'blacklist'}
+              style={{ color: theme.colors.textMuted }}
+            >
+              Zablokovat CP
+            </Button>
+          )}
+        </div>
+      )}
     </Card>
 
     {/* ─── DETAILS MODAL ───────────────────────────────────────────── */}

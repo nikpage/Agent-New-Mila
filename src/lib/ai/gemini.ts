@@ -362,17 +362,91 @@ HARD RULES:
   const text = await runAITask('planning', prompt)
 
   // Parse array or single object (backward safe)
+  let actions: ProposedAction[]
   const arrayMatch = text.match(/\[[\s\S]*\]/)
   if (arrayMatch) {
     const parsed = JSON.parse(arrayMatch[0])
-    return Array.isArray(parsed) ? parsed : [parsed]
+    actions = Array.isArray(parsed) ? parsed : [parsed]
+  } else {
+    const jsonMatch = text.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error('Failed to parse action proposal')
+    actions = [JSON.parse(jsonMatch[0])]
   }
 
-  // Fallback: single object (old model behavior)
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error('Failed to parse action proposal')
+  // Two-pass urgency review: a second AI checks urgency claims against conversation text
+  // Only review actions with urgency >= 5 (lower urgency is unlikely to cause false positives)
+  const needsReview = actions.some(a => (a.urgency || 0) >= 5)
+  if (needsReview) {
+    try {
+      actions = await reviewUrgency(actions, recentText)
+    } catch (e) {
+      console.error('[Planning] Urgency review failed, using original values:', e)
+    }
+  }
 
-  return [JSON.parse(jsonMatch[0])]
+  return actions
+}
+
+/**
+ * Second-pass urgency review. A cheap model reviews urgency claims against the conversation.
+ * Receives ONLY the urgency scale, the proposed urgency + justification, and the raw conversation.
+ * Does NOT receive deal value, CP name, or high-value flags — strips bias.
+ * Stage: urgency_review (gemini-2.5-flash → claude-haiku)
+ */
+async function reviewUrgency(
+  actions: ProposedAction[],
+  conversationText: string
+): Promise<ProposedAction[]> {
+  const actionsToReview = actions
+    .map((a, i) => ({ index: i, urgency: a.urgency || 0, justification: (a as Record<string, unknown>).urgencyJustification || '' }))
+    .filter(a => a.urgency >= 5)
+
+  if (actionsToReview.length === 0) return actions
+
+  const reviewPrompt = `You are an urgency auditor. Your ONLY job: check if the claimed urgency matches the conversation text per the scale below. You receive NO deal value, NO names — only the conversation and the claims.
+
+URGENCY SCALE:
+  10 = HARD deadline TODAY (explicit: "dnes", "today", "do 17:00")
+  9 = HARD deadline TOMORROW (explicit: "zítra", "tomorrow")
+  7-8 = HARD deadline THIS WEEK with a SPECIFIC DAY named ("do pátku", "ve středu") or stated consequence ("jinak odstoupím", "otherwise we walk")
+  5 = SOFT time reference ("tento týden", "brzy", "v nejbližších dnech") — NO specific day, NO consequence
+  3-4 = Within 2-4 weeks ("příští měsíc", "do konce dubna", "v průběhu příštích týdnů")
+  2 = DEFAULT when NO deadline language exists
+  1 = Explicitly stated no rush
+
+HARD RULES:
+- urgency 7+ requires a HARD DEADLINE with a specific date/day or stated consequence quoted from the conversation
+- "do konce dubna" when today is late March = 3-4 (weeks away), NOT 7+
+- Deal importance, relationship importance, or dollar value do NOT increase urgency
+- If the justification quotes words not actually present in the conversation, lower urgency to 2
+
+CONVERSATION TEXT:
+${conversationText.slice(0, 3000)}
+
+CLAIMS TO REVIEW:
+${actionsToReview.map(a => `Action ${a.index}: claimed urgency ${a.urgency}, justification: "${a.justification}"`).join('\n')}
+
+For each action, return the corrected urgency. If the claim is justified, keep it. If not, return what it should be.
+
+Respond with ONLY valid JSON array:
+[{"index": 0, "correctedUrgency": N, "reason": "brief reason"}]`
+
+  const text = await runAITask('urgency_review', reviewPrompt)
+  const jsonMatch = text.match(/\[[\s\S]*\]/)
+  if (!jsonMatch) return actions
+
+  const reviews: { index: number; correctedUrgency: number; reason: string }[] = JSON.parse(jsonMatch[0])
+  for (const review of reviews) {
+    if (review.index >= 0 && review.index < actions.length) {
+      const original = actions[review.index].urgency
+      if (review.correctedUrgency !== original) {
+        console.log(`[Planning] Urgency review: action ${review.index} corrected ${original} → ${review.correctedUrgency} (${review.reason})`)
+      }
+      actions[review.index].urgency = review.correctedUrgency
+    }
+  }
+
+  return actions
 }
 
 /**

@@ -236,6 +236,7 @@ export async function generateUrgentIntro(
   topAction: { cpName: string; urgency: number; actionType: string; intent: string; dollarValue: number },
   settings: UserSettings
 ): Promise<{ subject: string; header: string; body: string }> {
+  const lang = settings.ai_language || 'Czech'
   const prompt = `You are Mila sending an urgent notification email. Generate an email subject, header text, and a one-sentence body.
 
 TONE: ${settings.ai_tone_user}
@@ -248,11 +249,15 @@ DETAILS:
 - Deal value: ${topAction.dollarValue > 0 ? `${topAction.dollarValue.toLocaleString()}` : 'unknown'}
 
 RULES:
-- Output in ${settings.ai_language || 'Czech'}. Plain text only. No markdown.
 - Address user as "vy" (you). Never "uživatel".
 - subject: concise, conveys urgency
 - header: short header for the email
 - body: one sentence describing what needs immediate attention
+
+CRITICAL LANGUAGE REQUIREMENT:
+You MUST write ALL output in ${lang}. Every word, including the subject line, must be in ${lang}.
+${lang === 'Czech' ? 'Czech is a West Slavic language written in Latin script — it is NOT Russian, Ukrainian, or any other Cyrillic-script language. Do not confuse Slavic languages. "Urgent" in Czech is "Naléhavé", not "Срочно".' : ''}
+Do NOT mix languages. Do NOT use words from other languages.
 
 Respond with ONLY valid JSON:
 {
@@ -329,7 +334,11 @@ Respond with ONLY valid JSON:
 /**
  * Generate a conflict resolution draft — reschedule or cancel notification to CP/guests.
  * Only called when existing event has guests/CP that need to be informed.
- * Stage: drafting (gemini-2.5-flash → claude-sonnet)
+ * Stage: drafting (claude-sonnet → gemini-2.5-flash)
+ *
+ * The AI receives full conversation context and writes an appropriate message.
+ * "reschedule" = the meeting is shifted to a new time (NOT cancelled).
+ * "cancel" = the meeting is deleted entirely.
  */
 export async function generateConflictResolutionDraft(
   resolutionType: 'reschedule' | 'cancel',
@@ -344,31 +353,55 @@ export async function generateConflictResolutionDraft(
   console.log(`[AI:generateConflictResolutionDraft] ${resolutionType} for "${existingEventTitle}" → ${cpName}`)
   const systemContext = getAISystemPrompt(settings)
 
+  // Determine the nature of the change for the AI
+  let changeDescription: string
+  if (resolutionType === 'reschedule') {
+    if (newTime) {
+      // Check if same day by comparing date portions
+      const origDate = existingEventTime.split(',')[0]?.trim()
+      const newDate = newTime.split(',')[0]?.trim()
+      const sameDay = origDate && newDate && origDate === newDate
+      changeDescription = sameDay
+        ? `The meeting is being SHIFTED on the same day: from ${existingEventTime} to ${newTime}. This is a minor time adjustment, not a cancellation or major reschedule.`
+        : `The meeting is being RESCHEDULED: from ${existingEventTime} to ${newTime}. The meeting is NOT cancelled — it's moving to a different time.`
+    } else {
+      changeDescription = `The meeting originally at ${existingEventTime} needs to be rescheduled. A new time has not been determined yet. The meeting is NOT cancelled — ask the counterparty for their availability.`
+    }
+  } else {
+    changeDescription = `The meeting "${existingEventTitle}" at ${existingEventTime} is being CANCELLED. It will not take place. If appropriate, mention willingness to reschedule.`
+  }
+
   const prompt = `${systemContext}
 
-You are an executive assistant writing an email on behalf of your boss to inform a counterparty about a scheduling change.
+You are an executive assistant writing an email on behalf of your boss to ${cpName}.
 
 TONE: ${settings.ai_tone_cp}
 Language: ${settings.ai_language || 'Czech'}.
 
-WHAT HAPPENED: ${resolutionType === 'reschedule' ? 'The meeting time is changing.' : 'The meeting is being cancelled.'}
+SITUATION:
+${changeDescription}
 
-EVENT: ${existingEventTitle}
-ORIGINAL TIME: ${existingEventTime}
-${resolutionType === 'reschedule' && newTime ? `NEW TIME: ${newTime}` : ''}
-COUNTERPARTY: ${cpName}
-${dealContext ? `DEAL CONTEXT: ${dealContext}` : ''}
-${conversationContext ? `\nCONVERSATION HISTORY (use this to understand your relationship with ${cpName} and write in the appropriate tone):\n${JSON.stringify(conversationContext, null, 2)}` : ''}
+EVENT DETAILS:
+- Event: ${existingEventTitle}
+- Original time: ${existingEventTime}
+${resolutionType === 'reschedule' && newTime ? `- New time: ${newTime}` : ''}
+- Counterparty: ${cpName}
 
-Write a natural, human email. Match the tone to the relationship and the size of the change. A 30-minute shift on the same day is trivial — keep it casual and brief. A multi-day reschedule deserves more explanation.
+${dealContext ? `DEAL CONTEXT (use this to understand what this meeting is about):\n${dealContext}\n` : ''}
+${conversationContext ? `CONVERSATION HISTORY (use this to understand your relationship with ${cpName}, the tone of previous exchanges, and what the meeting is about — write accordingly):\n${JSON.stringify(conversationContext, null, 2)}\n` : ''}
 
 RULES:
-- Output in ${settings.ai_language || 'Czech'}. Plain text only.
+- Write a natural, human email appropriate to the situation and relationship.
+- Match the weight of the email to the size of the change:
+  * A 15-30 minute shift on the same day → 2-3 sentences, casual, no drama
+  * A different-day reschedule → brief apology + new time + reason if natural
+  * A cancellation → polite, brief, offer to reschedule if the deal context suggests it
+- Output ONLY in ${settings.ai_language || 'Czech'} using Latin script. Plain text only.
 - Sign off with: ${settings.ai_email_signature}
 ${resolutionType === 'reschedule'
-    ? `- NEVER use words like "zrušena", "zrušit", "cancelled", "cancel" — the meeting is NOT cancelled.`
-    : '- Politely cancel the meeting, offer to reschedule if appropriate.'}
-- Keep it concise.
+    ? `- The meeting is NOT cancelled. NEVER use words like "zrušena", "zrušit", "cancelled", "cancel", "nebude se konat". Use "přesunout", "posunout", "změna času" instead.`
+    : ''}
+- Do NOT over-apologize. Do NOT use phrases like "s lítostí Vás informuji" for a minor time shift.
 
 Respond with ONLY valid JSON:
 {

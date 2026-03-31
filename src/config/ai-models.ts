@@ -12,6 +12,7 @@ export type AIStage =
   | 'threading'
   | 'analysis'
   | 'planning'
+  | 'urgency_review'
   | 'drafting'
   | 'reflection'
   | 'draft_edit'
@@ -73,6 +74,14 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
     fallback1: 'gemini-2.5-flash',
     fallback2: null,
     thinkingBudget: 2048,
+  },
+
+  // Urgency review — second-pass AI check on urgency claims (cheap, deterministic)
+  urgency_review: {
+    primary: 'gemini-2.5-flash',
+    fallback1: 'claude-haiku-4-5-20251001',
+    fallback2: null,
+    temperature: 0,
   },
 
   // Drafting — generateFinalDraft, generateBriefHeadline

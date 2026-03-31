@@ -211,7 +211,7 @@ export async function POST(
         await confirmSlot(
           action.user_id,
           holdEventId,
-          cp.email,
+          cp.primary_identifier,
           loc,
           finalTitle,
           agendaText,
@@ -242,7 +242,7 @@ export async function POST(
           description: manualDescription,
           startTime: manualStart,
           endTime: manualEnd,
-          attendees: cp.email ? [cp.email] : [],
+          attendees: [cp.primary_identifier],
           sendUpdates: 'all',
         })
 
