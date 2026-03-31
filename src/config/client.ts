@@ -174,7 +174,7 @@ export function getAISystemPrompt(settings: UserSettings, options?: { excludeLaw
 
   lines.push('')
   lines.push(`High-value signals: ${settings.high_value_signals.join(', ')}`)
-  lines.push(`Language: ${settings.ai_language === 'cs' ? 'Czech' : settings.ai_language}`)
+  lines.push(`Language: ${settings.ai_language}`)
   lines.push(`Tone with counterparties: ${settings.ai_tone_cp}`)
 
   return lines.join('\n')

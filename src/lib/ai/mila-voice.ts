@@ -338,7 +338,8 @@ export async function generateConflictResolutionDraft(
   newTime: string | null,
   cpName: string,
   dealContext: string | null,
-  settings: UserSettings
+  settings: UserSettings,
+  conversationContext?: unknown
 ): Promise<{ subject: string; body: string }> {
   console.log(`[AI:generateConflictResolutionDraft] ${resolutionType} for "${existingEventTitle}" → ${cpName}`)
   const systemContext = getAISystemPrompt(settings)
@@ -350,25 +351,24 @@ You are an executive assistant writing an email on behalf of your boss to inform
 TONE: ${settings.ai_tone_cp}
 Language: ${settings.ai_language || 'Czech'}.
 
-RESOLUTION TYPE: ${resolutionType === 'reschedule' ? 'RESCHEDULE — the meeting is being MOVED to a different time on the SAME DAY. This is NOT a cancellation.' : 'CANCEL — the meeting is being cancelled entirely.'}
+WHAT HAPPENED: ${resolutionType === 'reschedule' ? 'The meeting time is changing.' : 'The meeting is being cancelled.'}
 
-DETAILS:
-- Event: ${existingEventTitle}
-- Original time: ${existingEventTime}
-${resolutionType === 'reschedule' && newTime ? `- New time: ${newTime}` : ''}
-- Counterparty: ${cpName}
-${dealContext ? `- Deal context: ${dealContext}` : ''}
+EVENT: ${existingEventTitle}
+ORIGINAL TIME: ${existingEventTime}
+${resolutionType === 'reschedule' && newTime ? `NEW TIME: ${newTime}` : ''}
+COUNTERPARTY: ${cpName}
+${dealContext ? `DEAL CONTEXT: ${dealContext}` : ''}
+${conversationContext ? `\nCONVERSATION HISTORY (use this to understand your relationship with ${cpName} and write in the appropriate tone):\n${JSON.stringify(conversationContext, null, 2)}` : ''}
+
+Write a natural, human email. Match the tone to the relationship and the size of the change. A 30-minute shift on the same day is trivial — keep it casual and brief. A multi-day reschedule deserves more explanation.
 
 RULES:
 - Output in ${settings.ai_language || 'Czech'}. Plain text only.
 - Sign off with: ${settings.ai_email_signature}
 ${resolutionType === 'reschedule'
-    ? `- This is a TIME CHANGE, not a cancellation. NEVER use words like "zrušena", "zrušit", "cancelled", "cancel".
-- Say the meeting is being MOVED/SHIFTED ("přesunuta", "posunuta") to the new time.
-- Apologize briefly for the change, confirm the new time clearly, keep it friendly.
-- If the time shift is small (e.g. 30 min on the same day), acknowledge it's minor.`
-    : '- Politely cancel the meeting, apologize, offer to reschedule if appropriate.'}
-- Keep it concise — 3-5 sentences max.
+    ? `- NEVER use words like "zrušena", "zrušit", "cancelled", "cancel" — the meeting is NOT cancelled.`
+    : '- Politely cancel the meeting, offer to reschedule if appropriate.'}
+- Keep it concise.
 
 Respond with ONLY valid JSON:
 {
@@ -379,7 +379,6 @@ Respond with ONLY valid JSON:
   const text = await runAITask('drafting', prompt)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
   if (!jsonMatch) {
-    // Fallback — never leave the user without a draft
     return resolutionType === 'reschedule'
       ? { subject: `Přesunutí schůzky: ${existingEventTitle}`, body: `Dobrý den,\n\nomlouvám se, ale potřebuji přesunout naši schůzku "${existingEventTitle}"${newTime ? ` na ${newTime}` : ''}.\n\nDěkuji za pochopení.\n\n${settings.ai_email_signature}` }
       : { subject: `Zrušení schůzky: ${existingEventTitle}`, body: `Dobrý den,\n\nomlouvám se, ale musím zrušit naši schůzku "${existingEventTitle}".\n\nDěkuji za pochopení.\n\n${settings.ai_email_signature}` }

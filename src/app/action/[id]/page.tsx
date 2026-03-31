@@ -88,6 +88,7 @@ function DraftReviewView({ actionId, token }: { actionId: string; token: string 
   // If action is not REPLY, redirect to DirectExecuteView (handles old URLs without &type=)
   const [redirectToDirectExecute, setRedirectToDirectExecute] = useState(false)
 
+  const [actionType, setActionType] = useState<string>('REPLY')
   const [cpName, setCpName] = useState('')
   const [topic, setTopic] = useState('')
   const [to, setTo] = useState('')
@@ -109,18 +110,16 @@ function DraftReviewView({ actionId, token }: { actionId: string; token: string 
         }
         const data = await draftRes.json()
 
-        // Non-REPLY actions should not show email draft form
-        if (data.action?.action_type !== 'REPLY') {
+        // Only TODO/other non-communication actions skip draft review
+        if (data.action?.action_type !== 'REPLY' && data.action?.action_type !== 'SCHEDULE') {
           setRedirectToDirectExecute(true)
           setLoading(false)
           return
         }
 
-        // Check if action is still executable
-        if (data.action.status !== 'pending' && data.action.status !== 'approved') {
-          throw new Error('Tato akce již byla provedena.')
-        }
+        // No status block — user can always re-edit and re-send
 
+        setActionType(data.action?.action_type || 'REPLY')
         setCpName(data.cp?.name || data.cp?.primary_identifier || '')
         setTopic(data.conversation?.topic || '')
         setTo(data.to || '')
@@ -163,7 +162,9 @@ function DraftReviewView({ actionId, token }: { actionId: string; token: string 
       setSuccess({
         show: true,
         message: 'Odesláno!',
-        subMessage: `Zpráva odeslána pro ${cpName}.`,
+        subMessage: actionType === 'SCHEDULE'
+          ? `Pozvánka odeslána pro ${cpName}.`
+          : `Zpráva odeslána pro ${cpName}.`,
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send')
@@ -188,7 +189,7 @@ function DraftReviewView({ actionId, token }: { actionId: string; token: string 
       {/* Header */}
       <div style={{ padding: `${theme.spacing.lg} ${theme.spacing.lg} ${theme.spacing.sm}` }}>
         <p style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          Koncept zprávy
+          {actionType === 'SCHEDULE' ? 'Koncept pozvánky' : 'Koncept zprávy'}
         </p>
         <h2 style={{ fontSize: theme.typography.sizes.lg, fontWeight: theme.typography.weights.semibold, color: theme.colors.text, marginTop: theme.spacing.xs }}>
           {cpName}
@@ -231,7 +232,7 @@ function DraftReviewView({ actionId, token }: { actionId: string; token: string 
           loading={sending}
           disabled={!body.trim()}
         >
-          Odeslat
+          {actionType === 'SCHEDULE' ? 'Odeslat pozvánku' : 'Odeslat'}
         </Button>
       </div>
     </Card>
@@ -304,10 +305,7 @@ function DirectExecuteView({ actionId, token }: { actionId: string; token: strin
           throw new Error(err.error || 'Failed to load action')
         }
         const data = await actionRes.json() as ActionPageData
-        // Completed SCHEDULE actions can still be edited (update the invite)
-        if (data.action.status !== 'pending' && data.action.status !== 'approved' && data.action.status !== 'completed') {
-          throw new Error('Tato akce již byla provedena.')
-        }
+        // No status block — user can always re-open and update actions
         setActionData(data)
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load action')

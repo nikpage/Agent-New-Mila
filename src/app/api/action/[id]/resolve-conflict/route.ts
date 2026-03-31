@@ -4,6 +4,7 @@ import { getEventById, cancelEventWithCleanup, rescheduleEvent } from '@/lib/db/
 import { validateActionToken } from '@/lib/auth/tokens'
 import { getUserSettings } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
+import { getConversationById } from '@/lib/db/conversations'
 import { generateConflictResolutionDraft } from '@/lib/ai/mila-voice'
 import { confirmSlot, findBestSlots, blockSlotForProposal } from '@/services/scheduling'
 import { updateCalendarEvent, deleteCalendarEvent } from '@/lib/google/calendar'
@@ -78,6 +79,10 @@ export async function GET(
     let draft: { subject: string; body: string } | null = null
     if (conflict.event_has_guests || conflict.event_cp_name) {
       const cpName = conflict.event_cp_name || 'participant'
+      // Fetch conversation context so the AI can write in the right tone for the relationship
+      const conversation = action.conversation_id
+        ? await getConversationById(action.conversation_id)
+        : null
       draft = await generateConflictResolutionDraft(
         resolutionAction === 'reschedule_existing' ? 'reschedule' : 'cancel',
         conflict.event_title,
@@ -85,7 +90,8 @@ export async function GET(
         altTimeStr,
         cpName,
         conflict.deal_context,
-        settings
+        settings,
+        conversation?.summary_json
       )
     }
 
@@ -248,12 +254,8 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
-    if (actionRecord.status !== 'pending' && actionRecord.status !== 'approved') {
-      return NextResponse.json(
-        { error: 'Action already resolved', status: actionRecord.status },
-        { status: 409 }
-      )
-    }
+    // No status block — user can change their decision as many times as they want.
+    // If the action was completed, we'll re-open it.
 
     const payload = actionRecord.payload as Record<string, unknown> | null
     const conflicts = (payload?.conflicts as ConflictCardData[]) || []

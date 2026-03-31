@@ -35,13 +35,7 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
-    // Idempotency: prevent double-execution (e.g. user double-clicks, network retry)
-    if (action.status !== 'pending' && action.status !== 'approved') {
-      return NextResponse.json(
-        { error: 'Action already executed', status: action.status },
-        { status: 409 }
-      )
-    }
+    // No status block — user can re-execute or update actions as many times as needed.
 
     // Fetch settings + CP in parallel (both only need IDs from action)
     const [settings, cp] = await Promise.all([
@@ -195,16 +189,22 @@ export async function POST(
           ? `Tel: ${cpPhone}\n\n`
           : ''
 
-        // Generate agenda text — goes into calendar invite description (not a separate email)
-        const draft = await generateFinalDraft(
-          conversation?.summary_json,
-          `Potvrzuji termín ${meetingType === 'phone' ? 'telefonátu' : 'schůzky'}: ${formatDate(startDate)}, ${formatTime(startDate)} - ${formatTime(endDate)}.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
-          settings,
-          userNotes || undefined,
-          undefined,
-          cpDisplayName
-        )
-        const agendaText = phoneInfo + draft.body
+        // Use the user-reviewed draft if it exists (from draft review flow), otherwise generate
+        let agendaBody: string
+        if (action.draft_body_text) {
+          agendaBody = action.draft_body_text
+        } else {
+          const draft = await generateFinalDraft(
+            conversation?.summary_json,
+            `Potvrzuji termín ${meetingType === 'phone' ? 'telefonátu' : 'schůzky'}: ${formatDate(startDate)}, ${formatTime(startDate)} - ${formatTime(endDate)}.${userNotes ? `\n\nPoznámka: ${userNotes}` : ''}`,
+            settings,
+            userNotes || undefined,
+            undefined,
+            cpDisplayName
+          )
+          agendaBody = draft.body
+        }
+        const agendaText = phoneInfo + agendaBody
 
         // Confirm hold event in DB + GCal (adds CP as attendee, Google sends invite)
         // Phone calls don't get Google Meet — only online meetings do

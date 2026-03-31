@@ -894,7 +894,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 
   // AI Persona (extended)
   ai_name: 'Mila',
-  ai_language: 'cs',
+  ai_language: 'Czech',
   ai_email_signature: '',
   ai_system_context: '',
 

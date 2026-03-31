@@ -84,7 +84,7 @@ async function configureInteractive(existing: UserSettings): Promise<Partial<Use
   printSection('AI Persona')
 
   settings.ai_name = await ask('AI assistant name', existing.ai_name)
-  settings.ai_language = await ask('Language code (e.g., cs, en, de)', existing.ai_language)
+  settings.ai_language = await ask('Language name (e.g., Czech, English, German)', existing.ai_language)
   settings.ai_email_signature = await ask('Email signature (single line, use \\n for newlines)', existing.ai_email_signature || undefined)
   settings.ai_system_context = await ask('Extra system context for AI (optional)', existing.ai_system_context || undefined)
 

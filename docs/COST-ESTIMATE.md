@@ -21,7 +21,7 @@
 | enrichment | Gemini Flash | structured JSON |
 | threading | Gemini Flash | structured output |
 | analysis | Gemini Flash | structured JSON |
-| planning | Claude Sonnet | Czech prose (intent_cs) |
+| planning | Claude Haiku (thinking: 2048) | judgment + structured JSON |
 | drafting | Claude Sonnet | Czech prose to user |
 | reflection | Claude Haiku | Czech prose to journal |
 | draft_edit | Claude Haiku | Czech prose to user |
@@ -129,26 +129,28 @@ Claude handles planning, drafting, reflection, and rare escalation stages.
 
 ### Per-run Claude calls
 
-| Stage | Model | Calls/run | Input tokens | Output tokens |
-|-------|-------|-----------|-------------|--------------|
-| planning (proposeAction) | sonnet | ~8 | ~4,000 | ~1,000 |
-| drafting (brief intro + lead follow-ups + scheduling) | sonnet | ~5 | ~2,000 | ~300 |
-| reflection | haiku | 1 | ~3,000 | ~500 |
-| draft_edit (user-triggered) | haiku | ~0.5/day avg | ~2,000 | ~300 |
+| Stage | Model | Calls/run | Input tokens | Output tokens | Thinking tokens |
+|-------|-------|-----------|-------------|--------------|----------------|
+| planning (proposeAction) | haiku (thinking: 2048) | ~8 | ~4,000 | ~1,000 | ~2,000 |
+| drafting (brief intro + lead follow-ups + scheduling) | sonnet | ~5 | ~2,000 | ~300 | — |
+| reflection | haiku | 1 | ~3,000 | ~500 | — |
+| draft_edit (user-triggered) | haiku | ~0.5/day avg | ~2,000 | ~300 | — |
+
+Thinking tokens are billed as output tokens.
 
 ### Per-run Claude cost estimate
 
-| Stage | Input cost | Output cost | Total/run |
-|-------|-----------|-------------|-----------|
-| planning (8× sonnet) | $0.096 | $0.120 | $0.216 |
+| Stage | Input cost | Output cost (incl. thinking) | Total/run |
+|-------|-----------|------------------------------|-----------|
+| planning (8× haiku, 2K thinking) | $0.026 | $0.096 | $0.122 |
 | drafting (5× sonnet) | $0.030 | $0.023 | $0.053 |
 | reflection (1× haiku) | $0.002 | $0.002 | $0.004 |
 
-**Claude cost per run: ~$0.273**
-**Claude cost per day (2 runs + ~0.5 draft_edit): ~$0.549**
-**Claude cost per month: ~$16.47**
+**Claude cost per run: ~$0.179**
+**Claude cost per day (2 runs + ~0.5 draft_edit): ~$0.361**
+**Claude cost per month: ~$10.83**
 
-**Planning on Sonnet is 79% of Claude cost and 70% of total AI cost.**
+**Planning thinking budget impact**: Without thinking (budget=0), planning would cost ~$0.058/run. The 2048-token thinking budget adds ~$0.064/run (~$3.84/month) but enables Haiku to follow urgency rules reliably.
 
 ### Rare Claude stages (not per-run)
 
@@ -222,50 +224,39 @@ At 5000 users: 600K messages/month = ~$6/month total = **$0.001/user/month**
 
 | Category | Cost/user/month | % of total |
 |----------|----------------|-----------|
-| **Claude AI (planning + drafting)** | **$16.47** | **81%** |
-| **Gemini AI (filter→analysis)** | **$1.95** | **10%** |
-| **Vercel compute** | **$0.94** | **5%** |
-| **Google Maps** | **$0.75** | **4%** |
+| **Claude AI (planning + drafting)** | **$10.83** | **71%** |
+| **Gemini AI (filter→analysis)** | **$1.95** | **13%** |
+| **Vercel compute** | **$0.94** | **6%** |
+| **Google Maps** | **$0.75** | **5%** |
 | Gmail/Calendar API | $0.00 | 0% |
 | QStash | ~$0.00 | 0% |
 | Supabase (shared) | ~$0.03 | <1% |
 | Dispatcher overhead | ~$0.00 | 0% |
-| **TOTAL** | **~$20.14** | |
+| **TOTAL** | **~$14.50** | |
 
 ---
 
 ## Cost Sensitivity: Planning Model Choice
 
-Planning is 70% of total cost. The model choice here dominates everything:
+Planning (Haiku with 2048-token thinking) is the largest single Claude cost. The thinking budget is the key lever:
 
-| Planning model | Planning cost/month | Total cost/month | Difference |
-|---------------|-------------------|-----------------|-----------|
-| **Sonnet** | $12.96 | **$20.14** | baseline |
-| **Haiku** | $1.30 | **$8.48** | -58% |
-
-Haiku would bring total cost under $10/user/month. Whether it can handle the planning task (deal assessment, urgency, dollar value estimation, Czech prose) needs testing with real conversations.
+| Planning config | Planning cost/month | Total cost/month | Difference |
+|----------------|-------------------|-----------------|-----------|
+| **Haiku + thinking (2048)** | $7.30 | **$14.50** | baseline |
+| **Haiku no thinking** | $3.46 | **$10.66** | -26% (but poor urgency judgment) |
+| **Sonnet (no thinking)** | $12.96 | **$20.16** | +39% |
 
 ---
 
-## Scaling Scenarios (with Sonnet planning)
+## Scaling Scenarios (Haiku + thinking 2048)
 
 | Users | AI cost | Vercel | Maps | Total/month | Per user |
 |-------|---------|--------|------|-------------|----------|
-| 10 | $184 | $20 (Pro base) | $8 | ~$212 | $21.20 |
-| 100 | $1,842 | $114 | $75 | ~$2,031 | $20.31 |
-| 500 | $9,210 | $490 | $375 | ~$10,075 | $20.15 |
-| 1,000 | $18,420 | $960 | $750 | ~$20,130 | $20.13 |
-| 5,000 | $92,100 | $4,700 | $3,750 | ~$100,550 | $20.11 |
-
-## Scaling Scenarios (with Haiku planning)
-
-| Users | AI cost | Vercel | Maps | Total/month | Per user |
-|-------|---------|--------|------|-------------|----------|
-| 10 | $78 | $20 (Pro base) | $8 | ~$106 | $10.60 |
-| 100 | $780 | $114 | $75 | ~$969 | $9.69 |
-| 500 | $3,900 | $490 | $375 | ~$4,765 | $9.53 |
-| 1,000 | $7,800 | $960 | $750 | ~$9,510 | $9.51 |
-| 5,000 | $39,000 | $4,700 | $3,750 | ~$47,450 | $9.49 |
+| 10 | $128 | $20 (Pro base) | $8 | ~$156 | $15.60 |
+| 100 | $1,278 | $114 | $75 | ~$1,467 | $14.67 |
+| 500 | $6,390 | $490 | $375 | ~$7,255 | $14.51 |
+| 1,000 | $12,780 | $960 | $750 | ~$14,490 | $14.49 |
+| 5,000 | $63,900 | $4,700 | $3,750 | ~$72,350 | $14.47 |
 
 AI dominates cost at every scale. Infrastructure is cheap relative to AI.
 
@@ -294,7 +285,7 @@ The in-memory token cache in `auth.ts` won't help — it's per-serverless-instan
 | Steps 2/2.1/2.5 (parallel ingestion) | 30-60s | Gmail `messages.get` is serial (see below) |
 | Steps 3-4 (threading) | 10-20s | Threading is intentionally serial to prevent duplicate conversations |
 | Step 4.5 (summary rebuild) | 10-30s | 1 AI call per conversation |
-| Step 5 (planning) | 15-30s | Bottleneck: proposeAction with thinkingBudget=8192 |
+| Step 5 (planning) | 15-30s | Bottleneck: proposeAction with thinkingBudget=2048 |
 | Step 6 (lead tracking) | 5-15s | Concurrency 10 |
 | **Total** | **70-155s (1-2.5 min)** | |
 
@@ -316,7 +307,7 @@ If 500 out of 5000 users have new mail, QStash enqueues 500 agent runs.
 
 ## Cost Reduction Levers
 
-1. **Planning model: Haiku instead of Sonnet** — Drops total from $20/month to ~$9/month. The single biggest lever. Needs quality testing with real conversations
+1. **Planning thinking budget** — Currently 2048 tokens. Reducing to 1024 saves ~$1.90/month but risks worse urgency judgment. Increasing to 4096 adds ~$3.84/month. Monitor urgency accuracy to tune
 2. **Skip agent run when no new mail** — The dispatcher already does this. Users with no activity cost $0 in AI per skipped run
 3. **Batch enrichment** — Currently 1 AI call per message. Batching 3-5 messages into one call could cut enrichment costs 60-80% (saves ~$0.80/month)
 4. **Reduce embedding calls** — Embeddings are no longer used for threading. Could be disabled entirely to save ~38 Gemini calls/run
