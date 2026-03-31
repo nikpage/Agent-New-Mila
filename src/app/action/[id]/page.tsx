@@ -693,6 +693,9 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
   // Draft (for notification emails)
   const [draftSubject, setDraftSubject] = useState('')
   const [draftBody, setDraftBody] = useState('')
+  const [draftRecipient, setDraftRecipient] = useState('')
+  const [draftReviewMode, setDraftReviewMode] = useState(false)
+  const [sendingDraft, setSendingDraft] = useState(false)
 
   // Fetch slots when target/duration/force changes
   const [slotsLoading, setSlotsLoading] = useState(false)
@@ -707,11 +710,6 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
         )
         if (!res.ok) {
           const err = await res.json()
-          if (err.resolved) {
-            setSuccess({ show: true, message: 'Kolize vyřešena', subMessage: 'Konflikt již byl vyřešen.' })
-            setLoading(false)
-            return
-          }
           throw new Error(err.error || 'Failed to load conflict details')
         }
         const data: ConflictResolutionData = await res.json()
@@ -820,6 +818,16 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
       }
       const result = await res.json()
 
+      // Backend returned a draft — show it for user approval before sending
+      if (result.draft) {
+        setDraftSubject(result.draft.subject)
+        setDraftBody(result.draft.body)
+        setDraftRecipient(result.draft.to || resolutionData?.existingEvent?.cpName || '')
+        setDraftReviewMode(true)
+        setExecuting(false)
+        return
+      }
+
       if (finalAction === 'keep_both') {
         setSuccess({
           show: true,
@@ -847,9 +855,63 @@ function ConflictResolveView({ actionId, token }: { actionId: string; token: str
     }
   }
 
+  async function handleSendDraft() {
+    setSendingDraft(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/action/${actionId}/resolve-conflict`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          action: 'send_draft',
+          conflict_idx: parseInt(conflictIdx, 10),
+          edited_draft: { subject: draftSubject, body: draftBody },
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error || 'Failed to send email')
+      }
+      setSuccess({ show: true, message: 'Odesláno!', subMessage: `Email odeslán na ${draftRecipient}.` })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send')
+      setSendingDraft(false)
+    }
+  }
+
   if (success.show) {
     return <SuccessOverlay message={success.message} subMessage={success.subMessage} />
   }
+
+  if (draftReviewMode) {
+    return (
+      <Card style={{ width: '100%', maxWidth: '720px', margin: '0 auto' }}>
+        <div style={{ padding: theme.spacing.lg }}>
+          <p style={{ fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.medium, color: theme.colors.primary, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: theme.spacing.sm }}>
+            Kalendář aktualizován — zkontrolujte email pro protistranu
+          </p>
+          <p style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, marginBottom: theme.spacing.md }}>
+            Příjemce: <strong style={{ color: theme.colors.text }}>{draftRecipient}</strong>
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
+            <Input label="Předmět" value={draftSubject} onChange={e => setDraftSubject(e.target.value)} />
+            <Textarea label="Zpráva" value={draftBody} onChange={e => setDraftBody(e.target.value)} rows={8} />
+          </div>
+          {error && (
+            <div style={{ marginTop: theme.spacing.md, padding: theme.spacing.md, backgroundColor: '#fef2f2', borderRadius: theme.borderRadius.md, color: '#991b1b', fontSize: theme.typography.sizes.sm }}>
+              {error}
+            </div>
+          )}
+        </div>
+        <div style={{ padding: `${theme.spacing.md} ${theme.spacing.lg}`, display: 'flex', gap: theme.spacing.sm, borderTop: `1px solid ${theme.colors.border}` }}>
+          <Button variant="primary" onClick={handleSendDraft} loading={sendingDraft}>Odeslat</Button>
+          <Button variant="outline" onClick={() => setSuccess({ show: true, message: 'Hotovo!', subMessage: 'Kalendář aktualizován. Email nebyl odeslán.' })} disabled={sendingDraft}>Zrušit</Button>
+        </div>
+      </Card>
+    )
+  }
+
   if (loading) return <Spinner message="Načítání konfliktu..." />
   if (error && !resolutionData) return <ErrorDisplay message={error} />
   if (!resolutionData) return <ErrorDisplay message="Data nenalezena" />
