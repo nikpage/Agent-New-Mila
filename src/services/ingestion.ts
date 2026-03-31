@@ -225,7 +225,7 @@ async function processOneInboundEmail(
           raw_text: email.body,
           tag_primary: 'mila_command',
           tag_secondary: parsed.type,
-          message_type: 'command',
+          message_type: null,
           timestamp: email.date.toISOString(),
         })
 

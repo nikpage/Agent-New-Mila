@@ -113,9 +113,10 @@ export async function POST(request: NextRequest) {
             if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 404) {
               return { userId: user.id, hasNew: true }
             }
-            // 401 = token expired, let agent run handle refresh
+            // 401 = token expired/revoked — skip, don't waste an agent run
             if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 401) {
-              return { userId: user.id, hasNew: true }
+              console.warn(`[Dispatcher] Skipping user ${user.id} — OAuth token expired (401)`)
+              return { userId: user.id, hasNew: false }
             }
             throw err
           }

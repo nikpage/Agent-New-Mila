@@ -23,6 +23,7 @@ export interface ReflectionInput {
   actedOnActions: {
     actionId: string
     actionType: string
+    cpId: string
     cpName: string
     originalIntentCs: string | null
     finalIntentCs: string | null
@@ -100,6 +101,7 @@ export async function gatherReflectionInput(userId: string): Promise<ReflectionI
       return {
         actionId: action.id,
         actionType: action.action_type,
+        cpId: action.cp_id,
         cpName: cp?.name ?? 'Unknown',
         originalIntentCs: action.original_intent_cs ?? null,
         finalIntentCs: action.intent_cs ?? null,
@@ -162,7 +164,7 @@ function buildReflectionPrompt(input: ReflectionInput, userLanguage: string): st
   const actedOnStr = input.actedOnActions.length > 0
     ? input.actedOnActions.map(a => {
       const parts = [
-        `- ${a.actionType} for ${a.cpName}: user ${a.userAction}`,
+        `- ${a.actionType} for ${a.cpName} (cp_id: ${a.cpId}): user ${a.userAction}`,
       ]
       if (a.originalIntentCs && a.finalIntentCs && a.originalIntentCs !== a.finalIntentCs) {
         parts.push(`  Intent changed: "${a.originalIntentCs}" → "${a.finalIntentCs}"`)
@@ -182,7 +184,7 @@ function buildReflectionPrompt(input: ReflectionInput, userLanguage: string): st
 
   const timelineStr = input.recentTimelineChanges.length > 0
     ? input.recentTimelineChanges.map(t =>
-      `- ${t.direction} ${t.eventType} with ${t.cpName} at ${t.occurredAt}`
+      `- ${t.direction} ${t.eventType} with ${t.cpName} (cp_id: ${t.cpId}) at ${t.occurredAt}`
     ).join('\n')
     : 'No timeline changes since last cycle.'
 
@@ -224,7 +226,7 @@ OUTPUT — valid JSON only, no text outside it:
   "observations": [
     {
       "scope": "global|cp_id|conversation_id|temporal",
-      "scope_ref": "<uuid or null>",
+      "scope_ref": "<cp_id or conversation_id UUID from input data, or null for global/temporal>",
       "topic": "<short topic, max 5 words>",
       "content": "<specific observation, max 2 sentences>",
       "expires_at": "<ISO datetime or null>",
@@ -238,6 +240,8 @@ OUTPUT — valid JSON only, no text outside it:
 
 // --- Process output ---
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export async function processReflectionOutput(
   userId: string,
   output: ReflectionOutput
@@ -246,6 +250,12 @@ export async function processReflectionOutput(
 
   for (const obs of output.observations) {
     try {
+      // Validate scope_ref is a UUID when scope requires one
+      if (obs.scope_ref && !UUID_RE.test(obs.scope_ref)) {
+        console.warn(`[Reflection] Skipping observation — invalid scope_ref "${obs.scope_ref}" (expected UUID)`)
+        continue
+      }
+
       if (obs.relation_to_existing === 'new') {
         await createJournalEntry({
           user_id: userId,
