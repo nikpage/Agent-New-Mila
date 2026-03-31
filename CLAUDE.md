@@ -332,7 +332,7 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 | dollarValue | 0+ (CZK) | Deal/transaction value |
 | kcHighValue | default 5000000 | "Big deal" anchor from settings.kc_high_value. Used to calculate nVal. |
 | sellerMultiplier | default 1 | From user settings: offer_multiplier_seller (1.5) or offer_multiplier_buyer (1.0) based on CP role |
-| urgency | 1-10 | AI-assessed, safe default 1 |
+| urgency | 1-10 | AI-assessed (trusted directly, no post-processing clamp), safe default 1. Prompt includes `urgencyJustification` field as a reasoning aid — forces the AI to cite evidence before assigning urgency. |
 | daysIgnored | 0+ | Days since last activity (escalates via ^1.5) |
 | weight | 1-10 or 100, default 0 | Added flat to priority score + scheduling immovability. How movable: 1 = easy to reschedule, 10 = hard to move. 100 = absolutely immovable. User events default to 7. |
 
@@ -461,6 +461,7 @@ When a brief or instant notification is being prepared, Mila pre-optimizes ALL u
 
 ### Slot Finding
 - `findFreeSlots()` scans working hours for gaps between ALL calendar events (including holds)
+- Working hours are computed in Prague timezone (Europe/Prague) regardless of server runtime TZ — uses `Intl.DateTimeFormat` + `Date.UTC` offset detection, NOT `setHours()` which would use server-local TZ (UTC on Vercel)
 - Respects working_hours_start/end, working_days from user settings
 - Applies meeting_buffer_minutes (default 15m) between meetings
 
