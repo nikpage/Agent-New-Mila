@@ -274,11 +274,19 @@ export async function findFreeSlots(
 ): Promise<{ start: Date; end: Date }[]> {
   const events = await getEventsForDay(userId, date)
 
-  const startOfDay = new Date(date)
-  startOfDay.setHours(workingHoursStart, 0, 0, 0)
+  // Build working hours in Prague time — setHours uses runtime TZ which is UTC on Vercel.
+  // Extract the date in Prague, then construct UTC timestamps for Prague working hours.
+  const pragueDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Prague' }).format(date)
+  const [year, month, day] = pragueDate.split('-').map(Number)
 
-  const endOfDay = new Date(date)
-  endOfDay.setHours(workingHoursEnd, 0, 0, 0)
+  // Get Prague UTC offset for this date (handles CET/CEST automatically)
+  const probePrague = new Date(Date.UTC(year, month - 1, day, 12, 0, 0))
+  const pragueStr = probePrague.toLocaleString('en-US', { timeZone: 'Europe/Prague', hour12: false })
+  const pragueHour = parseInt(pragueStr.split(', ')[1].split(':')[0])
+  const offsetHours = pragueHour - 12
+
+  const startOfDay = new Date(Date.UTC(year, month - 1, day, workingHoursStart - offsetHours, 0, 0))
+  const endOfDay = new Date(Date.UTC(year, month - 1, day, workingHoursEnd - offsetHours, 0, 0))
 
   const slots: { start: Date; end: Date }[] = []
   let currentTime = startOfDay
