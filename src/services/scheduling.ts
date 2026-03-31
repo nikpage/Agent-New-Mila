@@ -780,6 +780,11 @@ export async function optimizeScheduleActions(
   // Get all free slots for the next 14 days (enough to schedule all meetings)
   const allSlots = await findBestSlots(userId, settings.default_meeting_duration, 50)
 
+  console.log(`[optimizer:DEBUG] Found ${allSlots.length} free slots (duration=${settings.default_meeting_duration}, buffer=${bufferMinutes})`)
+  for (const s of allSlots.slice(0, 15)) {
+    console.log(`[optimizer:DEBUG]   slot: ${s.start.toISOString()} → ${s.end.toISOString()}`)
+  }
+
   // Track booked time ranges INCLUDING travel buffers (respects buffer on both sides)
   const bookedRanges: { start: Date; end: Date }[] = []
 
@@ -859,6 +864,11 @@ export async function optimizeScheduleActions(
       preferredDate = parseTimePreferenceToPragueDate(suggestedTime)
     }
 
+    console.log(`[optimizer:DEBUG] Action ${action.id} (${action.action_type}):`)
+    console.log(`[optimizer:DEBUG]   suggestedTime=${suggestedTime}, parsed preferredDate=${preferredDate?.toISOString() ?? 'none'}`)
+    console.log(`[optimizer:DEBUG]   cpAvailability=${cpAvailability}, meetingType=${payloadMeetingType}, duration=${duration}`)
+    console.log(`[optimizer:DEBUG]   location=${meetingLocation}, priority=${action.priority_score}, urgency=${action.urgency}`)
+
     // ── Unified slot selection ──────────────────────────────────────
     let candidateSlots: SlotProposal[] = []
 
@@ -872,19 +882,36 @@ export async function optimizeScheduleActions(
         free.end.getTime() >= preferredEnd.getTime()
       )
 
+      console.log(`[optimizer:DEBUG]   preferredSlot: ${preferredDate!.toISOString()} → ${preferredEnd.toISOString()}`)
+      console.log(`[optimizer:DEBUG]   preferredSlotIsFree (allSlots check): ${preferredSlotIsFree}`)
+      if (!preferredSlotIsFree) {
+        // Log why no allSlot matched
+        for (const free of allSlots.filter(s => s.start.toISOString().startsWith(preferredDate!.toISOString().slice(0, 10)))) {
+          console.log(`[optimizer:DEBUG]   same-day slot: ${free.start.toISOString()} → ${free.end.toISOString()} | start<=${preferredDate!.toISOString()}? ${free.start.getTime() <= preferredDate!.getTime()} | end>=${preferredEnd.toISOString()}? ${free.end.getTime() >= preferredEnd.getTime()}`)
+        }
+      }
+
       if (!preferredSlotIsFree) {
         const daySlots = await findFreeSlots(
           userId, preferredDate, duration,
           settings.working_hours_start, settings.working_hours_end,
           settings.meeting_buffer_minutes
         )
+        console.log(`[optimizer:DEBUG]   daySlots fallback found ${daySlots.length} slots:`)
+        for (const ds of daySlots) {
+          console.log(`[optimizer:DEBUG]     ${ds.start.toISOString()} → ${ds.end.toISOString()}`)
+        }
         preferredSlotIsFree = daySlots.some(free =>
           free.start.getTime() <= preferredDate!.getTime() &&
           free.end.getTime() >= preferredEnd.getTime()
         )
+        console.log(`[optimizer:DEBUG]   preferredSlotIsFree (daySlots check): ${preferredSlotIsFree}`)
       }
 
-      if (preferredSlotIsFree && isSlotAvailable(preferredSlot)) {
+      const batchAvailable = isSlotAvailable(preferredSlot)
+      console.log(`[optimizer:DEBUG]   isSlotAvailable (batch check): ${batchAvailable}`)
+
+      if (preferredSlotIsFree && batchAvailable) {
         const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
         if (holdResult.success && holdResult.holdEvent) {
           await updateActionWithHold(action, holdResult, meetingLocation, settings)
@@ -893,16 +920,23 @@ export async function optimizeScheduleActions(
           bookedRanges.push(bookedRangeForHold(preferredDate, preferredEnd, holdResult))
           continue
         }
-      } else if (isSlotAvailable(preferredSlot)) {
+      } else if (batchAvailable) {
         // Preferred time conflicts — compare priorities
         const conflicts = await findAllConflicts(userId, preferredDate, preferredEnd)
         const newScore = action.priority_score ?? 0
+
+        console.log(`[optimizer:DEBUG]   CONFLICT PATH: ${conflicts.length} conflicts found, newScore=${newScore}`)
+        for (const c of conflicts) {
+          const w = c.weight ?? 7
+          console.log(`[optimizer:DEBUG]     conflict: "${c.title}" ${c.start_time}→${c.end_time} weight=${c.weight} eventScore=${calculateEventScore({ weight: w })} movable=${w < 100 && newScore > calculateEventScore({ weight: w })}`)
+        }
 
         const allConflictsMovable = conflicts.length > 0 && conflicts.every(existing => {
           const w = existing.weight ?? 7
           return w < 100 && newScore > calculateEventScore({ weight: w })
         })
 
+        console.log(`[optimizer:DEBUG]   allConflictsMovable=${allConflictsMovable}`)
         if (allConflictsMovable) {
           const holdResult = await blockSlotForProposal(userId, action.cp_id, preferredSlot, duration, meetingLocation || undefined, undefined, action.conversation_id)
           if (holdResult.success && holdResult.holdEvent) {
@@ -928,11 +962,14 @@ export async function optimizeScheduleActions(
           }
         }
         // Conflict too strong — fall through to normal slot selection
+        console.log(`[optimizer:DEBUG]   ⚠ FALLING THROUGH to generic slot selection`)
       }
     }
 
     // Normal path: pick from GCal-validated free slots
+    console.log(`[optimizer:DEBUG]   GENERIC PATH: picking from allSlots`)
     const availableSlots = allSlots.filter(s => isSlotAvailable(s))
+    console.log(`[optimizer:DEBUG]   ${availableSlots.length} available after batch filter`)
 
     if (availableSlots.length === 0) {
       result.unscheduled++
