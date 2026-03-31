@@ -56,14 +56,9 @@ export async function GET(
     // If already resolved, still allow viewing (user may want to change decision)
     const alreadyResolved = !!(conflict as Record<string, unknown>).resolved
 
-    // Check if the existing event still exists (may have been moved/cancelled already)
+    // Check if the existing event still exists — inform but don't block
     const existingEvent = await getEventById(conflict.event_id)
-    if (!existingEvent || existingEvent.status === 'cancelled') {
-      return NextResponse.json({
-        error: 'Tento konflikt již byl vyřešen — schůzka byla přesunuta nebo zrušena.',
-        resolved: true,
-      }, { status: 409 })
-    }
+    const eventGone = !existingEvent || existingEvent.status === 'cancelled'
 
     const settings = await getUserSettings(action.user_id)
     const tz = settings.timezone || 'Europe/Prague'
@@ -201,6 +196,7 @@ export async function GET(
       availableSlots,
       recommendation: conflict.recommendation,
       alreadyResolved,
+      eventGone,
     })
   } catch (error) {
     console.error('[ResolveConflict:GET]', error)

@@ -366,6 +366,7 @@ export async function confirmSlot(
   // Confirm on Google Calendar + send invite to CP
   if (confirmedEvent.google_event_id) {
     try {
+      console.log(`[Scheduling:confirmSlot] Confirming GCal event ${confirmedEvent.google_event_id}, cpEmail=${cpEmail || 'NONE'}, sendUpdates=${cpEmail ? 'all' : 'none'}`)
       await confirmCalendarEvent(
         userId,
         confirmedEvent.google_event_id,
@@ -377,8 +378,9 @@ export async function confirmSlot(
         },
         conferenceData
       )
+      console.log(`[Scheduling:confirmSlot] GCal event confirmed successfully`)
     } catch (error) {
-      console.error('Failed to confirm gcal event:', error)
+      console.error('[Scheduling:confirmSlot] FAILED to confirm gcal event:', error)
     }
   } else if (cpEmail) {
     try {
