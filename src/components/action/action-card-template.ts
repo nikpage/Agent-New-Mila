@@ -228,7 +228,8 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
         <a href="${actionUrl}" style="font-size: 14px; color: ${theme.colors.textMuted}; text-decoration: none;">&#9656; Detaily</a>
       </div>
 
-      <!-- ACTION CONTROLS -->
+      <!-- ACTION CONTROLS — hidden when unresolved conflicts exist (conflict card has its own CTA) -->
+      ${conflicts && conflicts.filter(c => !(c as Record<string, unknown>).resolved).length > 0 ? '' : `
       <div style="padding: 16px 24px; border-top: 1px solid ${theme.colors.border};">
         <table width="100%" cellpadding="0" cellspacing="0" border="0">
           <tr>
@@ -243,6 +244,7 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
           </tr>
         </table>
       </div>
+      `}
     </div>
   `
 }

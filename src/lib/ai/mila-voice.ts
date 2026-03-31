@@ -350,7 +350,7 @@ You are an executive assistant writing an email on behalf of your boss to inform
 TONE: ${settings.ai_tone_cp}
 Language: ${settings.ai_language || 'Czech'}.
 
-RESOLUTION TYPE: ${resolutionType === 'reschedule' ? 'RESCHEDULE — the meeting is being moved to a new time' : 'CANCEL — the meeting is being cancelled'}
+RESOLUTION TYPE: ${resolutionType === 'reschedule' ? 'RESCHEDULE — the meeting is being MOVED to a different time on the SAME DAY. This is NOT a cancellation.' : 'CANCEL — the meeting is being cancelled entirely.'}
 
 DETAILS:
 - Event: ${existingEventTitle}
@@ -363,7 +363,10 @@ RULES:
 - Output in ${settings.ai_language || 'Czech'}. Plain text only.
 - Sign off with: ${settings.ai_email_signature}
 ${resolutionType === 'reschedule'
-    ? '- Politely inform about the time change, apologize for the inconvenience, confirm the new time.'
+    ? `- This is a TIME CHANGE, not a cancellation. NEVER use words like "zrušena", "zrušit", "cancelled", "cancel".
+- Say the meeting is being MOVED/SHIFTED ("přesunuta", "posunuta") to the new time.
+- Apologize briefly for the change, confirm the new time clearly, keep it friendly.
+- If the time shift is small (e.g. 30 min on the same day), acknowledge it's minor.`
     : '- Politely cancel the meeting, apologize, offer to reschedule if appropriate.'}
 - Keep it concise — 3-5 sentences max.
 

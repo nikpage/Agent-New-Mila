@@ -7,7 +7,7 @@ import { getCPById } from '@/lib/db/counterparties'
 import { generateConflictResolutionDraft } from '@/lib/ai/mila-voice'
 import { confirmSlot, findBestSlots, blockSlotForProposal } from '@/services/scheduling'
 import { updateCalendarEvent, deleteCalendarEvent } from '@/lib/google/calendar'
-import { sendEmail } from '@/lib/google/gmail'
+// sendEmail removed — resolution drafts are stored for user approval, not sent autonomously
 import type { ConflictCardData } from '@/components/action/action-card-template'
 import type { Json } from '@/lib/supabase/types'
 
@@ -52,13 +52,8 @@ export async function GET(
       return NextResponse.json({ error: 'Conflict not found — may have been resolved' }, { status: 404 })
     }
 
-    // Check if this conflict was already resolved in a previous interaction
-    if ((conflict as Record<string, unknown>).resolved) {
-      return NextResponse.json({
-        error: 'Tento konflikt již byl vyřešen.',
-        resolved: true,
-      }, { status: 409 })
-    }
+    // If already resolved, still allow viewing (user may want to change decision)
+    const alreadyResolved = !!(conflict as Record<string, unknown>).resolved
 
     // Check if the existing event still exists (may have been moved/cancelled already)
     const existingEvent = await getEventById(conflict.event_id)
@@ -199,6 +194,7 @@ export async function GET(
       altSlot: altTimeStr ? { time: altTimeStr, start: conflict.alt_slot_start, end: conflict.alt_slot_end } : null,
       availableSlots,
       recommendation: conflict.recommendation,
+      alreadyResolved,
     })
   } catch (error) {
     console.error('[ResolveConflict:GET]', error)
@@ -267,9 +263,7 @@ export async function POST(
       return NextResponse.json({ error: 'Conflict not found' }, { status: 404 })
     }
 
-    if ((conflict as Record<string, unknown>).resolved) {
-      return NextResponse.json({ success: true, message: 'Tento konflikt již byl vyřešen.', resolved: true })
-    }
+    // Allow re-resolution — user may want to change their decision
 
     // Re-check existing event is still there
     const existingEvent = await getEventById(conflict.event_id)
@@ -348,14 +342,17 @@ export async function POST(
 
       await rescheduleEvent(userId, conflict.event_id, altStart, altEnd, updateCalendarEvent)
 
-      // 2. If event has guests, send notification
+      // 2. Store notification draft for user approval (Mila never sends CP-facing emails autonomously)
       if ((conflict.event_has_guests || conflict.event_cp_name) && edited_draft) {
         const cpEmail = await getCpEmailFromEvent(existingEvent, conflict)
         if (cpEmail) {
-          await sendEmail(userId, {
-            to: cpEmail,
-            subject: edited_draft.subject,
-            body: edited_draft.body,
+          const freshAction = await getActionById(actionId)
+          const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
+          await updateAction(actionId, {
+            payload: {
+              ...freshPayload,
+              resolution_draft: { to: cpEmail, subject: edited_draft.subject, body: edited_draft.body },
+            } as unknown as Json,
           })
         }
       }
@@ -369,14 +366,17 @@ export async function POST(
       // 1. Cancel existing event
       await cancelEventWithCleanup(conflict.event_id)
 
-      // 2. If event has guests, send cancellation
+      // 2. Store cancellation draft for user approval (Mila never sends CP-facing emails autonomously)
       if ((conflict.event_has_guests || conflict.event_cp_name) && edited_draft) {
         const cpEmail = await getCpEmailFromEvent(existingEvent, conflict)
         if (cpEmail) {
-          await sendEmail(userId, {
-            to: cpEmail,
-            subject: edited_draft.subject,
-            body: edited_draft.body,
+          const freshAction = await getActionById(actionId)
+          const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
+          await updateAction(actionId, {
+            payload: {
+              ...freshPayload,
+              resolution_draft: { to: cpEmail, subject: edited_draft.subject, body: edited_draft.body },
+            } as unknown as Json,
           })
         }
       }
@@ -539,17 +539,23 @@ async function confirmNewEventAndComplete(
   const holdEventId = payload?.hold_event_id as string | null
 
   if (holdEventId) {
-    const cp = payload?.cp_id ? await getCPById(payload.cp_id as string) : null
+    const action = await getActionById(actionId)
+    const cp = action?.cp_id ? await getCPById(action.cp_id) : null
     const cpEmail = cp?.primary_identifier?.includes('@') ? cp.primary_identifier : undefined
     const isOnline = !!payload?.is_online
     const location = payload?.location as string | undefined
+
+    // Build proper event title from CP name + topic (replaces "REZERVACE")
+    const cpName = cp?.name || cp?.primary_identifier || ''
+    const topic = (payload?.topic as string) || ''
+    const newTitle = topic ? `${cpName} — ${topic}` : cpName || undefined
 
     await confirmSlot(
       userId,
       holdEventId,
       cpEmail,
       location,
-      undefined,
+      newTitle,
       undefined,
       isOnline
     )
