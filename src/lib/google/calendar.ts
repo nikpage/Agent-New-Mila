@@ -23,6 +23,21 @@ export interface CalendarEvent {
  * even after a DB wipe (the Google Calendar event survives).
  */
 export const MILA_MANAGED_KEY = 'milaManaged'
+
+/** All calendar events use Europe/Prague — the only timezone for this app. */
+const CALENDAR_TIMEZONE = 'Europe/Prague'
+
+/**
+ * Format a Date as a local Prague time string for Google Calendar API.
+ * Output: "2026-04-01T09:00:00+02:00" (with correct Prague offset).
+ * Google Calendar API with timeZone: 'Europe/Prague' interprets this correctly
+ * regardless of server timezone (UTC on Vercel, local elsewhere).
+ */
+function toPragueDateTime(date: Date): string {
+  const pragueStr = date.toLocaleString('sv-SE', { timeZone: CALENDAR_TIMEZONE })
+  // sv-SE locale gives "2026-04-01 09:00:00" format — replace space with T
+  return pragueStr.replace(' ', 'T')
+}
 export const MILA_BLOCK_GROUP_KEY = 'milaBlockGroupId'
 
 export interface CreateEventParams {
@@ -152,10 +167,12 @@ export async function createCalendarEvent(
     description: params.description,
     location: params.location,
     start: {
-      dateTime: params.startTime.toISOString(),
+      dateTime: toPragueDateTime(params.startTime),
+      timeZone: CALENDAR_TIMEZONE,
     },
     end: {
-      dateTime: params.endTime.toISOString(),
+      dateTime: toPragueDateTime(params.endTime),
+      timeZone: CALENDAR_TIMEZONE,
     },
     attendees: params.attendees?.map(email => ({ email })),
     extendedProperties: {
@@ -201,10 +218,10 @@ export async function updateCalendarEvent(
   if (updates.description !== undefined) requestBody.description = updates.description
   if (updates.location !== undefined) requestBody.location = updates.location
   if (updates.startTime !== undefined) {
-    requestBody.start = { dateTime: updates.startTime.toISOString() }
+    requestBody.start = { dateTime: toPragueDateTime(updates.startTime), timeZone: CALENDAR_TIMEZONE }
   }
   if (updates.endTime !== undefined) {
-    requestBody.end = { dateTime: updates.endTime.toISOString() }
+    requestBody.end = { dateTime: toPragueDateTime(updates.endTime), timeZone: CALENDAR_TIMEZONE }
   }
   if (updates.attendees !== undefined) {
     requestBody.attendees = updates.attendees.map(email => ({ email }))
@@ -415,10 +432,12 @@ export async function createTentativeCalendarEvent(
       description: params.description,
       location: params.location,
       start: {
-        dateTime: params.startTime.toISOString(),
+        dateTime: toPragueDateTime(params.startTime),
+        timeZone: CALENDAR_TIMEZONE,
       },
       end: {
-        dateTime: params.endTime.toISOString(),
+        dateTime: toPragueDateTime(params.endTime),
+        timeZone: CALENDAR_TIMEZONE,
       },
       status: params.status || 'tentative',
       transparency: 'opaque', // Show as busy
