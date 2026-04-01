@@ -84,10 +84,19 @@ Done cards collapse with a checkmark.
 **Shares base elements with conflict card** — conflict adds extras on top, not a completely different layout.
 
 ### TODO
-**CTAs discussed (not final):**
-- Hotovo (done)
-- Odložit → when picker (today/tomorrow/next week)
-- Smazat (kill it)
+**Expanded content:**
+1. **Mila's story** (context — why this task exists).
+2. **Task description** — what needs doing.
+3. **Due date/time** — explicit. This is where urgency + days ignored come in.
+4. **Due context** — natural language: "Potřebuješ to před schůzkou s Novotným ve čtvrtek."
+5. **Linked question** — if this TODO was created via "Zjistím" on a REPLY question, shows the original question. Completing it returns user to the parent REPLY card with the answer filled in.
+
+**CTAs:**
+- **Hotovo** — done, remove. If linked to a parent REPLY/SCHEDULE, that card surfaces in next brief.
+- **Odložit** — segmented control: Dnes / Zítra / Příští týden. Resets due date/time.
+- **Smazat** — small, less prominent. Kills it entirely.
+
+No draft. No instruction field. TODOs are for the user, not for Mila to send.
 
 Note: postponing and completing are separate actions. Don't merge them.
 
@@ -121,7 +130,7 @@ AI extracts actual CP questions from conversation (not generic "missing field" l
 
 ## Open Items
 - [x] SCHEDULE card CTAs — Potvrdit / Úkol
-- [ ] TODO card CTAs (finalize)
+- [x] TODO card CTAs — Hotovo / Odložit / Smazat
 - [ ] Web page routing / URL structure
 - [ ] Swipe gestures (dismiss, etc.)
 - [ ] Voice notes UI placement (future)
