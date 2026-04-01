@@ -107,6 +107,50 @@ Note: postponing and completing are separate actions. Don't merge them.
 - No scores, no weights, no technical jargon.
 - Extra CTAs: "Přesunout [event name]" / "Nechat obojí"
 
+## Day Itinerary (Web Brief Page)
+
+### Layout
+- Simple linear list. Each day = section header, events listed chronologically.
+- Shows today + tomorrow + however many days have events. Scrollable.
+- Changes sync to Google Calendar via existing API.
+
+### Event Row
+- Time · Title · Location
+- Tap → edit time, location
+- Swipe → delete/cancel
+- Holds visually distinct ("čeká na potvrzení")
+
+### Travel Buffers
+- NOT shown as separate rows. Shown as subtle annotation on the meeting: "15 min cesta" above the event.
+- When meeting moves, backend recalculates buffer automatically. User doesn't manage buffers.
+
+### Drag to Reschedule
+User can drag events to new times. Any move triggers Mila's consequence review.
+
+**Flow:**
+1. User drags event to new time.
+2. Backend recalculates travel buffers, detects affected events/invitees.
+3. Mila generates a conversational rundown of consequences — one AI call with full context:
+   - CP relationship history (how many times rescheduled, deal status, sentiment)
+   - Impact on other events (buffer conflicts, cascading moves)
+   - Mila's honest opinion — she pushes back when warranted
+4. Example: "Novotného jsi přesunul už 3x tento týden. Další zpoždění nepůsobí dobře. Eva je s termínem spokojená a deal za 4.5M běží hladce. Stojí to za to?"
+5. User reads, decides:
+   - **Potvrdit změny** → each affected CP gets a card in the SCHEDULE notification flow. User reviews and sends each.
+   - **Zpět** → undo drag, original state restored.
+
+**AI inputs for consequence rundown:**
+- Rescheduled CP: name, deal value, deal status, reschedule history (count from action_proposals)
+- Affected CPs: same context for anyone whose slot shifts
+- summary_json for each conversation — sentiment, current state
+- Calendar context — what's around the new slot
+
+**Key rules:**
+- Every time change affecting an invitee requires user to review a notification to CP. No silent calendar updates. Mila drafts a polite, context-aware message. Being rude with people's time is unacceptable.
+- Google Calendar sync happens AFTER user confirms and sends notifications.
+- "Zpět" always available. No change committed until user confirms.
+- Mila uses judgment — she has the relationship data and isn't afraid to say "this is a bad idea."
+
 ## AI Generation
 
 ### Brief Headlines
