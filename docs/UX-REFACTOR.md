@@ -221,11 +221,23 @@ New function in `mila-voice.ts`: generates headline + 2-3 sentence story per act
 ### Smart Question Extraction
 AI extracts actual CP questions from conversation (not generic "missing field" labels). Maps each to an input type (year, yes/no, options, free text). Pre-fills from deal context where possible.
 
+## Swipe Gestures (Mobile)
+- **Swipe right** → primary action (Odeslat / Potvrdit / Hotovo depending on card type). Quick approval without expanding.
+- **Swipe left** → dismiss. Card slides out, moves to history.
+- Swipe on collapsed cards only. Expanded cards use the sticky CTA bar.
+- Subtle swipe hints on first use (onboarding).
+
+## Urgency Visual Signal
+- **Urgency 10**: 🔥🔥🔥 on the collapsed card. Impossible to miss.
+- **Urgency 9**: 🔥 on the collapsed card. Urgent but not house-on-fire.
+- **Urgency 1-8**: no visual indicator. Urgency conveyed through Mila's words in the headline + card sort order.
+- Same signals used in email headlines.
+
 ## Open Items
 - [x] SCHEDULE card CTAs — Potvrdit / Úkol
 - [x] TODO card CTAs — Hotovo / Odložit / Smazat
 - [x] Web page routing / URL structure — live brief at /brief/{userId}
-- [ ] Swipe gestures (dismiss, etc.)
+- [x] Swipe gestures — right to approve, left to dismiss
+- [x] Urgency visual signal — 🔥 (9) / 🔥🔥🔥 (10)
 - [ ] Voice notes UI placement (future)
 - [ ] Native Czech CTA labels — user test needed
-- [ ] Urgency visual signal for web cards (words-only? subtle indicator?)
