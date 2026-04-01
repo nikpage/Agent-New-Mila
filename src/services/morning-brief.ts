@@ -10,11 +10,13 @@ import { getConversationById } from '@/lib/db/conversations'
 import { getEventsForToday, getUpcomingEvents } from '@/lib/db/events'
 import { getTodosDueToday, getOverdueTodos } from '@/lib/db/todos'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
-import { generateBriefIntro, generateQuietBriefIntro, generateUrgentIntro } from '@/lib/ai/mila-voice'
+import { generateBriefIntro, generateQuietBriefIntro, generateUrgentIntro, generateBriefHeadline } from '@/lib/ai/mila-voice'
 import { optimizeScheduleActions, scheduleSingleAction } from '@/services/scheduling'
 import { ensureBriefSchedules } from '@/lib/qstash/client'
-import { generateActionToken } from '@/lib/auth/tokens'
+import { generateActionToken, generateTriggerToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml } from '../components/action/action-card-template';
+import { getHeadlineEmailHtml, getHeadlineEmailText } from '../components/brief/headline-email-template'
+import type { HeadlineAction, HeadlineEvent, HeadlineCompleted } from '../components/brief/headline-email-template'
 import { theme } from '@/config/theme'
 import type { ActionProposal, ConversationSummary } from '@/lib/supabase/types'
 
@@ -345,17 +347,101 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       briefSubject = `Mila: ${briefActions.length} akci`
     }
 
-    const htmlContent = generateBriefEmailHtml(userId, greeting, headline, briefActions, events.map(e => ({
+    // Generate AI headlines per action (parallel, with fallback)
+    const briefSettings = await getUserSettings(userId)
+    const calendarForHeadlines = events.map(e => ({
+      time: new Date(e.start_time).toLocaleTimeString('cs-CZ', {
+        hour: '2-digit', minute: '2-digit', hour12: false, timeZone: user.email_timezone,
+      }),
       title: e.title || 'Event',
-      time: new Date(e.start_time).toLocaleTimeString('en-US', {
-        hour: 'numeric',
-        minute: '2-digit',
-        timeZone: user.email_timezone,
+    }))
+
+    const headlineResults = await Promise.allSettled(
+      briefActions.map(ba => {
+        const payload = ba.action.payload as Record<string, unknown> | null
+        let slotText: string | null = null
+        if (ba.action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
+          const tz = 'Europe/Prague'
+          const s = new Date(payload.start as string)
+          const e = new Date(payload.end as string)
+          slotText = `${s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })}, ${s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })} - ${e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })}`
+        }
+        const daysIgnored = Math.max(0, Math.floor((Date.now() - new Date(ba.action.created_at).getTime()) / 86_400_000))
+        return generateBriefHeadline(
+          {
+            actionType: ba.action.action_type,
+            cpName: ba.cpName,
+            dealValue: ba.action.dollar_value || 0,
+            urgency: ba.action.urgency,
+            intent: ba.action.intent_cs || ba.action.rationale_cs || ba.action.rationale || '',
+            daysSinceContact: daysIgnored,
+            holdSlotText: slotText,
+          },
+          ba.summary ? { currentState: ba.summary.currentState, risks: ba.summary.risks, dealType: ba.summary.dealType } : null,
+          calendarForHeadlines,
+          briefSettings
+        )
+      })
+    )
+
+    // Build headline actions with fallbacks
+    const headlineActions: HeadlineAction[] = briefActions.map((ba, i) => {
+      const result = headlineResults[i]
+      const hl = result.status === 'fulfilled' ? result.value : { headline: ba.cpName, story: ba.action.intent_cs || ba.action.rationale || '' }
+      const payload = ba.action.payload as Record<string, unknown> | null
+      let slotText: string | null = null
+      if (ba.action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
+        const tz = 'Europe/Prague'
+        const s = new Date(payload.start as string)
+        const e = new Date(payload.end as string)
+        slotText = `${s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })}, ${s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })} - ${e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })}`
+      }
+      return {
+        id: ba.action.id,
+        actionType: ba.action.action_type,
+        cpName: ba.cpName,
+        urgency: ba.action.urgency,
+        headline: hl.headline,
+        story: hl.story,
+        slotText,
+      }
+    })
+
+    // Build brief URL with trigger token
+    const triggerToken = generateTriggerToken(userId)
+    const briefUrl = `${APP_BASE_URL}/brief/${userId}?token=${triggerToken}`
+
+    const headlineEvents: HeadlineEvent[] = events.map(e => ({
+      title: e.title || 'Event',
+      time: new Date(e.start_time).toLocaleTimeString('cs-CZ', {
+        hour: '2-digit', minute: '2-digit', hour12: false, timeZone: user.email_timezone,
       }),
       location: e.location || undefined,
-    })), completedItems, commandItems)
+      isHold: e.status === 'tentative' || e.event_type === 'hold',
+    }))
 
-    const textContent = generateBriefEmailText(greeting, headline, briefActions, completedItems, commandItems)
+    const headlineCompleted: HeadlineCompleted[] = completedItems.map(item => ({
+      cpName: item.cpName,
+      actionType: item.actionType,
+      topic: item.topic,
+    }))
+
+    const htmlContent = getHeadlineEmailHtml({
+      greeting: `${greeting}${headline ? `\n${headline}` : ''}`,
+      briefUrl,
+      actions: headlineActions,
+      events: headlineEvents,
+      completed: headlineCompleted,
+    })
+
+    const textContent = getHeadlineEmailText({
+      greeting: `${greeting}\n${headline}`,
+      briefUrl,
+      actions: headlineActions,
+      events: headlineEvents,
+      completed: headlineCompleted,
+    })
+
     const userEmail = await getUserEmail(userId)
 
     await sendEmail(userId, {
@@ -821,8 +907,77 @@ async function sendInstantNotificationForConversation(
       urgentBody = ''
     }
 
-    const htmlContent = generateInstantNotifyEmailHtml(briefActions, urgentHeader, urgentBody)
-    const textContent = generateInstantNotifyEmailText(briefActions, urgentHeader)
+    // Generate AI headlines for urgent actions
+    const urgentSettings = await getUserSettings(userId)
+    const urgentHeadlineResults = await Promise.allSettled(
+      briefActions.map(ba => {
+        const payload = ba.action.payload as Record<string, unknown> | null
+        let slotText: string | null = null
+        if (ba.action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
+          const tz = 'Europe/Prague'
+          const s = new Date(payload.start as string)
+          const e = new Date(payload.end as string)
+          slotText = `${s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })}, ${s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })} - ${e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })}`
+        }
+        const daysIgnored = Math.max(0, Math.floor((Date.now() - new Date(ba.action.created_at).getTime()) / 86_400_000))
+        return generateBriefHeadline(
+          {
+            actionType: ba.action.action_type,
+            cpName: ba.cpName,
+            dealValue: ba.action.dollar_value || 0,
+            urgency: ba.action.urgency,
+            intent: ba.action.intent_cs || ba.action.rationale_cs || ba.action.rationale || '',
+            daysSinceContact: daysIgnored,
+            holdSlotText: slotText,
+          },
+          ba.summary ? { currentState: ba.summary.currentState, risks: ba.summary.risks, dealType: ba.summary.dealType } : null,
+          [],
+          urgentSettings
+        )
+      })
+    )
+
+    const urgentHeadlineActions: HeadlineAction[] = briefActions.map((ba, i) => {
+      const result = urgentHeadlineResults[i]
+      const hl = result.status === 'fulfilled' ? result.value : { headline: ba.cpName, story: ba.action.intent_cs || ba.action.rationale || '' }
+      const payload = ba.action.payload as Record<string, unknown> | null
+      let slotText: string | null = null
+      if (ba.action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
+        const tz = 'Europe/Prague'
+        const s = new Date(payload.start as string)
+        const e = new Date(payload.end as string)
+        slotText = `${s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })}, ${s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })} - ${e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })}`
+      }
+      return {
+        id: ba.action.id,
+        actionType: ba.action.action_type,
+        cpName: ba.cpName,
+        urgency: ba.action.urgency,
+        headline: hl.headline,
+        story: hl.story,
+        slotText,
+      }
+    })
+
+    const urgentTriggerToken = generateTriggerToken(userId)
+    const urgentBriefUrl = `${APP_BASE_URL}/brief/${userId}?token=${urgentTriggerToken}`
+
+    const htmlContent = getHeadlineEmailHtml({
+      greeting: urgentHeader + (urgentBody ? `\n${urgentBody}` : ''),
+      briefUrl: urgentBriefUrl,
+      actions: urgentHeadlineActions,
+      events: [],
+      completed: [],
+    })
+
+    const textContent = getHeadlineEmailText({
+      greeting: `${urgentHeader}\n${urgentBody}`,
+      briefUrl: urgentBriefUrl,
+      actions: urgentHeadlineActions,
+      events: [],
+      completed: [],
+    })
+
     const userEmail = await getUserEmail(userId)
 
     await sendEmail(userId, {
