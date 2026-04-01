@@ -418,3 +418,137 @@ Respond with ONLY valid JSON:
   }
   return JSON.parse(jsonMatch[0])
 }
+
+/**
+ * Generate a brief headline + story for an action card.
+ * Used in the new headline-style email template and web brief page.
+ * Stage: drafting (claude-sonnet → gemini-2.5-flash)
+ */
+export async function generateBriefHeadline(
+  action: {
+    actionType: string
+    cpName: string
+    dealValue: number
+    urgency: number
+    urgencyJustification?: string
+    intent: string
+    daysSinceContact: number
+    holdSlotText?: string | null
+  },
+  dealContext: {
+    currentState?: string
+    risks?: string[]
+    dealType?: string | null
+  } | null,
+  calendar: { time: string; title: string }[],
+  settings: UserSettings
+): Promise<{ headline: string; story: string }> {
+  const calendarText = calendar.length > 0
+    ? calendar.map(e => `${e.time}: ${e.title}`).join('\n')
+    : 'No meetings today'
+
+  const prompt = `You are Mila, a sharp executive assistant. Write a brief headline and 2-3 sentence story for ONE action card.
+
+TONE: ${settings.ai_tone_user}
+
+ACTION:
+- Type: ${action.actionType}
+- Counterparty: ${action.cpName}
+- Deal value: ${action.dealValue > 0 ? `${action.dealValue.toLocaleString()} ${settings.typical_deal_size_currency}` : 'unknown'}
+- Urgency: ${action.urgency}/10${action.urgencyJustification ? ` — ${action.urgencyJustification}` : ''}
+- What Mila proposes: ${action.intent}
+- Days since CP last contacted: ${action.daysSinceContact}
+${action.holdSlotText ? `- Mila booked a slot: ${action.holdSlotText}` : ''}
+
+DEAL CONTEXT:
+${dealContext?.currentState ? `- Current state: ${dealContext.currentState}` : '- No deal context available'}
+${dealContext?.risks?.length ? `- Risks: ${dealContext.risks.join(', ')}` : ''}
+${dealContext?.dealType ? `- Deal type: ${dealContext.dealType}` : ''}
+
+USER'S SCHEDULE TODAY:
+${calendarText}
+
+RULES:
+- Output in ${settings.ai_language || 'Czech'}. Plain text only. No markdown, no bullet points.
+- Address user as "vy" (you). Never "uživatel".
+- headline: Bold, direct. Like a newspaper headline. Max 10 words. Name the CP. Convey the urgency through words — no labels like "REPLY" or "SCHEDULE". Examples: "Novotný POTŘEBUJE odpověď do poledne", "Zavolejte Evě do 10".
+- story: 2-3 sentences. What's at stake, what Mila already did, what user needs to do. Reference the user's schedule if relevant ("než dojedete na schůzku v 14:00"). Be a human assistant, not a system notification.
+- Urgency 9-10: Lead with consequence. What will the user LOSE if they don't act NOW.
+- Urgency 7-8: Clear time pressure. Name the deadline.
+- Urgency 1-6: Professional, calm. State the facts.
+- Do NOT include the action type label. Weave it into the language naturally.
+- Do NOT repeat slot times — the card template renders those separately.
+
+Respond with ONLY valid JSON:
+{
+  "headline": "...",
+  "story": "..."
+}`
+
+  const text = await runAITask('drafting', prompt)
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) {
+    // Fallback: use intent as story, CP name as headline
+    return {
+      headline: action.cpName,
+      story: action.intent,
+    }
+  }
+  return JSON.parse(jsonMatch[0])
+}
+
+/**
+ * Regenerate a draft incorporating user instruction.
+ * Used when user types free-text edits in the web brief card.
+ * Stage: draft_edit (claude-haiku → claude-sonnet)
+ */
+export async function regenerateDraftWithInstruction(
+  currentDraft: { subject: string; body: string },
+  instruction: string,
+  conversationContext: unknown,
+  cpName: string,
+  channel: 'email' | 'whatsapp',
+  settings: UserSettings
+): Promise<{ subject: string; body: string }> {
+  const systemContext = getAISystemPrompt(settings)
+  const isWhatsApp = channel === 'whatsapp'
+
+  const prompt = `${systemContext}
+
+You are refining a draft ${isWhatsApp ? 'WhatsApp message' : 'email'} based on user instructions.
+Language: ${settings.ai_language || 'Czech'}.
+
+CURRENT DRAFT:
+Subject: ${currentDraft.subject}
+Body: ${currentDraft.body}
+
+USER'S INSTRUCTION:
+${instruction}
+
+CONVERSATION CONTEXT:
+${JSON.stringify(conversationContext, null, 2)}
+
+RECIPIENT: ${cpName}
+
+RULES:
+- Apply the user's instruction to the current draft.
+- Keep the tone consistent: ${isWhatsApp ? 'short, conversational WhatsApp style' : settings.ai_tone_cp}.
+- If the instruction contradicts the draft, the instruction wins.
+- If the instruction is a small tweak, change only what's needed.
+- If the instruction says "zrušit" or "cancel", return empty subject and body.
+- Output ONLY in ${settings.ai_language || 'Czech'}.
+${!isWhatsApp ? `- Keep the signature: ${settings.ai_email_signature}` : ''}
+
+Respond with ONLY valid JSON:
+{
+  "subject": "${isWhatsApp ? '(empty string for WhatsApp)' : 'Updated subject'}",
+  "body": "Updated body text"
+}`
+
+  const text = await runAITask('draft_edit', prompt)
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) {
+    return currentDraft
+  }
+  return JSON.parse(jsonMatch[0])
+}
