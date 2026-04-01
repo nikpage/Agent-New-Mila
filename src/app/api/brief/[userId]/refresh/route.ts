@@ -53,12 +53,15 @@ export async function POST(
     const enrichedActions = pendingActions.map(action => {
       const cp = cpMap.get(action.cp_id)
       const conv = convMap.get(action.conversation_id)
+      const payload = action.payload as Record<string, unknown> | null
       return {
         ...action,
         cpName: cp?.name || cp?.primary_identifier || null,
         cpRole: cp?.role || null,
         topic: conv?.topic || null,
         summaryJson: conv?.summary_json || null,
+        headline: (payload?.headline as string) || null,
+        story: (payload?.story as string) || null,
       }
     })
 

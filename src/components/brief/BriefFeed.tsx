@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { theme } from '@/config/theme'
 import { BriefCard } from './BriefCard'
 import { ItineraryView } from './ItineraryView'
@@ -33,25 +33,63 @@ export function BriefFeed({ initialData, userId, token, focusActionId, greeting 
     }
   }, [focusActionId])
 
-  // Hydrate with fresh data on mount
-  useEffect(() => {
-    async function refresh() {
-      try {
-        const res = await fetch(`/api/brief/${userId}/refresh`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token }),
-        })
-        if (res.ok) {
-          const fresh = await res.json()
-          setData(fresh)
-        }
-      } catch {
-        // Keep initial data on failure
+  // Refresh function — shared by hydrate-on-mount and pull-to-refresh
+  const refreshData = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/brief/${userId}/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      })
+      if (res.ok) {
+        const fresh = await res.json()
+        setData(fresh)
       }
+    } catch {
+      // Keep current data on failure
     }
-    refresh()
   }, [userId, token])
+
+  // Hydrate with fresh data on mount
+  useEffect(() => { refreshData() }, [refreshData])
+
+  // Pull-to-refresh
+  const [pullY, setPullY] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+  const pullStartY = useRef(0)
+  const isPulling = useRef(false)
+  const PULL_THRESHOLD = 80
+
+  const onPullTouchStart = useCallback((e: React.TouchEvent) => {
+    // Only activate if scrolled to top
+    if (window.scrollY > 0) return
+    pullStartY.current = e.touches[0].clientY
+    isPulling.current = false
+  }, [])
+
+  const onPullTouchMove = useCallback((e: React.TouchEvent) => {
+    if (refreshing) return
+    const dy = e.touches[0].clientY - pullStartY.current
+    if (dy > 10 && window.scrollY <= 0) {
+      isPulling.current = true
+    }
+    if (isPulling.current && dy > 0) {
+      // Diminishing pull (rubber band effect)
+      setPullY(Math.min(dy * 0.5, 120))
+    }
+  }, [refreshing])
+
+  const onPullTouchEnd = useCallback(async () => {
+    if (!isPulling.current) return
+    isPulling.current = false
+    if (pullY >= PULL_THRESHOLD) {
+      setRefreshing(true)
+      setPullY(50) // Hold at indicator height
+      await refreshData()
+      setRefreshing(false)
+    }
+    setPullY(0)
+  }, [pullY, refreshData])
 
   // Sort actions by urgency (highest first), then priority_score
   const sortedActions = [...data.actions].sort((a, b) => {
@@ -146,13 +184,36 @@ export function BriefFeed({ initialData, userId, token, focusActionId, greeting 
     : null
 
   return (
-    <div style={{
-      maxWidth: '672px',
-      margin: '0 auto',
-      padding: `${theme.spacing.lg} ${theme.spacing.md}`,
-      paddingBottom: '80px', // Space for sticky bar
-      minHeight: '100vh',
-    }}>
+    <div
+      onTouchStart={onPullTouchStart}
+      onTouchMove={onPullTouchMove}
+      onTouchEnd={onPullTouchEnd}
+      style={{
+        maxWidth: '672px',
+        margin: '0 auto',
+        padding: `${theme.spacing.lg} ${theme.spacing.md}`,
+        paddingBottom: '80px', // Space for sticky bar
+        minHeight: '100vh',
+        transform: pullY > 0 ? `translateY(${pullY}px)` : 'translateY(0)',
+        transition: isPulling.current ? 'none' : 'transform 0.3s ease',
+      }}>
+      {/* Pull-to-refresh indicator */}
+      {(pullY > 0 || refreshing) && (
+        <div style={{
+          position: 'absolute',
+          top: `-40px`,
+          left: 0,
+          right: 0,
+          textAlign: 'center',
+          fontSize: theme.typography.sizes.xs,
+          color: theme.colors.textMuted,
+          transition: 'opacity 0.2s ease',
+          opacity: pullY >= PULL_THRESHOLD || refreshing ? 1 : pullY / PULL_THRESHOLD,
+        }}>
+          {refreshing ? 'Aktualizuji...' : pullY >= PULL_THRESHOLD ? 'Pusťte pro obnovení' : 'Táhněte dolů...'}
+        </div>
+      )}
+
       {/* Greeting */}
       {greeting && (
         <div style={{

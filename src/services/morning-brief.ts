@@ -3,7 +3,7 @@
  * Generates and sends the daily morning brief email
  */
 
-import { getPendingActionsForBrief, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, getRecentlyCompletedActions } from '@/lib/db/actions'
+import { getPendingActionsForBrief, markActionsNotified, getHighPriorityUnnotifiedActions, markActionsInstantNotified, getRecentlyCompletedActions, updateAction } from '@/lib/db/actions'
 import { getUserById, getUsersDueBrief, getUserSettings, updateUserSettings } from '@/lib/db/users'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
@@ -406,6 +406,18 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
         slotText,
       }
     })
+
+    // Persist headlines on actions so the web brief page can display them
+    await Promise.allSettled(
+      headlineActions.map(ha => {
+        const ba = briefActions.find(b => b.action.id === ha.id)
+        if (!ba) return Promise.resolve()
+        const existingPayload = (ba.action.payload as Record<string, unknown>) || {}
+        return updateAction(ha.id, {
+          payload: { ...existingPayload, headline: ha.headline, story: ha.story },
+        })
+      })
+    )
 
     // Build brief URL with trigger token
     const triggerToken = generateTriggerToken(userId)
@@ -958,6 +970,18 @@ async function sendInstantNotificationForConversation(
         slotText,
       }
     })
+
+    // Persist urgent headlines on actions for web brief page
+    await Promise.allSettled(
+      urgentHeadlineActions.map(ha => {
+        const ba = briefActions.find(b => b.action.id === ha.id)
+        if (!ba) return Promise.resolve()
+        const existingPayload = (ba.action.payload as Record<string, unknown>) || {}
+        return updateAction(ha.id, {
+          payload: { ...existingPayload, headline: ha.headline, story: ha.story },
+        })
+      })
+    )
 
     const urgentTriggerToken = generateTriggerToken(userId)
     const urgentBriefUrl = `${APP_BASE_URL}/brief/${userId}?token=${urgentTriggerToken}`

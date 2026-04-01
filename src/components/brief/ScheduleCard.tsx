@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { theme } from '@/config/theme'
 import type { BriefAction } from './types'
 
@@ -75,23 +75,25 @@ export function ScheduleCard({ action, token, onExecute, onConvertTodo, onRegene
     }
   }
 
-  async function loadDraft() {
+  // Auto-load draft on mount if not pre-loaded
+  useEffect(() => {
+    if (draftLoaded) return
+    let cancelled = false
     setLoading('draft')
-    try {
-      const res = await fetch(`/api/action/${action.id}/draft`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
-      })
-      if (res.ok) {
-        const data = await res.json()
+    fetch(`/api/action/${action.id}/draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (cancelled || !data) return
         setDraftBody(data.body || '')
         setDraftLoaded(true)
-      }
-    } finally {
-      setLoading(null)
-    }
-  }
+      })
+      .finally(() => { if (!cancelled) setLoading(null) })
+    return () => { cancelled = true }
+  }, [action.id, token, draftLoaded])
 
   async function handleRegenerate() {
     if (!instruction.trim()) return
@@ -310,22 +312,14 @@ export function ScheduleCard({ action, token, onExecute, onConvertTodo, onRegene
 
       {/* Draft message to CP */}
       {!draftLoaded ? (
-        <button
-          onClick={loadDraft}
-          disabled={loading === 'draft'}
-          style={{
-            padding: theme.spacing.md,
-            backgroundColor: theme.colors.secondary,
-            border: `1px dashed ${theme.colors.border}`,
-            borderRadius: theme.borderRadius.md,
-            cursor: 'pointer',
-            color: theme.colors.textMuted,
-            fontSize: theme.typography.sizes.sm,
-            textAlign: 'center',
-          }}
-        >
-          {loading === 'draft' ? 'Generuji koncept...' : 'Zobrazit koncept pozvánky'}
-        </button>
+        <div style={{
+          padding: theme.spacing.md,
+          color: theme.colors.textMuted,
+          fontSize: theme.typography.sizes.sm,
+          textAlign: 'center',
+        }}>
+          Generuji koncept...
+        </div>
       ) : (
         <div>
           <div style={{

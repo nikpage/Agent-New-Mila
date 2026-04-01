@@ -45,12 +45,15 @@ async function loadBriefData(userId: string): Promise<BriefData> {
     const cp = cpMap.get(action.cp_id)
     const conv = convMap.get(action.conversation_id)
     const summary = conv?.summary_json as BriefAction['summaryJson']
+    const payload = action.payload as Record<string, unknown> | null
     return {
       ...action,
       cpName: cp?.name || cp?.primary_identifier || null,
       cpRole: cp?.role || null,
       topic: conv?.topic || null,
       summaryJson: summary,
+      headline: (payload?.headline as string) || null,
+      story: (payload?.story as string) || null,
     }
   })
 
