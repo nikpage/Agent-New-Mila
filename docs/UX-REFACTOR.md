@@ -151,6 +151,37 @@ User can drag events to new times. Any move triggers Mila's consequence review.
 - "Zpět" always available. No change committed until user confirms.
 - Mila uses judgment — she has the relationship data and isn't afraid to say "this is a bad idea."
 
+## Web Brief Page — Full Layout
+
+### Mobile-First, Single Scrollable Feed
+No tabs, no navigation, no sidebar. One vertical feed. Same page serves both regular briefs and urgent notifications (just fewer cards for urgent).
+
+### Page Sections (top to bottom)
+
+1. **Mila's greeting** — one line, same as email. Sets the tone.
+
+2. **Action cards feed** — collapsed by default, sorted by urgency. Tap to expand. When one card is open, others stay collapsed below. Closing returns to feed view.
+
+3. **Day itinerary** — today + tomorrow + upcoming days with events. Linear list, draggable (see Day Itinerary section).
+
+4. **Completed items** — collapsed by default. "Mila vyřídila 3 věci" — tappable to expand. Low priority, bottom of page.
+
+### Sticky Bottom Bar
+Always visible. Context-shifts based on state:
+
+- **Card expanded** → shows that card's CTAs (Odeslat/Úkol, Potvrdit/Úkol, Hotovo/Odložit/Smazat depending on type).
+- **No card expanded** → system actions: settings, refresh, future chat trigger.
+
+Keeps the thumb zone always useful. No dead space on mobile.
+
+### Loading Strategy
+- Pre-built at brief send time (SSG/ISR) for instant first paint.
+- Hydrates with fresh data on client open — covers new items between brief send and page open.
+- Live state persists in DB — done/sent status reflected on re-open.
+
+### Urgent Notifications
+Same page, same URL, same layout. Just filtered to urgent cards only. No separate design or routing.
+
 ## AI Generation
 
 ### Brief Headlines
