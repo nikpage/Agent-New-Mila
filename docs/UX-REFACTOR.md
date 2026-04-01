@@ -182,6 +182,24 @@ Keeps the thumb zone always useful. No dead space on mobile.
 ### Urgent Notifications
 Same page, same URL, same layout. Just filtered to urgent cards only. No separate design or routing.
 
+### Routing
+- Single URL per user: `/brief/{userId}` (authenticated)
+- Email deep-links to specific card: `/brief/{userId}#action-{actionId}`
+- Opening via deep-link: that card expanded, rest collapsed below.
+- No separate URLs per brief. The page is a **live brief** — always reflects Mila's current state, not a snapshot from when the email was sent.
+
+### Live Brief Concept
+The page is always alive. Not an inbox to empty — a command center.
+- New actions appear as Mila processes them.
+- Itinerary is always visible.
+- Completed items show what was handled.
+- User can open the page anytime, not just after a brief email.
+
+### Dismissed Items / History
+- Dismissing a card clears it from the feed. No data deleted — emails/messages still exist in Gmail/WhatsApp.
+- Small "Historie" link (settings area or bottom of page). Not prominent. Just a safety net for mistakes.
+- History shows dismissed/completed actions. User can restore a dismissed card back to pending.
+
 ## AI Generation
 
 ### Brief Headlines
@@ -206,7 +224,7 @@ AI extracts actual CP questions from conversation (not generic "missing field" l
 ## Open Items
 - [x] SCHEDULE card CTAs — Potvrdit / Úkol
 - [x] TODO card CTAs — Hotovo / Odložit / Smazat
-- [ ] Web page routing / URL structure
+- [x] Web page routing / URL structure — live brief at /brief/{userId}
 - [ ] Swipe gestures (dismiss, etc.)
 - [ ] Voice notes UI placement (future)
 - [ ] Native Czech CTA labels — user test needed
