@@ -67,7 +67,19 @@ Done cards collapse with a checkmark.
 - Úkol = convert to TODO, Mila tracks it. If user sends the email himself via Gmail, Mila catches on next ingest and clears automatically.
 
 ### SCHEDULE
-**CTAs:** TBD
+**Expanded content:**
+1. **Mila's story** (same headline text from collapsed view, stays visible).
+2. **Meeting type chips**: Osobně / Online / Telefon.
+3. **Duration chips**: 10 / 30 / 60 / custom.
+4. **Location field** (Osobně only) — triggers travel buffer calculation in backend, invisible to user.
+5. **Pevný / Flexibilní toggle** — informs Mila's conflict resolution suggestions, doesn't override her. Pevný = Mila tries harder to avoid moving it. Flexibilní = Mila freely suggests moving it for higher priority. User sets preference, Mila makes the call. One system.
+6. **Draft message to CP** (editable inline, same pattern as REPLY).
+7. **Instruction field** (same as REPLY — free text for mods).
+
+**CTAs:** **Potvrdit** / **Úkol**
+- Potvrdit = send invite as shown.
+- Úkol = convert to TODO, Mila tracks it.
+- No "Změnit" button — all fields are editable inline. User changes what they want, taps Potvrdit.
 
 **Shares base elements with conflict card** — conflict adds extras on top, not a completely different layout.
 
@@ -108,7 +120,7 @@ New function in `mila-voice.ts`: generates headline + 2-3 sentence story per act
 AI extracts actual CP questions from conversation (not generic "missing field" labels). Maps each to an input type (year, yes/no, options, free text). Pre-fills from deal context where possible.
 
 ## Open Items
-- [ ] SCHEDULE card CTAs
+- [x] SCHEDULE card CTAs — Potvrdit / Úkol
 - [ ] TODO card CTAs (finalize)
 - [ ] Web page routing / URL structure
 - [ ] Swipe gestures (dismiss, etc.)
