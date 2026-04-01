@@ -170,7 +170,7 @@ No tabs, no navigation, no sidebar. One vertical feed. Same page serves both reg
 Always visible. Context-shifts based on state:
 
 - **Card expanded** → shows that card's CTAs (Odeslat/Úkol, Potvrdit/Úkol, Hotovo/Odložit/Smazat depending on type).
-- **No card expanded** → system actions: settings, refresh, future chat trigger.
+- **No card expanded** → text input field + settings. User types commands to Mila: "Připomeň Fredovi pivo", "Nový kontakt Jan Novák 602123456", "Zavolej Evě po obědě". Uses existing command parser (parser.ts, executor.ts) — same backend as self-email commands, new frontend entry point. Future: voice input here too.
 
 Keeps the thumb zone always useful. No dead space on mobile.
 
