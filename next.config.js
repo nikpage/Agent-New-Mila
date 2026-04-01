@@ -5,6 +5,7 @@ const nextConfig = {
     serverActions: {
       bodySizeLimit: '2mb',
     },
+    serverComponentsExternalPackages: ['@opentelemetry/api', '@opentelemetry/core', '@opentelemetry/sdk-trace-base', '@opentelemetry/resources', '@opentelemetry/semantic-conventions', '@opentelemetry/instrumentation', '@opentelemetry/instrumentation-http', '@opentelemetry/context-async-hooks', '@opentelemetry/api-logs'],
   },
 }
 

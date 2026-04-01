@@ -219,6 +219,9 @@ export async function sendEmail(
   }
 
   messageParts.push('MIME-Version: 1.0')
+  messageParts.push('Importance: high')
+  messageParts.push('X-Priority: 1 (Highest)')
+  messageParts.push('X-MSMail-Priority: High')
 
   // Helper to create a base64 encoded body part
   const createBase64Part = (contentType: string, content: string) => {
