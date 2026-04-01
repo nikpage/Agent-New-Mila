@@ -72,7 +72,7 @@ Done cards collapse with a checkmark.
 2. **Meeting type chips**: Osobně / Online / Telefon.
 3. **Duration chips**: 10 / 30 / 60 / custom.
 4. **Location field** (Osobně only) — triggers travel buffer calculation in backend, invisible to user.
-5. **Pevný / Flexibilní toggle** — overrides Mila's judgment. Pevný = Mila will NOT suggest moving this event, ever. Flexibilní = Mila decides freely whether to suggest moving it for higher priority.
+5. **Pevný / Flexibilní toggle** — sets the weight. Pevný = high weight, Flexibilní = low weight. Weight informs Mila's recommendation when conflicts arise. Mila NEVER decides — she recommends. User ALWAYS decides. This is the prime directive.
 6. **Draft message to CP** (editable inline, same pattern as REPLY).
 7. **Instruction field** (same as REPLY — free text for mods).
 
