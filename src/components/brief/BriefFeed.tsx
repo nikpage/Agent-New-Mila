@@ -476,6 +476,7 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
                   onRegenerateDraft={(instruction) => handleRegenerateDraft(action.id, instruction)}
                   onSaveDraft={(d) => handleSaveDraft(action.id, d)}
                   onConvertQuestionTodo={(question) => handleConvertQuestionTodo(action.id, question)}
+                  onUndo={() => { setDoneIds(prev => { const next = new Set(prev); next.delete(action.id); return next }) }}
                   done={doneIds.has(action.id)}
                   showPostponePicker={expandedId === action.id && action.action_type === 'TODO' ? postponePickerOpen : false}
                   isFirst={idx === 0}

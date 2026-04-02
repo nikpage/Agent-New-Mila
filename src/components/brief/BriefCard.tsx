@@ -33,6 +33,7 @@ interface BriefCardProps {
   onRegenerateDraft: (instruction: string) => Promise<{ subject: string; body: string }>
   onSaveDraft: (data: { meetingType?: string; dynamicFields?: Record<string, string>; notes?: string }) => Promise<void>
   onConvertQuestionTodo?: (question: string) => Promise<void>
+  onUndo?: () => void
   done?: boolean
   showPostponePicker?: boolean
   isFirst?: boolean
@@ -99,7 +100,7 @@ function getUrgencyBgTint(urgency: number, theme: ReturnType<typeof useTheme>): 
 export function BriefCard({
   action, actionToken, expanded, onToggle,
   onExecute, onConvertTodo, onDismiss, onPostpone,
-  onRegenerateDraft, onSaveDraft, onConvertQuestionTodo, done, showPostponePicker,
+  onRegenerateDraft, onSaveDraft, onConvertQuestionTodo, onUndo, done, showPostponePicker,
   isFirst,
 }: BriefCardProps) {
   const theme = useTheme()
@@ -110,6 +111,14 @@ export function BriefCard({
   const story = action.story || action.rationale_cs || action.topic || null
   const urgencyAccent = getUrgencyAccent(action.urgency, theme)
   const urgencyBgTint = getUrgencyBgTint(action.urgency, theme)
+
+  // Loading state for inline CTAs
+  const [ctaLoading, setCtaLoading] = useState<string | null>(null)
+
+  async function handleCta(label: string, fn: () => Promise<void>) {
+    setCtaLoading(label)
+    try { await fn() } finally { setCtaLoading(null) }
+  }
 
   const payload = action.payload as Record<string, unknown> | null
   const conflicts = (payload?.conflicts as ConflictCardData[]) || []
@@ -190,47 +199,78 @@ export function BriefCard({
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Task 9: Done-state collapse animation
-  const [collapsing, setCollapsing] = useState(false)
-  const [gone, setGone] = useState(false)
+  // Task 9: Done-state — show undo bar, then collapse
+  const [donePhase, setDonePhase] = useState<'none' | 'undo' | 'collapsing' | 'gone'>('none')
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    if (done || swipedAway) {
-      setCollapsing(true)
-      const t = setTimeout(() => setGone(true), 400)
+    if ((done || swipedAway) && donePhase === 'none') {
+      setDonePhase('undo')
+      undoTimer.current = setTimeout(() => setDonePhase('collapsing'), 5000)
+    }
+    return () => { if (undoTimer.current) clearTimeout(undoTimer.current) }
+  }, [done, swipedAway, donePhase])
+
+  useEffect(() => {
+    if (donePhase === 'collapsing') {
+      const t = setTimeout(() => setDonePhase('gone'), 400)
       return () => clearTimeout(t)
     }
-  }, [done, swipedAway])
+  }, [donePhase])
 
-  // Done / swiped away — collapsed
-  if (collapsing) {
+  // Undo bar — 5 seconds to take back
+  if (donePhase === 'undo') {
     return (
       <div style={{
-        maxHeight: gone ? '0px' : '200px',
-        opacity: gone ? 0 : 1,
+        padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+        backgroundColor: theme.colors.surface,
+        borderRadius: theme.borderRadius.lg,
+        display: 'flex',
+        alignItems: 'center',
+        gap: theme.spacing.sm,
+        border: `1px solid ${theme.colors.border}`,
+      }}>
+        <span style={{
+          width: '20px', height: '20px', borderRadius: theme.borderRadius.full,
+          backgroundColor: theme.colors.successBg, color: theme.colors.success,
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: '12px', flexShrink: 0,
+        }}>✓</span>
+        <span style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, flex: 1 }}>
+          {headline}
+        </span>
+        <button
+          onClick={() => {
+            if (undoTimer.current) clearTimeout(undoTimer.current)
+            setDonePhase('none')
+            if (onUndo) onUndo()
+          }}
+          style={{
+            padding: `${theme.spacing.xs} ${theme.spacing.md}`,
+            backgroundColor: 'transparent',
+            color: theme.colors.primary,
+            border: `1px solid ${theme.colors.primary}`,
+            borderRadius: theme.borderRadius.md,
+            cursor: 'pointer',
+            fontSize: theme.typography.sizes.sm,
+            fontWeight: theme.typography.weights.medium,
+          }}
+        >
+          Zpět
+        </button>
+      </div>
+    )
+  }
+
+  // Collapsing / gone
+  if (donePhase === 'collapsing' || donePhase === 'gone') {
+    return (
+      <div style={{
+        maxHeight: donePhase === 'gone' ? '0px' : '60px',
+        opacity: donePhase === 'gone' ? 0 : 0.5,
         overflow: 'hidden',
         transition: 'max-height 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 300ms cubic-bezier(0.4, 0, 0.2, 1)',
-      }}>
-        <div style={{
-          padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-          backgroundColor: theme.colors.surface,
-          borderRadius: theme.borderRadius.lg,
-          display: 'flex',
-          alignItems: 'center',
-          gap: theme.spacing.sm,
-          opacity: 0.5,
-        }}>
-          <span style={{
-            width: '20px', height: '20px', borderRadius: theme.borderRadius.full,
-            backgroundColor: theme.colors.successBg, color: theme.colors.success,
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '12px', flexShrink: 0,
-          }}>✓</span>
-          <span style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, textDecoration: 'line-through' }}>
-            {headline}
-          </span>
-        </div>
-      </div>
+      }} />
     )
   }
 
@@ -410,7 +450,8 @@ export function BriefCard({
                 borderTop: `1px solid ${theme.colors.border}`,
               }}>
                 <button
-                  onClick={onExecute}
+                  onClick={() => handleCta('primary', onExecute)}
+                  disabled={ctaLoading !== null}
                   {...primaryPress.pressHandlers}
                   style={{
                     flex: 1,
@@ -419,19 +460,21 @@ export function BriefCard({
                     color: 'white',
                     border: 'none',
                     borderRadius: theme.borderRadius.md,
-                    cursor: 'pointer',
+                    cursor: ctaLoading ? 'not-allowed' : 'pointer',
                     fontWeight: theme.typography.weights.semibold,
                     fontSize: theme.typography.sizes.base,
                     letterSpacing: theme.letterSpacing.wide,
+                    opacity: ctaLoading === 'primary' ? 0.6 : ctaLoading ? 0.8 : 1,
                     transform: primaryPress.pressed ? 'scale(0.97)' : 'scale(1)',
-                    transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+                    transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
                   }}
                 >
-                  {action.action_type === 'REPLY' ? 'Odeslat' : action.action_type === 'SCHEDULE' ? 'Potvrdit' : 'Hotovo'}
+                  {ctaLoading === 'primary' ? '...' : action.action_type === 'REPLY' ? 'Odeslat' : action.action_type === 'SCHEDULE' ? 'Potvrdit' : 'Hotovo'}
                 </button>
                 {action.action_type !== 'TODO' && (
                   <button
-                    onClick={onConvertTodo}
+                    onClick={() => handleCta('secondary', onConvertTodo)}
+                    disabled={ctaLoading !== null}
                     {...secondaryPress.pressHandlers}
                     style={{
                       padding: `10px ${theme.spacing.lg}`,
@@ -439,20 +482,22 @@ export function BriefCard({
                       color: theme.colors.text,
                       border: 'none',
                       borderRadius: theme.borderRadius.md,
-                      cursor: 'pointer',
+                      cursor: ctaLoading ? 'not-allowed' : 'pointer',
                       fontWeight: theme.typography.weights.medium,
                       fontSize: theme.typography.sizes.base,
                       letterSpacing: theme.letterSpacing.wide,
+                      opacity: ctaLoading === 'secondary' ? 0.6 : ctaLoading ? 0.8 : 1,
                       transform: secondaryPress.pressed ? 'scale(0.97)' : 'scale(1)',
-                      transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+                      transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
                     }}
                   >
-                    {'Úkol'}
+                    {ctaLoading === 'secondary' ? '...' : 'Úkol'}
                   </button>
                 )}
                 {action.action_type === 'TODO' && (
                   <button
-                    onClick={onDismiss}
+                    onClick={() => handleCta('tertiary', onDismiss)}
+                    disabled={ctaLoading !== null}
                     {...tertiaryPress.pressHandlers}
                     style={{
                       padding: `10px ${theme.spacing.lg}`,
@@ -460,14 +505,15 @@ export function BriefCard({
                       color: theme.colors.textMuted,
                       border: 'none',
                       borderRadius: theme.borderRadius.md,
-                      cursor: 'pointer',
+                      cursor: ctaLoading ? 'not-allowed' : 'pointer',
                       fontWeight: theme.typography.weights.medium,
                       fontSize: theme.typography.sizes.base,
+                      opacity: ctaLoading === 'tertiary' ? 0.6 : ctaLoading ? 0.8 : 1,
                       transform: tertiaryPress.pressed ? 'scale(0.97)' : 'scale(1)',
-                      transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+                      transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
                     }}
                   >
-                    Smazat
+                    {ctaLoading === 'tertiary' ? '...' : 'Smazat'}
                   </button>
                 )}
               </div>

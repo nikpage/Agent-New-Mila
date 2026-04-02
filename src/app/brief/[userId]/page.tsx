@@ -130,7 +130,6 @@ export default async function BriefPage({ params, searchParams }: PageProps) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: theme.colors.background,
         padding: theme.spacing.md,
       }}>
         <div style={{ textAlign: 'center', maxWidth: '400px' }}>
@@ -148,7 +147,6 @@ export default async function BriefPage({ params, searchParams }: PageProps) {
   return (
     <main style={{
       minHeight: '100dvh',
-      backgroundColor: theme.colors.background,
       fontFamily: theme.typography.fontFamily,
     }}>
       <Suspense fallback={
@@ -157,7 +155,6 @@ export default async function BriefPage({ params, searchParams }: PageProps) {
           alignItems: 'center',
           justifyContent: 'center',
           minHeight: '100dvh',
-          color: theme.colors.textMuted,
         }}>
           Načítání...
         </div>
