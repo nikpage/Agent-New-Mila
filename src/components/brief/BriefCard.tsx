@@ -1,7 +1,8 @@
 'use client'
 
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { theme } from '@/config/theme'
+import { useTheme } from '@/contexts/ThemeContext'
+import { usePressState } from '@/hooks/usePressState'
 import { ReplyCard } from './ReplyCard'
 import { ScheduleCard } from './ScheduleCard'
 import { TodoCard } from './TodoCard'
@@ -23,20 +24,41 @@ interface BriefCardProps {
   onConvertQuestionTodo?: (question: string) => Promise<void>
   done?: boolean
   showPostponePicker?: boolean
+  isFirst?: boolean
 }
 
-/** Urgency badge — positioned dot instead of inline emoji (Item 49) */
-function UrgencyBadge({ urgency }: { urgency: number }) {
+/** Urgency badge — positioned dot with optional pulse halo (Task 4) */
+function UrgencyBadge({ urgency, theme }: { urgency: number; theme: ReturnType<typeof useTheme> }) {
   if (urgency >= 10) {
     return (
       <>
-        <style>{`@keyframes mila-urgency-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.3); } }`}</style>
+        <style>{`@keyframes mila-urgency-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.15); } }`}</style>
         <span style={{
-          display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%',
-          backgroundColor: theme.colors.error, marginRight: '6px', flexShrink: 0,
-          boxShadow: `0 0 6px ${theme.colors.error}`,
-          animation: 'mila-urgency-pulse 1.5s ease-in-out infinite',
-        }} />
+          position: 'relative',
+          display: 'inline-flex',
+          alignItems: 'center',
+          marginRight: '6px',
+          flexShrink: 0,
+        }}>
+          {/* Halo ring */}
+          <span style={{
+            position: 'absolute',
+            inset: '-3px',
+            borderRadius: '50%',
+            backgroundColor: theme.colors.error,
+            opacity: 0.25,
+            animation: 'mila-urgency-pulse 1.5s ease-in-out infinite',
+            animationDelay: '0.4s',
+          }} />
+          {/* Main dot */}
+          <span style={{
+            display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%',
+            backgroundColor: theme.colors.error,
+            boxShadow: `0 0 6px ${theme.colors.error}`,
+            animation: 'mila-urgency-pulse 1.5s ease-in-out infinite',
+            position: 'relative',
+          }} />
+        </span>
       </>
     )
   }
@@ -51,14 +73,14 @@ function UrgencyBadge({ urgency }: { urgency: number }) {
   return null
 }
 
-function getUrgencyAccent(urgency: number): string | undefined {
+function getUrgencyAccent(urgency: number, theme: ReturnType<typeof useTheme>): string | undefined {
   if (urgency >= 9) return theme.colors.error
-  if (urgency >= 7) return theme.colors.warning
+  if (urgency >= 7) return theme.colors.urgencyMedium
   return undefined
 }
 
-/** Card background tint for extreme urgency (Item 49) */
-function getUrgencyBgTint(urgency: number): string | undefined {
+/** Card background tint for extreme urgency */
+function getUrgencyBgTint(urgency: number, theme: ReturnType<typeof useTheme>): string | undefined {
   if (urgency >= 10) return theme.colors.errorBg
   return undefined
 }
@@ -67,13 +89,16 @@ export function BriefCard({
   action, actionToken, expanded, onToggle,
   onExecute, onConvertTodo, onDismiss, onPostpone,
   onRegenerateDraft, onSaveDraft, onConvertQuestionTodo, done, showPostponePicker,
+  isFirst,
 }: BriefCardProps) {
+  const theme = useTheme()
+
   // Use headline if available, otherwise CP name
   const headline = action.headline || action.cpName || 'Akce'
-  // Use story if available, otherwise a SHORT fallback — NOT the full intent_cs wall of text
+  // Use story if available, otherwise a SHORT fallback
   const story = action.story || action.rationale_cs || action.topic || null
-  const urgencyAccent = getUrgencyAccent(action.urgency)
-  const urgencyBgTint = getUrgencyBgTint(action.urgency)
+  const urgencyAccent = getUrgencyAccent(action.urgency, theme)
+  const urgencyBgTint = getUrgencyBgTint(action.urgency, theme)
 
   const payload = action.payload as Record<string, unknown> | null
   const conflicts = (payload?.conflicts as ConflictCardData[]) || []
@@ -86,42 +111,10 @@ export function BriefCard({
     if (expanded && cardRef.current) {
       const timer = setTimeout(() => {
         cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      }, 380) // after expand animation
+      }, 380)
       return () => clearTimeout(timer)
     }
   }, [expanded])
-
-  // Animate expanded content
-  const contentRef = useRef<HTMLDivElement>(null)
-  const [contentHeight, setContentHeight] = useState(0)
-  const [animating, setAnimating] = useState(false)
-
-  // Item 46: use rAF to measure after DOM updates — fixes 0-height on first render
-  useEffect(() => {
-    if (expanded && contentRef.current) {
-      requestAnimationFrame(() => {
-        if (contentRef.current) setContentHeight(contentRef.current.scrollHeight)
-      })
-      setAnimating(true)
-      const t = setTimeout(() => setAnimating(false), 350)
-      return () => clearTimeout(t)
-    } else {
-      setAnimating(true)
-      setContentHeight(0)
-      const t = setTimeout(() => setAnimating(false), 350)
-      return () => clearTimeout(t)
-    }
-  }, [expanded])
-
-  useEffect(() => {
-    if (expanded && contentRef.current && !animating) {
-      const observer = new ResizeObserver(() => {
-        if (contentRef.current) setContentHeight(contentRef.current.scrollHeight)
-      })
-      observer.observe(contentRef.current)
-      return () => observer.disconnect()
-    }
-  }, [expanded, animating])
 
   // Swipe (collapsed only)
   const touchStartX = useRef(0)
@@ -169,34 +162,76 @@ export function BriefCard({
   // Hover state (desktop)
   const [hovered, setHovered] = useState(false)
 
-  // Done / swiped away
-  if (done || swipedAway) {
+  // Press states for buttons (Task 2)
+  const headerPress = usePressState()
+  const primaryPress = usePressState()
+  const secondaryPress = usePressState()
+  const tertiaryPress = usePressState()
+
+  // Task 10: Swipe hint on first use
+  useEffect(() => {
+    if (!isFirst) return
+    const seen = localStorage.getItem('mila-swipe-hint')
+    if (!seen && !expanded) {
+      setTimeout(() => setSwipeX(20), 600)
+      setTimeout(() => setSwipeX(0), 1000)
+      localStorage.setItem('mila-swipe-hint', '1')
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Task 9: Done-state collapse animation
+  const [collapsing, setCollapsing] = useState(false)
+  const [gone, setGone] = useState(false)
+
+  useEffect(() => {
+    if (done || swipedAway) {
+      setCollapsing(true)
+      const t = setTimeout(() => setGone(true), 400)
+      return () => clearTimeout(t)
+    }
+  }, [done, swipedAway])
+
+  // Done / swiped away — collapsed
+  if (collapsing) {
     return (
       <div style={{
-        padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-        backgroundColor: theme.colors.surface,
-        borderRadius: theme.borderRadius.lg,
-        display: 'flex',
-        alignItems: 'center',
-        gap: theme.spacing.sm,
-        opacity: 0.5,
-        transition: 'opacity 0.4s ease',
+        maxHeight: gone ? '0px' : '200px',
+        opacity: gone ? 0 : 1,
+        overflow: 'hidden',
+        transition: 'max-height 400ms cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 300ms cubic-bezier(0.4, 0, 0.2, 1)',
       }}>
-        <span style={{
-          width: '20px', height: '20px', borderRadius: theme.borderRadius.full,
-          backgroundColor: theme.colors.successBg, color: theme.colors.success,
-          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '12px', flexShrink: 0,
-        }}>✓</span>
-        <span style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, textDecoration: 'line-through' }}>
-          {headline}
-        </span>
+        <div style={{
+          padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+          backgroundColor: theme.colors.surface,
+          borderRadius: theme.borderRadius.lg,
+          display: 'flex',
+          alignItems: 'center',
+          gap: theme.spacing.sm,
+          opacity: 0.5,
+        }}>
+          <span style={{
+            width: '20px', height: '20px', borderRadius: theme.borderRadius.full,
+            backgroundColor: theme.colors.successBg, color: theme.colors.success,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '12px', flexShrink: 0,
+          }}>✓</span>
+          <span style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, textDecoration: 'line-through' }}>
+            {headline}
+          </span>
+        </div>
       </div>
     )
   }
 
   return (
-    <div ref={cardRef} style={{ position: 'relative', borderRadius: theme.borderRadius.lg }}>
+    <div ref={cardRef} style={{
+      position: 'relative',
+      borderRadius: theme.borderRadius.lg,
+      maxWidth: '680px',
+      marginLeft: 'auto',
+      marginRight: 'auto',
+      width: '100%',
+    }}>
       {/* Swipe reveal backgrounds (collapsed only) */}
       {!expanded && (swipeX > 20 || swipeX < -20) && (
         <>
@@ -214,7 +249,7 @@ export function BriefCard({
             display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '20px',
             opacity: swipeX < 0 ? Math.min(1, Math.abs(swipeX) / SWIPE_THRESHOLD) : 0,
           }}>
-            <span style={{ color: 'white', fontWeight: 600, fontSize: theme.typography.sizes.sm }}>Zrušit</span>
+            <span style={{ color: 'white', fontWeight: 600, fontSize: theme.typography.sizes.sm }}>Zahodit</span>
           </div>
         </>
       )}
@@ -228,15 +263,16 @@ export function BriefCard({
         style={{
           backgroundColor: urgencyBgTint || theme.colors.surface,
           borderRadius: theme.borderRadius.lg,
-          borderLeft: urgencyAccent ? `3px solid ${urgencyAccent}` : `3px solid transparent`,
+          borderLeft: urgencyAccent ? `3px solid ${urgencyAccent}` : '3px solid transparent',
           boxShadow: expanded
             ? theme.shadows.hover
             : hovered
               ? '0 4px 12px rgba(0,0,0,0.08)'
               : theme.shadows.card,
           overflow: 'hidden',
-          transition: swiping ? 'none' : 'transform 0.3s ease, box-shadow 0.25s ease',
-          // Item 47: hover lift for collapsed cards
+          transition: swiping
+            ? 'none'
+            : `transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1)`,
           transform: !expanded && swipeX !== 0
             ? `translateX(${swipeX}px)`
             : !expanded && hovered
@@ -250,24 +286,29 @@ export function BriefCard({
         {/* Header */}
         <button
           onClick={onToggle}
+          {...headerPress.pressHandlers}
           style={{
             display: 'block', width: '100%', textAlign: 'left',
             padding: `${theme.spacing.md} ${theme.spacing.lg}`,
             paddingBottom: expanded ? theme.spacing.xs : theme.spacing.md,
             background: 'none', border: 'none', cursor: 'pointer',
+            minHeight: '52px',
+            transform: headerPress.pressed ? 'scale(0.97)' : 'scale(1)',
+            transition: 'transform 0.1s ease, opacity 0.15s ease, background-color 0.15s ease',
           }}
         >
           <div style={{
             display: 'flex',
             alignItems: 'center',
           }}>
-            <UrgencyBadge urgency={action.urgency} />
+            <UrgencyBadge urgency={action.urgency} theme={theme} />
             <span style={{
-              fontSize: expanded ? theme.typography.sizes.lg : theme.typography.sizes.base,
+              fontSize: expanded ? theme.typography.sizes.md : theme.typography.sizes.smPlus,
               fontWeight: theme.typography.weights.semibold,
               color: theme.colors.text,
-              lineHeight: 1.3,
-              transition: 'font-size 0.25s ease',
+              lineHeight: theme.lineHeight.tight,
+              letterSpacing: theme.letterSpacing.tight,
+              transition: 'font-size 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
             }}>
               {headline}
             </span>
@@ -276,8 +317,8 @@ export function BriefCard({
           {story && (
             <div style={{
               fontSize: theme.typography.sizes.sm,
-              color: theme.colors.textMuted,
-              lineHeight: 1.5,
+              color: theme.colors.textSubtle,
+              lineHeight: theme.lineHeight.snug,
               marginTop: '4px',
               ...(!expanded ? {
                 display: '-webkit-box',
@@ -291,13 +332,13 @@ export function BriefCard({
           )}
         </button>
 
-        {/* Expandable content */}
+        {/* Expandable content — CSS Grid pattern (Task 1) */}
         <div style={{
-          height: expanded ? (animating ? `${contentHeight}px` : 'auto') : '0px',
-          overflow: 'hidden',
-          transition: 'height 0.35s ease',
+          display: 'grid',
+          gridTemplateRows: expanded ? '1fr' : '0fr',
+          transition: 'grid-template-rows 350ms cubic-bezier(0.25, 0.46, 0.45, 0.94)',
         }}>
-          <div ref={contentRef}>
+          <div style={{ minHeight: 0, overflow: 'hidden' }}>
             {/* Conflict section (SCHEDULE only) */}
             {hasConflicts && action.action_type === 'SCHEDULE' && (
               <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>
@@ -347,16 +388,20 @@ export function BriefCard({
               }}>
                 <button
                   onClick={onExecute}
+                  {...primaryPress.pressHandlers}
                   style={{
                     flex: 1,
                     padding: `10px ${theme.spacing.lg}`,
-                    backgroundColor: theme.colors.primary,
+                    background: theme.colors.primaryGradient,
                     color: 'white',
                     border: 'none',
                     borderRadius: theme.borderRadius.md,
                     cursor: 'pointer',
                     fontWeight: theme.typography.weights.semibold,
                     fontSize: theme.typography.sizes.base,
+                    letterSpacing: theme.letterSpacing.wide,
+                    transform: primaryPress.pressed ? 'scale(0.97)' : 'scale(1)',
+                    transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
                   }}
                 >
                   {action.action_type === 'REPLY' ? 'Odeslat' : action.action_type === 'SCHEDULE' ? 'Potvrdit' : 'Hotovo'}
@@ -364,6 +409,7 @@ export function BriefCard({
                 {action.action_type !== 'TODO' && (
                   <button
                     onClick={onConvertTodo}
+                    {...secondaryPress.pressHandlers}
                     style={{
                       padding: `10px ${theme.spacing.lg}`,
                       backgroundColor: theme.colors.secondary,
@@ -373,6 +419,9 @@ export function BriefCard({
                       cursor: 'pointer',
                       fontWeight: theme.typography.weights.medium,
                       fontSize: theme.typography.sizes.base,
+                      letterSpacing: theme.letterSpacing.wide,
+                      transform: secondaryPress.pressed ? 'scale(0.97)' : 'scale(1)',
+                      transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
                     }}
                   >
                     {'Úkol'}
@@ -381,6 +430,7 @@ export function BriefCard({
                 {action.action_type === 'TODO' && (
                   <button
                     onClick={onDismiss}
+                    {...tertiaryPress.pressHandlers}
                     style={{
                       padding: `10px ${theme.spacing.lg}`,
                       backgroundColor: 'transparent',
@@ -390,6 +440,8 @@ export function BriefCard({
                       cursor: 'pointer',
                       fontWeight: theme.typography.weights.medium,
                       fontSize: theme.typography.sizes.base,
+                      transform: tertiaryPress.pressed ? 'scale(0.97)' : 'scale(1)',
+                      transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
                     }}
                   >
                     Smazat

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { theme } from '@/config/theme'
+import { useTheme } from '@/contexts/ThemeContext'
 import type { BriefAction } from './types'
 
 interface TodoCardProps {
@@ -11,6 +11,7 @@ interface TodoCardProps {
 }
 
 export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardProps) {
+  const theme = useTheme()
   const [postponeOpen, setPostponeOpen] = useState(false)
   const externalToggle = showPostponePicker ?? false
 

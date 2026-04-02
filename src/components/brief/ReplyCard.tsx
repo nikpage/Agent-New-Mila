@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { theme } from '@/config/theme'
+import { useTheme } from '@/contexts/ThemeContext'
 import type { BriefAction } from './types'
 
 interface ReplyCardProps {
@@ -22,6 +22,7 @@ function inferInputType(label: string): 'year' | 'boolean' | 'text' {
 
 /** Item 50: Loading skeleton for draft */
 function DraftSkeleton() {
+  const theme = useTheme()
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
       <div style={{
@@ -42,6 +43,7 @@ function DraftSkeleton() {
 }
 
 export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onConvertTodo }: ReplyCardProps) {
+  const theme = useTheme()
   const [draftSubject, setDraftSubject] = useState(action.draft_subject || '')
   const [draftBody, setDraftBody] = useState(action.draft_body_text || '')
   const [draftLoaded, setDraftLoaded] = useState(!!action.draft_body_text)

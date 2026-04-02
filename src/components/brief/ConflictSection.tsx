@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { theme } from '@/config/theme'
+import { useTheme } from '@/contexts/ThemeContext'
 import type { ConflictCardData } from '@/components/action/action-card-template'
 
 interface ConflictSectionProps {
@@ -16,6 +16,7 @@ interface ConflictSectionProps {
  * No scores, no weights, no jargon — just what the user needs to know.
  */
 export function ConflictSection({ conflicts, cpName, actionId, token }: ConflictSectionProps) {
+  const theme = useTheme()
   const unresolvedConflicts = conflicts.filter(c => !(c as Record<string, unknown>).resolved)
   const [resolving, setResolving] = useState<number | null>(null)
   const [resolvedIdxs, setResolvedIdxs] = useState<Set<number>>(new Set())

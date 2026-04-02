@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { theme } from '@/config/theme'
+import { useTheme } from '@/contexts/ThemeContext'
 import type { CompletedActionSummary } from './types'
 
 const TYPE_LABEL: Record<string, string> = {
@@ -13,6 +13,7 @@ interface CompletedSectionProps {
 }
 
 export function CompletedSection({ items }: CompletedSectionProps) {
+  const theme = useTheme()
   const [expanded, setExpanded] = useState(false)
 
   if (items.length === 0) return null

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { theme } from '@/config/theme'
+import { useTheme } from '@/contexts/ThemeContext'
 import { BriefCard } from './BriefCard'
 import { ItineraryView } from './ItineraryView'
 import { CompletedSection } from './CompletedSection'
@@ -23,6 +23,7 @@ function getGreeting(): string {
 }
 
 export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFeedProps) {
+  const theme = useTheme()
   const [data, setData] = useState(initialData)
   const [expandedId, setExpandedId] = useState<string | null>(focusActionId || null)
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set())
@@ -435,7 +436,7 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
             flexDirection: 'column',
             gap: theme.spacing.sm,
           }}>
-            {sortedActions.map(action => (
+            {sortedActions.map((action, idx) => (
               <div
                 key={action.id}
                 id={`action-${action.id}`}
@@ -455,6 +456,7 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
                   onConvertQuestionTodo={(question) => handleConvertQuestionTodo(action.id, question)}
                   done={doneIds.has(action.id)}
                   showPostponePicker={expandedId === action.id && action.action_type === 'TODO' ? postponePickerOpen : false}
+                  isFirst={idx === 0}
                 />
               </div>
             ))}

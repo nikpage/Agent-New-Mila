@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { theme } from '@/config/theme'
+import { useTheme } from '@/contexts/ThemeContext'
 import type { BriefEvent } from './types'
 
 interface ItineraryViewProps {
@@ -62,6 +62,7 @@ interface TimeEditState {
 }
 
 export function ItineraryView({ todayEvents, upcomingEvents, timezone }: ItineraryViewProps) {
+  const theme = useTheme()
   // Combine and deduplicate
   const allEventIds = new Set<string>()
   const allEvents: BriefEvent[] = []

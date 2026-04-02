@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { theme } from '@/config/theme'
+import { useTheme } from '@/contexts/ThemeContext'
 import type { BriefAction } from './types'
 
 type MeetingType = 'address' | 'online' | 'phone'
@@ -22,6 +22,7 @@ const MEETING_TYPES: { value: MeetingType; label: string }[] = [
 const DURATION_CHIPS = [10, 30, 60] as const
 
 export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: ScheduleCardProps) {
+  const theme = useTheme()
   const [loading, setLoading] = useState(false)
 
   const payload = action.payload as Record<string, unknown> | null
