@@ -2,8 +2,65 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useTheme } from '@/contexts/ThemeContext'
-import { usePressState } from '@/hooks/usePressState'
 import type { StickyBarCTA } from './types'
+
+function usePressState() {
+  const [pressed, setPressed] = useState(false)
+  const pressHandlers = {
+    onMouseDown: () => setPressed(true),
+    onMouseUp: () => setPressed(false),
+    onMouseLeave: () => setPressed(false),
+    onTouchStart: () => setPressed(true),
+    onTouchEnd: () => setPressed(false),
+  }
+  return { pressed, pressHandlers }
+}
+
+function CTAButton({ cta, ctaLoading, onCta, theme }: {
+  cta: StickyBarCTA
+  ctaLoading: string | null
+  onCta: (cta: StickyBarCTA) => void
+  theme: ReturnType<typeof useTheme>
+}) {
+  const press = usePressState()
+  return (
+    <button
+      onClick={() => onCta(cta)}
+      disabled={cta.disabled || ctaLoading !== null}
+      {...press.pressHandlers}
+      style={{
+        padding: `10px ${theme.spacing.lg}`,
+        background: cta.primary
+          ? theme.colors.primaryGradient
+          : cta.destructive
+            ? 'transparent'
+            : theme.colors.secondary,
+        backgroundColor: cta.primary
+          ? undefined
+          : cta.destructive
+            ? 'transparent'
+            : theme.colors.secondary,
+        color: cta.primary
+          ? 'white'
+          : cta.destructive
+            ? theme.colors.textMuted
+            : theme.colors.text,
+        border: 'none',
+        borderRadius: theme.borderRadius.md,
+        cursor: cta.disabled ? 'not-allowed' : 'pointer',
+        fontWeight: cta.primary ? theme.typography.weights.semibold : theme.typography.weights.medium,
+        fontSize: theme.typography.sizes.base,
+        letterSpacing: theme.letterSpacing.wide,
+        flex: cta.primary ? 1 : undefined,
+        opacity: ctaLoading === cta.label ? 0.6 : ctaLoading !== null ? 0.8 : 1,
+        transform: press.pressed ? 'scale(0.97)' : 'scale(1)',
+        transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
+      }}
+    >
+      {ctaLoading === cta.label ? '...' : cta.label}
+    </button>
+  )
+}
 
 interface StickyBarProps {
   /** CTAs from the expanded card. Null = show command input */
@@ -86,47 +143,15 @@ export function StickyBar({ ctas, onCommand }: StickyBarProps) {
               gap: theme.spacing.sm,
               alignItems: 'center',
             }}>
-              {currentMode.map(cta => {
-                const press = usePressState() // eslint-disable-line react-hooks/rules-of-hooks
-                return (
-                  <button
+              {currentMode.map(cta => (
+                  <CTAButton
                     key={cta.label}
-                    onClick={() => handleCta(cta)}
-                    disabled={cta.disabled || ctaLoading !== null}
-                    {...press.pressHandlers}
-                    style={{
-                      padding: `10px ${theme.spacing.lg}`,
-                      background: cta.primary
-                        ? theme.colors.primaryGradient
-                        : cta.destructive
-                          ? 'transparent'
-                          : theme.colors.secondary,
-                      backgroundColor: cta.primary
-                        ? undefined
-                        : cta.destructive
-                          ? 'transparent'
-                          : theme.colors.secondary,
-                      color: cta.primary
-                        ? 'white'
-                        : cta.destructive
-                          ? theme.colors.textMuted
-                          : theme.colors.text,
-                      border: 'none',
-                      borderRadius: theme.borderRadius.md,
-                      cursor: cta.disabled ? 'not-allowed' : 'pointer',
-                      fontWeight: cta.primary ? theme.typography.weights.semibold : theme.typography.weights.medium,
-                      fontSize: theme.typography.sizes.base,
-                      letterSpacing: theme.letterSpacing.wide,
-                      flex: cta.primary ? 1 : undefined,
-                      opacity: ctaLoading === cta.label ? 0.6 : ctaLoading !== null ? 0.8 : 1,
-                      transform: press.pressed ? 'scale(0.97)' : 'scale(1)',
-                      transition: 'transform 0.1s ease, opacity 0.15s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1)',
-                    }}
-                  >
-                    {ctaLoading === cta.label ? '...' : cta.label}
-                  </button>
-                )
-              })}
+                    cta={cta}
+                    ctaLoading={ctaLoading}
+                    onCta={handleCta}
+                    theme={theme}
+                  />
+              ))}
             </div>
           ) : (
             /* Command input + icons */

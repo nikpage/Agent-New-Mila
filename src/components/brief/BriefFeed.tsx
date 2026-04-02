@@ -198,6 +198,16 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     })
   }
 
+  // Toast feedback for commands
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function showToast(msg: string) {
+    setToast(msg)
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 4000)
+  }
+
   // Item 35: Wire command to API
   async function handleCommand(command: string) {
     const res = await fetch('/api/commands', {
@@ -208,10 +218,11 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     if (res.ok) {
       const result = await res.json()
       if (result.success) {
-        // Refresh to show new todos/contacts
         await refreshData()
       }
-      // Could show a toast/notification with result.message — for now, silent
+      showToast(result.message || (result.success ? 'Hotovo' : 'Nepodařilo se'))
+    } else {
+      showToast('Chyba při zpracování')
     }
   }
 
@@ -231,11 +242,22 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     }
   }
 
-  // ── StickyBar CTA generation ─────────────────────────────────────────
+  // ── StickyBar CTA generation (mobile only — desktop uses inline CTAs) ──
 
   const expandedAction = expandedId ? sortedActions.find(a => a.id === expandedId) : null
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)')
+    setIsMobile(mq.matches)
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
 
   function getExpandedCTAs(): StickyBarCTA[] | null {
+    // On desktop, inline CTAs handle actions — StickyBar shows command input only
+    if (!isMobile) return null
     if (!expandedAction || doneIds.has(expandedAction.id)) return null
 
     const id = expandedAction.id
@@ -536,9 +558,33 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
             todayEvents={data.events.today as BriefEvent[]}
             upcomingEvents={data.events.upcoming as BriefEvent[]}
             timezone={data.settings.timezone}
+            userId={userId}
+            token={token}
           />
         </div>
       </div>
+
+      {/* Toast */}
+      {toast && (
+        <div style={{
+          position: 'fixed',
+          bottom: '80px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          backgroundColor: theme.colors.text,
+          color: theme.colors.background,
+          padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
+          borderRadius: theme.borderRadius.lg,
+          fontSize: theme.typography.sizes.sm,
+          fontWeight: theme.typography.weights.medium,
+          boxShadow: theme.shadows.modal,
+          zIndex: 50,
+          maxWidth: '80vw',
+          textAlign: 'center',
+        }}>
+          {toast}
+        </div>
+      )}
 
       {/* ── Sticky bottom bar ───────────────────────────────────── */}
       <StickyBar

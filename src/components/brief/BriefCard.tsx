@@ -2,13 +2,24 @@
 
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { useTheme } from '@/contexts/ThemeContext'
-import { usePressState } from '@/hooks/usePressState'
 import { ReplyCard } from './ReplyCard'
 import { ScheduleCard } from './ScheduleCard'
 import { TodoCard } from './TodoCard'
 import { ConflictSection } from './ConflictSection'
 import type { BriefAction } from './types'
 import type { ConflictCardData } from '@/components/action/action-card-template'
+
+function usePressState() {
+  const [pressed, setPressed] = useState(false)
+  const pressHandlers = {
+    onMouseDown: () => setPressed(true),
+    onMouseUp: () => setPressed(false),
+    onMouseLeave: () => setPressed(false),
+    onTouchStart: () => setPressed(true),
+    onTouchEnd: () => setPressed(false),
+  }
+  return { pressed, pressHandlers }
+}
 
 interface BriefCardProps {
   action: BriefAction
@@ -309,9 +320,21 @@ export function BriefCard({
               lineHeight: theme.lineHeight.tight,
               letterSpacing: theme.letterSpacing.tight,
               transition: 'font-size 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+              flex: 1,
             }}>
               {headline}
             </span>
+            {expanded && (
+              <span style={{
+                fontSize: theme.typography.sizes.sm,
+                color: theme.colors.textMuted,
+                flexShrink: 0,
+                marginLeft: theme.spacing.sm,
+                transition: 'opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+              }}>
+                ✕
+              </span>
+            )}
           </div>
           {/* Story — visible both collapsed and expanded as context */}
           {story && (

@@ -8,6 +8,8 @@ interface ItineraryViewProps {
   todayEvents: BriefEvent[]
   upcomingEvents: BriefEvent[]
   timezone: string
+  userId?: string
+  token?: string
 }
 
 /** Group events by date string */
@@ -48,11 +50,9 @@ interface DragState {
   originalTime: string
 }
 
-interface ConsequenceReview {
+interface ConflictInfo {
   eventId: string
-  newTime: string
-  message: string | null
-  loading: boolean
+  conflicts: { id: string; title: string; start_time: string; end_time: string }[]
 }
 
 /** Item 32: Inline time editing state */
@@ -61,36 +61,60 @@ interface TimeEditState {
   value: string // HH:MM format
 }
 
-export function ItineraryView({ todayEvents, upcomingEvents, timezone }: ItineraryViewProps) {
+export function ItineraryView({ todayEvents, upcomingEvents, timezone, userId, token }: ItineraryViewProps) {
   const theme = useTheme()
   // Combine and deduplicate
   const allEventIds = new Set<string>()
-  const allEvents: BriefEvent[] = []
+  const initialEvents: BriefEvent[] = []
   for (const e of [...todayEvents, ...upcomingEvents]) {
     if (!allEventIds.has(e.id)) {
       allEventIds.add(e.id)
-      allEvents.push(e)
+      initialEvents.push(e)
     }
   }
 
-  const [localEvents, setLocalEvents] = useState(allEvents)
+  const [localEvents, setLocalEvents] = useState(initialEvents)
   const [drag, setDrag] = useState<DragState | null>(null)
-  const [consequence, setConsequence] = useState<ConsequenceReview | null>(null)
+  const [conflictInfo, setConflictInfo] = useState<ConflictInfo | null>(null)
   const [timeEdit, setTimeEdit] = useState<TimeEditState | null>(null)
+  const [saving, setSaving] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Each pixel of drag = 1 minute (adjustable)
+  // Each pixel of drag = 1 minute
   const PX_PER_MINUTE = 2
 
   const onDragStart = useCallback((eventId: string, startY: number, originalTime: string) => {
     setDrag({ eventId, startY, currentY: startY, originalTime })
-    setConsequence(null)
+    setConflictInfo(null)
   }, [])
 
   const onDragMove = useCallback((clientY: number) => {
     if (!drag) return
     setDrag(prev => prev ? { ...prev, currentY: clientY } : null)
   }, [drag])
+
+  /** Persist reschedule to backend */
+  const persistReschedule = useCallback(async (eventId: string, newStart: string, newEnd: string) => {
+    if (!userId || !token) return
+    setSaving(eventId)
+    try {
+      const res = await fetch(`/api/brief/${userId}/reschedule-event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, eventId, newStart, newEnd }),
+      })
+      if (res.ok) {
+        const result = await res.json()
+        if (result.conflicts && result.conflicts.length > 0) {
+          setConflictInfo({ eventId, conflicts: result.conflicts })
+        }
+      }
+    } catch {
+      // Silent — optimistic update already applied
+    } finally {
+      setSaving(null)
+    }
+  }, [userId, token])
 
   const onDragEnd = useCallback(async () => {
     if (!drag) return
@@ -99,7 +123,6 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone }: Itinera
     const deltaMinutes = snapTo15(Math.round(deltaY / PX_PER_MINUTE))
 
     if (Math.abs(deltaMinutes) < 15) {
-      // Too small — cancel
       setDrag(null)
       return
     }
@@ -108,46 +131,24 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone }: Itinera
     const newDate = new Date(originalDate.getTime() + deltaMinutes * 60_000)
     const newTimeIso = newDate.toISOString()
 
-    // Optimistically update the event position
+    const draggedEventId = drag.eventId
+
+    // Compute new end time
+    const event = localEvents.find(e => e.id === draggedEventId)
+    const duration = event ? new Date(event.end_time).getTime() - new Date(event.start_time).getTime() : 30 * 60_000
+    const newEndIso = new Date(newDate.getTime() + duration).toISOString()
+
+    // Commit: update local state immediately (no snap-back)
     setLocalEvents(prev => prev.map(e => {
-      if (e.id !== drag.eventId) return e
-      const duration = new Date(e.end_time).getTime() - new Date(e.start_time).getTime()
-      return { ...e, start_time: newTimeIso, end_time: new Date(newDate.getTime() + duration).toISOString() }
+      if (e.id !== draggedEventId) return e
+      return { ...e, start_time: newTimeIso, end_time: newEndIso }
     }))
 
-    // Show consequence review loading
-    setConsequence({
-      eventId: drag.eventId,
-      newTime: newTimeIso,
-      message: null,
-      loading: true,
-    })
-
-    const draggedEventId = drag.eventId
     setDrag(null)
 
-    // TODO: Call consequence review API when backend is built
-    // For now, show the consequence prompt directly
-    const evt = allEvents.find(e => e.id === draggedEventId)
-    const timeStr = formatTime(newTimeIso, timezone)
-    setConsequence({
-      eventId: draggedEventId,
-      newTime: newTimeIso,
-      message: `Přesunout "${evt?.title || 'událost'}" na ${timeStr}?`,
-      loading: false,
-    })
-  }, [drag, allEvents, timezone])
-
-  const confirmReschedule = useCallback(() => {
-    // TODO: Call backend to persist + notify CPs
-    setConsequence(null)
-  }, [])
-
-  const cancelReschedule = useCallback(() => {
-    // Revert to original events
-    setLocalEvents(allEvents)
-    setConsequence(null)
-  }, [allEvents])
+    // Persist to backend
+    await persistReschedule(draggedEventId, newTimeIso, newEndIso)
+  }, [drag, localEvents, persistReschedule])
 
   // Item 32: Handle time edit confirmation
   const handleTimeEditConfirm = useCallback((eventId: string, newTimeValue: string) => {
@@ -160,21 +161,18 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone }: Itinera
     newDate.setHours(hours, minutes, 0, 0)
     const newTimeIso = newDate.toISOString()
     const duration = new Date(event.end_time).getTime() - new Date(event.start_time).getTime()
+    const newEndIso = new Date(newDate.getTime() + duration).toISOString()
 
     setLocalEvents(prev => prev.map(e => {
       if (e.id !== eventId) return e
-      return { ...e, start_time: newTimeIso, end_time: new Date(newDate.getTime() + duration).toISOString() }
+      return { ...e, start_time: newTimeIso, end_time: newEndIso }
     }))
 
-    const timeStr = formatTime(newTimeIso, timezone)
-    setConsequence({
-      eventId,
-      newTime: newTimeIso,
-      message: `Přesunout "${event.title || 'událost'}" na ${timeStr}?`,
-      loading: false,
-    })
     setTimeEdit(null)
-  }, [localEvents, timezone])
+
+    // Persist to backend
+    persistReschedule(eventId, newTimeIso, newEndIso)
+  }, [localEvents, persistReschedule])
 
   const onMouseDown = useCallback((eventId: string, clientY: number, originalTime: string) => {
     onDragStart(eventId, clientY, originalTime)
@@ -233,148 +231,177 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone }: Itinera
               const isHold = event.status === 'tentative' || event.event_type === 'hold'
               const isTravelBuffer = event.event_type === 'travel_buffer'
               const isDragging = drag?.eventId === event.id
+              const isSaving = saving === event.id
+              const hasConflict = conflictInfo?.eventId === event.id
 
-              // Skip travel buffers — shown as annotation
+              // Skip travel buffers
               if (isTravelBuffer) return null
 
               const dragOffset = isDragging ? drag.currentY - drag.startY : 0
 
               return (
-                <div
-                  key={event.id}
-                  onTouchStart={e => {
-                    const touch = e.touches[0]
-                    onDragStart(event.id, touch.clientY, event.start_time)
-                  }}
-                  onTouchMove={e => {
-                    if (drag?.eventId === event.id) {
+                <div key={event.id}>
+                  <div
+                    onTouchStart={e => {
+                      const touch = e.touches[0]
+                      onDragStart(event.id, touch.clientY, event.start_time)
+                    }}
+                    onTouchMove={e => {
+                      if (drag?.eventId === event.id) {
+                        e.preventDefault()
+                        onDragMove(e.touches[0].clientY)
+                      }
+                    }}
+                    onTouchEnd={() => {
+                      if (drag?.eventId === event.id) onDragEnd()
+                    }}
+                    onMouseDown={(e: React.MouseEvent) => {
                       e.preventDefault()
-                      onDragMove(e.touches[0].clientY)
-                    }
-                  }}
-                  onTouchEnd={() => {
-                    if (drag?.eventId === event.id) onDragEnd()
-                  }}
-                  onMouseDown={(e: React.MouseEvent) => {
-                    e.preventDefault()
-                    onMouseDown(event.id, e.clientY, event.start_time)
-                  }}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'baseline',
-                    gap: theme.spacing.md,
-                    padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                    backgroundColor: isHold ? theme.colors.warningBg : theme.colors.surface,
-                    borderRadius: theme.borderRadius.md,
-                    border: `1px solid ${isHold ? theme.colors.warning : theme.colors.border}`,
-                    opacity: isHold ? 0.85 : 1,
-                    position: 'relative',
-                    transform: isDragging ? `translateY(${dragOffset}px)` : 'translateY(0)',
-                    transition: isDragging ? 'none' : 'transform 0.3s ease, box-shadow 0.2s ease',
-                    boxShadow: isDragging ? '0 8px 24px rgba(0,0,0,0.15)' : 'none',
-                    zIndex: isDragging ? 10 : 1,
-                    cursor: 'grab',
-                    touchAction: 'none',
-                    userSelect: 'none',
-                  }}
-                >
-                  {/* Travel buffer annotation */}
-                  {event.travelMinutes && event.travelMinutes > 0 && (
-                    <div style={{
-                      position: 'absolute',
-                      top: '-18px',
-                      left: theme.spacing.md,
-                      fontSize: '11px',
-                      color: theme.colors.textMuted,
-                      fontStyle: 'italic',
-                    }}>
-                      {event.travelMinutes} min cesta
-                    </div>
-                  )}
-
-                  {/* Drag handle indicator */}
-                  <span style={{
-                    fontSize: '10px',
-                    color: theme.colors.textMuted,
-                    opacity: 0.4,
-                    flexShrink: 0,
-                    lineHeight: 1,
-                  }}>
-                    ⋮⋮
-                  </span>
-
-                  {/* Time — Item 32: tap to edit */}
-                  {timeEdit?.eventId === event.id ? (
-                    <input
-                      type="time"
-                      value={timeEdit.value}
-                      onChange={e => setTimeEdit({ ...timeEdit, value: e.target.value })}
-                      onBlur={() => handleTimeEditConfirm(event.id, timeEdit.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') handleTimeEditConfirm(event.id, timeEdit.value) }}
-                      autoFocus
-                      style={{
-                        width: '70px', minWidth: '50px',
-                        fontSize: theme.typography.sizes.sm,
-                        fontWeight: theme.typography.weights.medium,
-                        color: theme.colors.primary,
-                        border: `1px solid ${theme.colors.primary}`,
-                        borderRadius: theme.borderRadius.sm,
-                        padding: '2px 4px',
-                        fontVariantNumeric: 'tabular-nums',
-                        outline: 'none',
-                      }}
-                    />
-                  ) : (
-                    <span
-                      onClick={e => {
-                        e.stopPropagation()
-                        setTimeEdit({ eventId: event.id, value: formatTime(event.start_time, timezone) })
-                      }}
-                      style={{
-                        fontSize: theme.typography.sizes.sm,
-                        fontWeight: theme.typography.weights.medium,
-                        color: theme.colors.text,
-                        minWidth: '50px',
-                        fontVariantNumeric: 'tabular-nums',
-                        cursor: 'text',
-                        borderBottom: `1px dashed ${theme.colors.border}`,
-                      }}
-                    >
-                      {formatTime(event.start_time, timezone)}
-                    </span>
-                  )}
-
-                  {/* Title */}
-                  <span style={{
-                    fontSize: theme.typography.sizes.sm,
-                    color: theme.colors.text,
-                    flex: 1,
-                  }}>
-                    {event.title || 'Bez názvu'}
-                    {isHold && (
-                      <span style={{
-                        fontSize: theme.typography.sizes.xs,
-                        color: theme.colors.warning,
-                        marginLeft: theme.spacing.sm,
+                      onMouseDown(event.id, e.clientY, event.start_time)
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      gap: theme.spacing.md,
+                      padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                      backgroundColor: isHold ? theme.colors.warningBg : theme.colors.surface,
+                      borderRadius: theme.borderRadius.md,
+                      border: `1px solid ${hasConflict ? theme.colors.error : isHold ? theme.colors.warning : theme.colors.border}`,
+                      opacity: isSaving ? 0.7 : isHold ? 0.85 : 1,
+                      position: 'relative',
+                      transform: isDragging ? `translateY(${dragOffset}px)` : 'translateY(0)',
+                      transition: isDragging ? 'none' : 'transform 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                      boxShadow: isDragging ? '0 8px 24px rgba(0,0,0,0.15)' : 'none',
+                      zIndex: isDragging ? 10 : 1,
+                      cursor: 'grab',
+                      touchAction: 'none',
+                      userSelect: 'none',
+                    }}
+                  >
+                    {/* Travel buffer annotation */}
+                    {event.travelMinutes && event.travelMinutes > 0 && (
+                      <div style={{
+                        position: 'absolute',
+                        top: '-18px',
+                        left: theme.spacing.md,
+                        fontSize: '11px',
+                        color: theme.colors.textMuted,
                         fontStyle: 'italic',
                       }}>
-                        čeká na potvrzení
+                        {event.travelMinutes} min cesta
+                      </div>
+                    )}
+
+                    {/* Drag handle indicator */}
+                    <span style={{
+                      fontSize: '10px',
+                      color: theme.colors.textMuted,
+                      opacity: 0.4,
+                      flexShrink: 0,
+                      lineHeight: 1,
+                    }}>
+                      ⋮⋮
+                    </span>
+
+                    {/* Time — Item 32: tap to edit */}
+                    {timeEdit?.eventId === event.id ? (
+                      <input
+                        type="time"
+                        value={timeEdit.value}
+                        onChange={e => setTimeEdit({ ...timeEdit, value: e.target.value })}
+                        onBlur={() => handleTimeEditConfirm(event.id, timeEdit.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') handleTimeEditConfirm(event.id, timeEdit.value) }}
+                        autoFocus
+                        style={{
+                          width: '70px', minWidth: '50px',
+                          fontSize: theme.typography.sizes.sm,
+                          fontWeight: theme.typography.weights.medium,
+                          color: theme.colors.primary,
+                          border: `1px solid ${theme.colors.primary}`,
+                          borderRadius: theme.borderRadius.sm,
+                          padding: '2px 4px',
+                          fontVariantNumeric: 'tabular-nums',
+                          outline: 'none',
+                        }}
+                      />
+                    ) : (
+                      <span
+                        onClick={e => {
+                          e.stopPropagation()
+                          setTimeEdit({ eventId: event.id, value: formatTime(event.start_time, timezone) })
+                        }}
+                        style={{
+                          fontSize: theme.typography.sizes.sm,
+                          fontWeight: theme.typography.weights.medium,
+                          color: theme.colors.text,
+                          minWidth: '50px',
+                          fontVariantNumeric: 'tabular-nums',
+                          cursor: 'text',
+                          borderBottom: `1px dashed ${theme.colors.border}`,
+                        }}
+                      >
+                        {formatTime(event.start_time, timezone)}
                       </span>
                     )}
-                  </span>
 
-                  {/* Location */}
-                  {event.location && (
+                    {/* Title */}
                     <span style={{
-                      fontSize: theme.typography.sizes.xs,
-                      color: theme.colors.textMuted,
-                      maxWidth: '150px',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
+                      fontSize: theme.typography.sizes.sm,
+                      color: theme.colors.text,
+                      flex: 1,
                     }}>
-                      {event.location}
+                      {event.title || 'Bez názvu'}
+                      {isHold && (
+                        <span style={{
+                          fontSize: theme.typography.sizes.xs,
+                          color: theme.colors.warning,
+                          marginLeft: theme.spacing.sm,
+                          fontStyle: 'italic',
+                        }}>
+                          čeká na potvrzení
+                        </span>
+                      )}
                     </span>
+
+                    {/* Saving indicator */}
+                    {isSaving && (
+                      <span style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted }}>
+                        ...
+                      </span>
+                    )}
+
+                    {/* Location */}
+                    {event.location && !isSaving && (
+                      <span style={{
+                        fontSize: theme.typography.sizes.xs,
+                        color: theme.colors.textMuted,
+                        maxWidth: '150px',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {event.location}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Inline conflict warning (no confirmation needed — just info) */}
+                  {hasConflict && conflictInfo.conflicts.length > 0 && (
+                    <div style={{
+                      marginTop: theme.spacing.xs,
+                      padding: `${theme.spacing.xs} ${theme.spacing.md}`,
+                      fontSize: theme.typography.sizes.xs,
+                      color: theme.colors.error,
+                      backgroundColor: theme.colors.errorBg,
+                      borderRadius: theme.borderRadius.sm,
+                      lineHeight: 1.5,
+                    }}>
+                      {conflictInfo.conflicts.map(c => (
+                        <div key={c.id}>
+                          Koliduje s: {c.title || 'událost'} ({formatTime(c.start_time, timezone)} – {formatTime(c.end_time, timezone)})
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               )
@@ -382,61 +409,6 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone }: Itinera
           </div>
         </div>
       ))}
-
-      {/* Consequence review overlay */}
-      {consequence && (
-        <div style={{
-          padding: theme.spacing.md,
-          backgroundColor: theme.colors.secondary,
-          borderRadius: theme.borderRadius.md,
-          border: `1px solid ${theme.colors.border}`,
-          marginTop: theme.spacing.sm,
-        }}>
-          {consequence.loading ? (
-            <div style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, textAlign: 'center' }}>
-              Mila kontroluje dopady...
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
-              <div style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.text, lineHeight: 1.6 }}>
-                {consequence.message}
-              </div>
-              <div style={{ display: 'flex', gap: theme.spacing.sm }}>
-                <button
-                  onClick={confirmReschedule}
-                  style={{
-                    padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                    backgroundColor: theme.colors.primary,
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: theme.borderRadius.md,
-                    cursor: 'pointer',
-                    fontSize: theme.typography.sizes.sm,
-                    fontWeight: theme.typography.weights.medium,
-                  }}
-                >
-                  Potvrdit změny
-                </button>
-                <button
-                  onClick={cancelReschedule}
-                  style={{
-                    padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                    backgroundColor: theme.colors.surface,
-                    color: theme.colors.text,
-                    border: `1px solid ${theme.colors.border}`,
-                    borderRadius: theme.borderRadius.md,
-                    cursor: 'pointer',
-                    fontSize: theme.typography.sizes.sm,
-                    fontWeight: theme.typography.weights.medium,
-                  }}
-                >
-                  Zpět
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   )
 }
