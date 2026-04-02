@@ -6,7 +6,7 @@ import { getEventsForToday, getUpcomingEvents } from '@/lib/db/events'
 import { getTodosDueToday, getOverdueTodos } from '@/lib/db/todos'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
-import { validateTriggerToken, generateTriggerToken } from '@/lib/auth/tokens'
+import { validateTriggerToken, generateActionToken } from '@/lib/auth/tokens'
 import { BriefFeed } from '@/components/brief/BriefFeed'
 import { theme } from '@/config/theme'
 import type { BriefData, BriefAction, CompletedActionSummary } from '@/components/brief/types'
@@ -54,6 +54,7 @@ async function loadBriefData(userId: string): Promise<BriefData> {
       summaryJson: summary,
       headline: (payload?.headline as string) || null,
       story: (payload?.story as string) || null,
+      actionToken: generateActionToken(action.id, userId),
     }
   })
 
@@ -78,7 +79,11 @@ async function loadBriefData(userId: string): Promise<BriefData> {
     return true
   })
 
+  // User name from settings
+  const userName = settings.client_name || ''
+
   return {
+    userName,
     actions: enrichedActions,
     events: {
       today: todayEvents as any,
@@ -121,7 +126,7 @@ export default async function BriefPage({ params, searchParams }: PageProps) {
   if (!token || !validateTriggerToken(token, userId)) {
     return (
       <main style={{
-        minHeight: '100vh',
+        minHeight: '100dvh',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -142,7 +147,7 @@ export default async function BriefPage({ params, searchParams }: PageProps) {
 
   return (
     <main style={{
-      minHeight: '100vh',
+      minHeight: '100dvh',
       backgroundColor: theme.colors.background,
       fontFamily: theme.typography.fontFamily,
     }}>
@@ -151,7 +156,7 @@ export default async function BriefPage({ params, searchParams }: PageProps) {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          minHeight: '100vh',
+          minHeight: '100dvh',
           color: theme.colors.textMuted,
         }}>
           Načítání...

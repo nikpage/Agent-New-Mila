@@ -9,6 +9,8 @@ export interface BriefAction extends ActionProposal {
   /** AI-generated headline + story, populated at brief send time or on-demand */
   headline?: string | null
   story?: string | null
+  /** Per-action HMAC token for API calls (generated server-side) */
+  actionToken?: string
 }
 
 /** Completed action summary for the "Mila vyřídila" section */
@@ -45,6 +47,7 @@ export interface BriefTodo {
 
 /** All data for one brief page render */
 export interface BriefData {
+  userName: string
   actions: BriefAction[]
   events: {
     today: BriefEvent[]
@@ -67,4 +70,13 @@ export interface CardCallbacks {
   onPostpone: (actionId: string, postponeTo: string) => Promise<void>
   onRegenerateDraft: (actionId: string, instruction: string) => Promise<{ subject: string; body: string }>
   onSaveDraft: (actionId: string, data: { subject?: string; body?: string; notes?: string; dynamicFields?: Record<string, string>; meetingType?: string }) => Promise<void>
+}
+
+/** CTA config for the StickyBar to render */
+export interface StickyBarCTA {
+  label: string
+  action: () => Promise<void> | void
+  primary?: boolean
+  destructive?: boolean
+  disabled?: boolean
 }

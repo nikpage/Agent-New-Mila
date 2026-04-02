@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { validateTriggerToken } from '@/lib/auth/tokens'
+import { validateTriggerToken, generateActionToken } from '@/lib/auth/tokens'
 import { getUserSettings } from '@/lib/db/users'
 import { getPendingActionsForBrief, getRecentlyCompletedActions } from '@/lib/db/actions'
 import { getEventsForToday, getUpcomingEvents } from '@/lib/db/events'
@@ -62,6 +62,7 @@ export async function POST(
         summaryJson: conv?.summary_json || null,
         headline: (payload?.headline as string) || null,
         story: (payload?.story as string) || null,
+        actionToken: generateActionToken(action.id, userId),
       }
     })
 
@@ -92,7 +93,10 @@ export async function POST(
       return true
     })
 
+    const userName = settings.client_name || ''
+
     return NextResponse.json({
+      userName,
       actions: enrichedActions,
       events: {
         today: todayEvents,

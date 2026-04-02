@@ -11,7 +11,7 @@ import type { ConflictCardData } from '@/components/action/action-card-template'
 
 interface BriefCardProps {
   action: BriefAction
-  token: string
+  actionToken: string
   expanded: boolean
   onToggle: () => void
   onExecute: () => Promise<void>
@@ -20,7 +20,6 @@ interface BriefCardProps {
   onPostpone: (postponeTo: string) => Promise<void>
   onRegenerateDraft: (instruction: string) => Promise<{ subject: string; body: string }>
   onSaveDraft: (data: { meetingType?: string; dynamicFields?: Record<string, string>; notes?: string }) => Promise<void>
-  /** Card has been acted on (done/sent) */
   done?: boolean
 }
 
@@ -30,55 +29,58 @@ function getUrgencySignal(urgency: number): string {
   return ''
 }
 
+function getUrgencyAccent(urgency: number): string | undefined {
+  if (urgency >= 9) return theme.colors.error
+  if (urgency >= 7) return theme.colors.warning
+  return undefined
+}
+
 export function BriefCard({
-  action, token, expanded, onToggle,
+  action, actionToken, expanded, onToggle,
   onExecute, onConvertTodo, onDismiss, onPostpone,
   onRegenerateDraft, onSaveDraft, done,
 }: BriefCardProps) {
+  // Use headline if available, otherwise CP name
   const headline = action.headline || action.cpName || 'Akce'
-  const story = action.story || action.intent_cs || action.rationale_cs || action.rationale
+  // Use story if available, otherwise a SHORT fallback — NOT the full intent_cs wall of text
+  const story = action.story || action.rationale_cs || action.topic || null
   const urgencySignal = getUrgencySignal(action.urgency)
+  const urgencyAccent = getUrgencyAccent(action.urgency)
 
   const payload = action.payload as Record<string, unknown> | null
   const conflicts = (payload?.conflicts as ConflictCardData[]) || []
   const hasConflicts = conflicts.filter(c => !(c as Record<string, unknown>).resolved).length > 0
 
-  // Animate expanded content height
+  // Animate expanded content
   const contentRef = useRef<HTMLDivElement>(null)
-  const [contentHeight, setContentHeight] = useState<number>(0)
+  const [contentHeight, setContentHeight] = useState(0)
   const [animating, setAnimating] = useState(false)
 
   useEffect(() => {
     if (expanded && contentRef.current) {
-      // Measure the natural height
-      const h = contentRef.current.scrollHeight
-      setContentHeight(h)
+      setContentHeight(contentRef.current.scrollHeight)
       setAnimating(true)
-      const timer = setTimeout(() => setAnimating(false), 300)
-      return () => clearTimeout(timer)
+      const t = setTimeout(() => setAnimating(false), 350)
+      return () => clearTimeout(t)
     } else {
       setAnimating(true)
       setContentHeight(0)
-      const timer = setTimeout(() => setAnimating(false), 300)
-      return () => clearTimeout(timer)
+      const t = setTimeout(() => setAnimating(false), 350)
+      return () => clearTimeout(t)
     }
   }, [expanded])
 
-  // Re-measure when content changes (draft loads, etc.)
   useEffect(() => {
-    if (expanded && contentRef.current) {
+    if (expanded && contentRef.current && !animating) {
       const observer = new ResizeObserver(() => {
-        if (contentRef.current && !animating) {
-          setContentHeight(contentRef.current.scrollHeight)
-        }
+        if (contentRef.current) setContentHeight(contentRef.current.scrollHeight)
       })
       observer.observe(contentRef.current)
       return () => observer.disconnect()
     }
   }, [expanded, animating])
 
-  // Swipe gesture state (collapsed cards only)
-  const swipeRef = useRef<HTMLDivElement>(null)
+  // Swipe (collapsed only)
   const touchStartX = useRef(0)
   const touchStartY = useRef(0)
   const [swipeX, setSwipeX] = useState(0)
@@ -86,9 +88,8 @@ export function BriefCard({
   const [swipedAway, setSwipedAway] = useState(false)
   const SWIPE_THRESHOLD = 100
 
-  const primaryCta = action.action_type === 'REPLY' ? 'Odeslat'
-    : action.action_type === 'SCHEDULE' ? 'Potvrdit'
-    : 'Hotovo'
+  const primaryLabel = action.action_type === 'REPLY' ? 'Odeslat'
+    : action.action_type === 'SCHEDULE' ? 'Potvrdit' : 'Hotovo'
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     if (expanded) return
@@ -101,10 +102,7 @@ export function BriefCard({
     if (expanded) return
     const dx = e.touches[0].clientX - touchStartX.current
     const dy = e.touches[0].clientY - touchStartY.current
-    // Only swipe if horizontal movement > vertical (prevent scroll hijack)
-    if (!swiping && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      setSwiping(true)
-    }
+    if (!swiping && Math.abs(dx) > 10 && Math.abs(dx) > Math.abs(dy) * 1.5) setSwiping(true)
     if (swiping) {
       e.preventDefault()
       setSwipeX(dx)
@@ -112,61 +110,42 @@ export function BriefCard({
   }, [expanded, swiping])
 
   const onTouchEnd = useCallback(async () => {
-    if (expanded || !swiping) {
-      setSwipeX(0)
-      setSwiping(false)
-      return
-    }
+    if (expanded || !swiping) { setSwipeX(0); setSwiping(false); return }
     if (swipeX > SWIPE_THRESHOLD) {
-      // Swipe right — primary action
-      setSwipedAway(true)
-      setSwipeX(window.innerWidth)
+      setSwipedAway(true); setSwipeX(window.innerWidth)
       setTimeout(() => onExecute(), 300)
     } else if (swipeX < -SWIPE_THRESHOLD) {
-      // Swipe left — dismiss
-      setSwipedAway(true)
-      setSwipeX(-window.innerWidth)
+      setSwipedAway(true); setSwipeX(-window.innerWidth)
       setTimeout(() => onDismiss(), 300)
     } else {
-      // Snap back
       setSwipeX(0)
     }
     setSwiping(false)
   }, [expanded, swiping, swipeX, onExecute, onDismiss])
 
-  // Done state
+  // Hover state (desktop)
+  const [hovered, setHovered] = useState(false)
+
+  // Done / swiped away
   if (done || swipedAway) {
     return (
       <div style={{
-        padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+        padding: `${theme.spacing.sm} ${theme.spacing.md}`,
         backgroundColor: theme.colors.surface,
         borderRadius: theme.borderRadius.lg,
-        border: `1px solid ${theme.colors.border}`,
         display: 'flex',
         alignItems: 'center',
-        gap: theme.spacing.md,
-        opacity: 0.7,
-        transition: 'opacity 0.3s ease',
+        gap: theme.spacing.sm,
+        opacity: 0.5,
+        transition: 'opacity 0.4s ease',
       }}>
         <span style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: '24px',
-          height: '24px',
-          borderRadius: theme.borderRadius.full,
-          backgroundColor: theme.colors.successBg,
-          color: theme.colors.success,
-          fontSize: '14px',
-          flexShrink: 0,
-        }}>
-          ✓
-        </span>
-        <span style={{
-          fontSize: theme.typography.sizes.sm,
-          color: theme.colors.textMuted,
-          textDecoration: 'line-through',
-        }}>
+          width: '20px', height: '20px', borderRadius: theme.borderRadius.full,
+          backgroundColor: theme.colors.successBg, color: theme.colors.success,
+          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: '12px', flexShrink: 0,
+        }}>✓</span>
+        <span style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, textDecoration: 'line-through' }}>
           {headline}
         </span>
       </div>
@@ -174,142 +153,133 @@ export function BriefCard({
   }
 
   return (
-    <div style={{ position: 'relative', overflow: 'hidden', borderRadius: theme.borderRadius.lg }}>
-      {/* Swipe reveal backgrounds */}
-      {!expanded && (
+    <div style={{ position: 'relative', borderRadius: theme.borderRadius.lg }}>
+      {/* Swipe reveal backgrounds (collapsed only) */}
+      {!expanded && (swipeX > 20 || swipeX < -20) && (
         <>
-          {/* Right swipe — green (primary action) */}
           <div style={{
-            position: 'absolute', top: 0, left: 0, bottom: 0, right: 0,
-            backgroundColor: theme.colors.success || '#16a34a',
+            position: 'absolute', inset: 0, backgroundColor: theme.colors.success || '#16a34a',
             borderRadius: theme.borderRadius.lg,
-            display: 'flex', alignItems: 'center', paddingLeft: '24px',
-            opacity: swipeX > 30 ? Math.min(1, swipeX / SWIPE_THRESHOLD) : 0,
-            transition: swiping ? 'none' : 'opacity 0.2s ease',
+            display: 'flex', alignItems: 'center', paddingLeft: '20px',
+            opacity: swipeX > 0 ? Math.min(1, swipeX / SWIPE_THRESHOLD) : 0,
           }}>
-            <span style={{ color: 'white', fontWeight: 600, fontSize: theme.typography.sizes.sm }}>{primaryCta}</span>
+            <span style={{ color: 'white', fontWeight: 600, fontSize: theme.typography.sizes.sm }}>{primaryLabel}</span>
           </div>
-          {/* Left swipe — red (dismiss) */}
           <div style={{
-            position: 'absolute', top: 0, left: 0, bottom: 0, right: 0,
-            backgroundColor: '#dc2626',
+            position: 'absolute', inset: 0, backgroundColor: '#dc2626',
             borderRadius: theme.borderRadius.lg,
-            display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '24px',
-            opacity: swipeX < -30 ? Math.min(1, Math.abs(swipeX) / SWIPE_THRESHOLD) : 0,
-            transition: swiping ? 'none' : 'opacity 0.2s ease',
+            display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '20px',
+            opacity: swipeX < 0 ? Math.min(1, Math.abs(swipeX) / SWIPE_THRESHOLD) : 0,
           }}>
             <span style={{ color: 'white', fontWeight: 600, fontSize: theme.typography.sizes.sm }}>Zrušit</span>
           </div>
         </>
       )}
+
       <div
-        ref={swipeRef}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         style={{
           backgroundColor: theme.colors.surface,
           borderRadius: theme.borderRadius.lg,
-          border: `1px solid ${theme.colors.border}`,
-          boxShadow: expanded ? theme.shadows.hover : theme.shadows.card,
+          borderLeft: urgencyAccent ? `3px solid ${urgencyAccent}` : `3px solid transparent`,
+          boxShadow: expanded
+            ? theme.shadows.hover
+            : hovered
+              ? '0 4px 12px rgba(0,0,0,0.08)'
+              : theme.shadows.card,
           overflow: 'hidden',
-          transition: swiping ? 'none' : 'transform 0.3s ease, box-shadow 0.3s ease',
-          transform: !expanded && swipeX !== 0 ? `translateX(${swipeX}px)` : 'translateX(0)',
+          transition: swiping ? 'none' : 'transform 0.3s ease, box-shadow 0.25s ease',
+          transform: !expanded && swipeX !== 0 ? `translateX(${swipeX}px)` : undefined,
           position: 'relative',
           zIndex: 1,
-        }}>
-      {/* Header — always visible, tappable */}
-      <button
-        onClick={onToggle}
-        style={{
-          display: 'block',
-          width: '100%',
-          textAlign: 'left',
-          padding: expanded
-            ? `${theme.spacing.lg} ${theme.spacing.lg} ${theme.spacing.sm}`
-            : `${theme.spacing.md} ${theme.spacing.lg}`,
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          transition: 'padding 0.3s ease',
+          cursor: expanded ? 'default' : 'pointer',
         }}
       >
-        <div style={{
-          fontSize: expanded ? theme.typography.sizes.lg : theme.typography.sizes.base,
-          fontWeight: theme.typography.weights.semibold,
-          color: theme.colors.text,
-          lineHeight: 1.4,
-          marginBottom: theme.spacing.xs,
-          transition: 'font-size 0.3s ease',
-        }}>
-          {urgencySignal}{headline}
-        </div>
-        <div style={{
-          fontSize: theme.typography.sizes.sm,
-          color: theme.colors.textMuted,
-          lineHeight: expanded ? 1.6 : 1.5,
-          ...(!expanded ? {
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical' as const,
-            overflow: 'hidden',
-          } : {}),
-        }}>
-          {story}
-        </div>
-      </button>
-
-      {/* Animated expandable content */}
-      <div style={{
-        height: expanded ? (animating ? `${contentHeight}px` : 'auto') : '0px',
-        overflow: 'hidden',
-        transition: 'height 0.3s ease',
-      }}>
-        <div ref={contentRef}>
-          {/* Conflict section (SCHEDULE only) */}
-          {hasConflicts && action.action_type === 'SCHEDULE' && (
-            <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>
-              <ConflictSection
-                conflicts={conflicts}
-                cpName={action.cpName || ''}
-                actionId={action.id}
-                token={token}
-              />
+        {/* Header */}
+        <button
+          onClick={onToggle}
+          style={{
+            display: 'block', width: '100%', textAlign: 'left',
+            padding: `${theme.spacing.md} ${theme.spacing.lg}`,
+            paddingBottom: expanded ? theme.spacing.xs : theme.spacing.md,
+            background: 'none', border: 'none', cursor: 'pointer',
+          }}
+        >
+          <div style={{
+            fontSize: expanded ? theme.typography.sizes.lg : theme.typography.sizes.base,
+            fontWeight: theme.typography.weights.semibold,
+            color: theme.colors.text,
+            lineHeight: 1.3,
+            transition: 'font-size 0.25s ease',
+          }}>
+            {urgencySignal}{headline}
+          </div>
+          {/* Story — only shown when collapsed, 2-line clamp */}
+          {!expanded && story && (
+            <div style={{
+              fontSize: theme.typography.sizes.sm,
+              color: theme.colors.textMuted,
+              lineHeight: 1.5,
+              marginTop: '4px',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical' as const,
+              overflow: 'hidden',
+            }}>
+              {story}
             </div>
           )}
+        </button>
 
-          {/* Type-specific expanded content */}
-          <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.lg}` }}>
-            {action.action_type === 'REPLY' && (
-              <ReplyCard
-                action={action}
-                token={token}
-                onExecute={onExecute}
-                onConvertTodo={onConvertTodo}
-                onRegenerateDraft={onRegenerateDraft}
-              />
+        {/* Expandable content */}
+        <div style={{
+          height: expanded ? (animating ? `${contentHeight}px` : 'auto') : '0px',
+          overflow: 'hidden',
+          transition: 'height 0.35s ease',
+        }}>
+          <div ref={contentRef}>
+            {/* Conflict section (SCHEDULE only) */}
+            {hasConflicts && action.action_type === 'SCHEDULE' && (
+              <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.md}` }}>
+                <ConflictSection
+                  conflicts={conflicts}
+                  cpName={action.cpName || ''}
+                  actionId={action.id}
+                  token={actionToken}
+                />
+              </div>
             )}
-            {action.action_type === 'SCHEDULE' && (
-              <ScheduleCard
-                action={action}
-                token={token}
-                onExecute={onExecute}
-                onConvertTodo={onConvertTodo}
-                onRegenerateDraft={onRegenerateDraft}
-                onSaveDraft={onSaveDraft}
-              />
-            )}
-            {action.action_type === 'TODO' && (
-              <TodoCard
-                action={action}
-                onComplete={onExecute}
-                onPostpone={onPostpone}
-                onDismiss={onDismiss}
-              />
-            )}
+
+            {/* Type-specific content — NO inline CTAs, those are in StickyBar */}
+            <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.lg}` }}>
+              {action.action_type === 'REPLY' && (
+                <ReplyCard
+                  action={action}
+                  token={actionToken}
+                  onRegenerateDraft={onRegenerateDraft}
+                />
+              )}
+              {action.action_type === 'SCHEDULE' && (
+                <ScheduleCard
+                  action={action}
+                  token={actionToken}
+                  onRegenerateDraft={onRegenerateDraft}
+                  onSaveDraft={onSaveDraft}
+                />
+              )}
+              {action.action_type === 'TODO' && (
+                <TodoCard
+                  action={action}
+                  onPostpone={onPostpone}
+                />
+              )}
+            </div>
           </div>
         </div>
-      </div>
       </div>
     </div>
   )

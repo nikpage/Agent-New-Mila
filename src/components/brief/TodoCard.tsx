@@ -6,48 +6,40 @@ import type { BriefAction } from './types'
 
 interface TodoCardProps {
   action: BriefAction
-  onComplete: () => Promise<void>
   onPostpone: (postponeTo: string) => Promise<void>
-  onDismiss: () => Promise<void>
 }
 
-const POSTPONE_OPTIONS = [
-  { value: 'today', label: 'Dnes' },
-  { value: 'tomorrow', label: 'Zítra' },
-  { value: 'next_week', label: 'Příští týden' },
-] as const
-
-export function TodoCard({ action, onComplete, onPostpone, onDismiss }: TodoCardProps) {
-  const [loading, setLoading] = useState<string | null>(null)
+export function TodoCard({ action, onPostpone }: TodoCardProps) {
   const [postponeOpen, setPostponeOpen] = useState(false)
+  const [loading, setLoading] = useState<string | null>(null)
 
   const summary = action.summaryJson
   const intent = action.intent_cs || action.rationale_cs || action.rationale
-
-  // Due context: natural language from the action's urgency + created_at
   const payload = action.payload as Record<string, unknown> | null
   const dueDate = payload?.due_date as string | null
 
-  const run = (key: string, fn: () => Promise<void>) => async () => {
-    setLoading(key)
-    try { await fn() } finally { setLoading(null) }
-  }
+  const POSTPONE_OPTIONS = [
+    { value: 'today', label: 'Dnes' },
+    { value: 'tomorrow', label: 'Zítra' },
+    { value: 'next_week', label: 'Příští týden' },
+  ] as const
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
-      {/* Deal narrative */}
+      {/* Deal context */}
       {summary?.currentState && (
-        <div style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, lineHeight: 1.6 }}>
+        <div style={{
+          fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, lineHeight: 1.6,
+          borderLeft: `2px solid ${theme.colors.border}`, paddingLeft: theme.spacing.md,
+        }}>
           {summary.currentState}
         </div>
       )}
 
       {/* Task description */}
       <div style={{
-        fontSize: theme.typography.sizes.base,
-        color: theme.colors.text,
-        lineHeight: 1.6,
-        whiteSpace: 'pre-wrap',
+        fontSize: theme.typography.sizes.base, color: theme.colors.text,
+        lineHeight: 1.6, whiteSpace: 'pre-wrap',
       }}>
         {intent}
       </div>
@@ -65,102 +57,35 @@ export function TodoCard({ action, onComplete, onPostpone, onDismiss }: TodoCard
         </div>
       )}
 
-      {/* Postpone segmented control */}
+      {/* Inline postpone picker (toggled from StickyBar "Odložit") */}
       {postponeOpen && (
         <div style={{
-          display: 'flex',
-          gap: theme.spacing.xs,
-          padding: theme.spacing.sm,
-          backgroundColor: theme.colors.secondary,
+          display: 'flex', gap: theme.spacing.xs,
+          padding: theme.spacing.sm, backgroundColor: theme.colors.background,
           borderRadius: theme.borderRadius.md,
         }}>
           {POSTPONE_OPTIONS.map(opt => (
             <button
               key={opt.value}
-              onClick={run(`postpone-${opt.value}`, () => onPostpone(opt.value))}
+              onClick={async () => {
+                setLoading(opt.value)
+                try { await onPostpone(opt.value) } finally { setLoading(null) }
+              }}
               disabled={loading !== null}
               style={{
-                flex: 1,
-                padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                flex: 1, padding: `${theme.spacing.sm} ${theme.spacing.md}`,
                 backgroundColor: theme.colors.surface,
                 border: `1px solid ${theme.colors.border}`,
-                borderRadius: theme.borderRadius.md,
-                cursor: 'pointer',
-                fontSize: theme.typography.sizes.sm,
-                fontWeight: theme.typography.weights.medium,
-                color: theme.colors.text,
-                opacity: loading ? 0.6 : 1,
+                borderRadius: theme.borderRadius.md, cursor: 'pointer',
+                fontSize: theme.typography.sizes.sm, fontWeight: theme.typography.weights.medium,
+                color: theme.colors.text, opacity: loading ? 0.6 : 1,
               }}
             >
-              {loading === `postpone-${opt.value}` ? '...' : opt.label}
+              {loading === opt.value ? '...' : opt.label}
             </button>
           ))}
         </div>
       )}
-
-      {/* CTAs — rendered in StickyBar on mobile, inline on desktop */}
-      <div style={{
-        display: 'flex',
-        gap: theme.spacing.sm,
-        alignItems: 'center',
-        paddingTop: theme.spacing.sm,
-        borderTop: `1px solid ${theme.colors.border}`,
-      }}>
-        <button
-          onClick={run('complete', onComplete)}
-          disabled={loading !== null}
-          style={{
-            padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
-            backgroundColor: theme.colors.primary,
-            color: 'white',
-            border: 'none',
-            borderRadius: theme.borderRadius.md,
-            cursor: 'pointer',
-            fontWeight: theme.typography.weights.medium,
-            fontSize: theme.typography.sizes.base,
-            opacity: loading === 'complete' ? 0.6 : 1,
-          }}
-        >
-          {loading === 'complete' ? '...' : 'Hotovo'}
-        </button>
-
-        <button
-          onClick={() => setPostponeOpen(!postponeOpen)}
-          style={{
-            padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
-            backgroundColor: theme.colors.secondary,
-            color: theme.colors.text,
-            border: 'none',
-            borderRadius: theme.borderRadius.md,
-            cursor: 'pointer',
-            fontWeight: theme.typography.weights.medium,
-            fontSize: theme.typography.sizes.base,
-          }}
-        >
-          Odložit
-        </button>
-
-        <button
-          onClick={run('dismiss', async () => {
-            if (confirm('Opravdu smazat tento úkol?')) {
-              await onDismiss()
-            }
-          })}
-          disabled={loading !== null}
-          style={{
-            padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-            backgroundColor: 'transparent',
-            color: theme.colors.textMuted,
-            border: 'none',
-            borderRadius: theme.borderRadius.md,
-            cursor: 'pointer',
-            fontSize: theme.typography.sizes.sm,
-            marginLeft: 'auto',
-          }}
-        >
-          Smazat
-        </button>
-      </div>
     </div>
   )
 }
