@@ -7,10 +7,15 @@ import type { BriefAction } from './types'
 interface TodoCardProps {
   action: BriefAction
   onPostpone: (postponeTo: string) => Promise<void>
+  showPostponePicker?: boolean
 }
 
-export function TodoCard({ action, onPostpone }: TodoCardProps) {
+export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardProps) {
   const [postponeOpen, setPostponeOpen] = useState(false)
+  const externalToggle = showPostponePicker ?? false
+
+  // Sync external toggle
+  const effectivePostponeOpen = postponeOpen || externalToggle
   const [loading, setLoading] = useState<string | null>(null)
 
   const summary = action.summaryJson
@@ -44,7 +49,7 @@ export function TodoCard({ action, onPostpone }: TodoCardProps) {
         {intent}
       </div>
 
-      {/* Due date */}
+      {/* Due date + Item 26: urgency context */}
       {dueDate && (
         <div style={{ fontSize: theme.typography.sizes.sm }}>
           <span style={{ color: theme.colors.textMuted }}>Termín: </span>
@@ -56,9 +61,21 @@ export function TodoCard({ action, onPostpone }: TodoCardProps) {
           </span>
         </div>
       )}
+      {action.urgency >= 5 && (
+        <div style={{
+          fontSize: theme.typography.sizes.xs,
+          color: action.urgency >= 9 ? theme.colors.error : action.urgency >= 7 ? theme.colors.warning : theme.colors.textMuted,
+          fontWeight: theme.typography.weights.medium,
+          fontStyle: 'italic',
+        }}>
+          {action.urgency >= 9 ? 'Musíš to udělat TEĎKA'
+            : action.urgency >= 7 ? 'Měl bys to udělat dnes'
+            : 'Měl bys to udělat brzy'}
+        </div>
+      )}
 
       {/* Inline postpone picker (toggled from StickyBar "Odložit") */}
-      {postponeOpen && (
+      {effectivePostponeOpen && (
         <div style={{
           display: 'flex', gap: theme.spacing.xs,
           padding: theme.spacing.sm, backgroundColor: theme.colors.background,

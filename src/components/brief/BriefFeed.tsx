@@ -6,7 +6,7 @@ import { BriefCard } from './BriefCard'
 import { ItineraryView } from './ItineraryView'
 import { CompletedSection } from './CompletedSection'
 import { StickyBar } from './StickyBar'
-import type { BriefData, BriefAction, StickyBarCTA } from './types'
+import type { BriefData, BriefAction, BriefEvent, StickyBarCTA } from './types'
 
 interface BriefFeedProps {
   initialData: BriefData
@@ -26,7 +26,19 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
   const [data, setData] = useState(initialData)
   const [expandedId, setExpandedId] = useState<string | null>(focusActionId || null)
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set())
+  const [postponePickerOpen, setPostponePickerOpen] = useState(false)
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+
+  // Check hash for #action-{id} deep links (from email templates)
+  useEffect(() => {
+    const hash = window.location.hash
+    if (hash && hash.startsWith('#action-')) {
+      const hashActionId = hash.replace('#action-', '')
+      if (hashActionId && !expandedId) {
+        setExpandedId(hashActionId)
+      }
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Scroll to focused card on mount
   useEffect(() => {
@@ -37,6 +49,16 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       }
     }
   }, [focusActionId])
+
+  // Scroll to hash-linked card
+  useEffect(() => {
+    if (expandedId && !focusActionId) {
+      const el = cardRefs.current.get(expandedId)
+      if (el) {
+        setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100)
+      }
+    }
+  }, [expandedId, focusActionId])
 
   // Refresh function
   const refreshData = useCallback(async () => {
@@ -175,9 +197,37 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     })
   }
 
+  // Item 35: Wire command to API
   async function handleCommand(command: string) {
-    // TODO: Wire to command parser API
-    console.log('[BriefFeed] Command:', command)
+    const res = await fetch('/api/commands', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, userId, command }),
+    })
+    if (res.ok) {
+      const result = await res.json()
+      if (result.success) {
+        // Refresh to show new todos/contacts
+        await refreshData()
+      }
+      // Could show a toast/notification with result.message — for now, silent
+    }
+  }
+
+  // Item 20: Convert a specific question to TODO
+  async function handleConvertQuestionTodo(actionId: string, question: string) {
+    const action = sortedActions.find(a => a.id === actionId)
+    const res = await fetch(`/api/action/${actionId}/convert-todo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: action ? getActionToken(action) : token,
+        description: `Zjistit: ${question}`,
+      }),
+    })
+    if (res.ok) {
+      await refreshData()
+    }
   }
 
   // ── StickyBar CTA generation ─────────────────────────────────────────
@@ -202,13 +252,58 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       case 'TODO':
         return [
           { label: 'Hotovo', action: () => handleExecute(id), primary: true },
-          { label: 'Odložit', action: () => handlePostpone(id, 'tomorrow') },
+          { label: 'Odložit', action: () => { setPostponePickerOpen(prev => !prev) } },
           { label: 'Smazat', action: () => handleDismiss(id), destructive: true },
         ]
       default:
         return null
     }
   }
+
+  // Item 37: History / dismissed items toggle
+  const [showHistory, setShowHistory] = useState(false)
+  const [historyItems, setHistoryItems] = useState<BriefAction[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+
+  async function loadHistory() {
+    if (showHistory) { setShowHistory(false); return }
+    setHistoryLoading(true)
+    try {
+      const res = await fetch(`/api/brief/${userId}/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, includeDismissed: true }),
+      })
+      if (res.ok) {
+        const result = await res.json()
+        // Filter to only dismissed/completed items not already shown
+        const activeIds = new Set(data.actions.map(a => a.id))
+        const dismissed = (result.actions || []).filter((a: BriefAction) =>
+          !activeIds.has(a.id) && (a.status === 'dismissed' || a.status === 'completed')
+        )
+        setHistoryItems(dismissed)
+      }
+    } catch {
+      // Silently fail
+    } finally {
+      setHistoryLoading(false)
+      setShowHistory(true)
+    }
+  }
+
+  // Item 51: Swipe hint — show once via localStorage
+  const [showSwipeHint, setShowSwipeHint] = useState(false)
+  useEffect(() => {
+    if (sortedActions.length > 0 && typeof window !== 'undefined') {
+      const key = 'mila_swipe_hint_shown'
+      if (!localStorage.getItem(key)) {
+        setShowSwipeHint(true)
+        localStorage.setItem(key, '1')
+        const t = setTimeout(() => setShowSwipeHint(false), 4000)
+        return () => clearTimeout(t)
+      }
+    }
+  }, [sortedActions.length])
 
   const pendingCount = sortedActions.filter(a => !doneIds.has(a.id)).length
   const greeting = getGreeting()
@@ -219,8 +314,10 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       onTouchStart={onPullTouchStart}
       onTouchMove={onPullTouchMove}
       onTouchEnd={onPullTouchEnd}
+
+      className="brief-feed-container"
       style={{
-        maxWidth: '768px',
+        maxWidth: '960px',
         margin: '0 auto',
         padding: '0',
         paddingBottom: '88px',
@@ -230,6 +327,18 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
         position: 'relative',
       }}
     >
+      {/* Item 45: Desktop responsive styles */}
+      <style>{`
+        @media (max-width: 768px) {
+          .brief-feed-container { max-width: 768px !important; }
+          .brief-inline-ctas { display: none !important; }
+        }
+        @media (min-width: 1025px) {
+          .brief-desktop-layout { display: flex !important; gap: 24px !important; align-items: flex-start; }
+          .brief-cards-column { flex: 3; min-width: 0; }
+          .brief-sidebar-column { flex: 2; min-width: 0; position: sticky; top: 16px; }
+        }
+      `}</style>
       {/* Pull-to-refresh indicator */}
       {(pullY > 0 || refreshing) && (
         <div style={{
@@ -273,70 +382,160 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
             }
           </div>
         </div>
-        <div style={{
-          fontSize: '11px',
-          fontWeight: theme.typography.weights.semibold,
-          color: theme.colors.primary,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-        }}>
-          Mila
+        <div style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
+          <button
+            onClick={() => refreshData()}
+            disabled={refreshing}
+            title="Obnovit"
+            style={{
+              width: '32px', height: '32px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              borderRadius: theme.borderRadius.full,
+              border: `1px solid ${theme.colors.border}`,
+              backgroundColor: theme.colors.surface,
+              color: theme.colors.textMuted,
+              cursor: refreshing ? 'not-allowed' : 'pointer',
+              fontSize: '14px', flexShrink: 0,
+              opacity: refreshing ? 0.5 : 1,
+              transition: 'opacity 0.15s ease',
+            }}
+          >
+            ↻
+          </button>
+          <div style={{
+            fontSize: '11px',
+            fontWeight: theme.typography.weights.semibold,
+            color: theme.colors.primary,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}>
+            Mila
+          </div>
         </div>
       </header>
 
-      {/* ── Action cards ────────────────────────────────────────── */}
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: theme.spacing.sm,
-        padding: `0 ${theme.spacing.md}`,
-      }}>
-        {sortedActions.map(action => (
-          <div
-            key={action.id}
-            id={`action-${action.id}`}
-            ref={el => { if (el) cardRefs.current.set(action.id, el) }}
-          >
-            <BriefCard
-              action={action}
-              actionToken={getActionToken(action)}
-              expanded={expandedId === action.id}
-              onToggle={() => setExpandedId(expandedId === action.id ? null : action.id)}
-              onExecute={() => handleExecute(action.id)}
-              onConvertTodo={() => handleConvertTodo(action.id)}
-              onDismiss={() => handleDismiss(action.id)}
-              onPostpone={(postponeTo) => handlePostpone(action.id, postponeTo)}
-              onRegenerateDraft={(instruction) => handleRegenerateDraft(action.id, instruction)}
-              onSaveDraft={(d) => handleSaveDraft(action.id, d)}
-              done={doneIds.has(action.id)}
-            />
-          </div>
-        ))}
+      {/* Item 51: Swipe hint */}
+      {showSwipeHint && sortedActions.length > 0 && (
+        <div style={{
+          textAlign: 'center', padding: `${theme.spacing.xs} ${theme.spacing.md}`,
+          fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted,
+          animation: 'mila-hint-fade 4s ease forwards',
+        }}>
+          <style>{`@keyframes mila-hint-fade { 0% { opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; } }`}</style>
+          Swipe vpravo = potvrdit, vlevo = zrušit
+        </div>
+      )}
 
-        {sortedActions.length === 0 && (
+      {/* Item 45: Desktop two-column layout wrapper */}
+      <div className="brief-desktop-layout" style={{ padding: `0 ${theme.spacing.md}` }}>
+        {/* Cards column */}
+        <div className="brief-cards-column">
           <div style={{
-            textAlign: 'center',
-            padding: `${theme.spacing.xxl} ${theme.spacing.lg}`,
-            color: theme.colors.textMuted,
-            fontSize: theme.typography.sizes.base,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: theme.spacing.sm,
           }}>
-            Žádné akce k vyřízení.
+            {sortedActions.map(action => (
+              <div
+                key={action.id}
+                id={`action-${action.id}`}
+                ref={el => { if (el) cardRefs.current.set(action.id, el) }}
+              >
+                <BriefCard
+                  action={action}
+                  actionToken={getActionToken(action)}
+                  expanded={expandedId === action.id}
+                  onToggle={() => { setExpandedId(expandedId === action.id ? null : action.id); setPostponePickerOpen(false) }}
+                  onExecute={() => handleExecute(action.id)}
+                  onConvertTodo={() => handleConvertTodo(action.id)}
+                  onDismiss={() => handleDismiss(action.id)}
+                  onPostpone={(postponeTo) => handlePostpone(action.id, postponeTo)}
+                  onRegenerateDraft={(instruction) => handleRegenerateDraft(action.id, instruction)}
+                  onSaveDraft={(d) => handleSaveDraft(action.id, d)}
+                  onConvertQuestionTodo={(question) => handleConvertQuestionTodo(action.id, question)}
+                  done={doneIds.has(action.id)}
+                  showPostponePicker={expandedId === action.id && action.action_type === 'TODO' ? postponePickerOpen : false}
+                />
+              </div>
+            ))}
+
+            {sortedActions.length === 0 && (
+              <div style={{
+                textAlign: 'center',
+                padding: `${theme.spacing.xxl} ${theme.spacing.lg}`,
+                color: theme.colors.textMuted,
+                fontSize: theme.typography.sizes.base,
+              }}>
+                Žádné akce k vyřízení.
+              </div>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* ── Day itinerary ───────────────────────────────────────── */}
-      <div style={{ padding: `${theme.spacing.xl} ${theme.spacing.md} 0` }}>
-        <ItineraryView
-          todayEvents={data.events.today as any}
-          upcomingEvents={data.events.upcoming as any}
-          timezone={data.settings.timezone}
-        />
-      </div>
+          {/* Completed items — below cards */}
+          <div style={{ marginTop: theme.spacing.lg }}>
+            <CompletedSection items={data.completed} />
+          </div>
 
-      {/* ── Completed items ─────────────────────────────────────── */}
-      <div style={{ padding: `0 ${theme.spacing.md}` }}>
-        <CompletedSection items={data.completed} />
+          {/* Item 37: History link */}
+          <div style={{ marginTop: theme.spacing.md, textAlign: 'center' }}>
+            <button
+              onClick={loadHistory}
+              disabled={historyLoading}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted,
+                textDecoration: 'underline', opacity: historyLoading ? 0.5 : 1,
+              }}
+            >
+              {historyLoading ? '...' : showHistory ? 'Skrýt historii' : 'Historie'}
+            </button>
+          </div>
+
+          {/* History items */}
+          {showHistory && historyItems.length > 0 && (
+            <div style={{
+              display: 'flex', flexDirection: 'column', gap: theme.spacing.xs,
+              padding: `${theme.spacing.md} 0`,
+            }}>
+              {historyItems.map(action => (
+                <div key={action.id} style={{
+                  padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                  backgroundColor: theme.colors.surface, borderRadius: theme.borderRadius.md,
+                  border: `1px solid ${theme.colors.border}`, opacity: 0.6,
+                }}>
+                  <div style={{
+                    fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted,
+                    textDecoration: 'line-through',
+                  }}>
+                    {action.headline || action.cpName || action.action_type}
+                  </div>
+                  <div style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted }}>
+                    {action.status === 'dismissed' ? 'Zrušeno' : 'Hotovo'}
+                    {' · '}
+                    {new Date(action.updated_at).toLocaleDateString('cs-CZ')}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {showHistory && historyItems.length === 0 && !historyLoading && (
+            <div style={{
+              textAlign: 'center', padding: theme.spacing.md,
+              fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted,
+            }}>
+              Žádná historie.
+            </div>
+          )}
+        </div>
+
+        {/* Sidebar column — itinerary (on desktop, right side; on mobile, below cards) */}
+        <div className="brief-sidebar-column" style={{ marginTop: theme.spacing.xl }}>
+          <ItineraryView
+            todayEvents={data.events.today as BriefEvent[]}
+            upcomingEvents={data.events.upcoming as BriefEvent[]}
+            timezone={data.settings.timezone}
+          />
+        </div>
       </div>
 
       {/* ── Sticky bottom bar ───────────────────────────────────── */}

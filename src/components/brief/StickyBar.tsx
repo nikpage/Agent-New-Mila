@@ -50,7 +50,7 @@ export function StickyBar({ ctas, onCommand }: StickyBarProps) {
       paddingBottom: 'env(safe-area-inset-bottom, 0px)',
     }}>
       <div style={{
-        maxWidth: '768px',
+        maxWidth: '960px',
         margin: '0 auto',
         padding: `${theme.spacing.sm} ${theme.spacing.md}`,
       }}>

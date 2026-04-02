@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { theme } from '@/config/theme'
 import type { BriefEvent } from './types'
 
@@ -55,6 +55,12 @@ interface ConsequenceReview {
   loading: boolean
 }
 
+/** Item 32: Inline time editing state */
+interface TimeEditState {
+  eventId: string
+  value: string // HH:MM format
+}
+
 export function ItineraryView({ todayEvents, upcomingEvents, timezone }: ItineraryViewProps) {
   // Combine and deduplicate
   const allEventIds = new Set<string>()
@@ -69,6 +75,7 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone }: Itinera
   const [localEvents, setLocalEvents] = useState(allEvents)
   const [drag, setDrag] = useState<DragState | null>(null)
   const [consequence, setConsequence] = useState<ConsequenceReview | null>(null)
+  const [timeEdit, setTimeEdit] = useState<TimeEditState | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   // Each pixel of drag = 1 minute (adjustable)
@@ -115,20 +122,19 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone }: Itinera
       loading: true,
     })
 
+    const draggedEventId = drag.eventId
     setDrag(null)
 
     // TODO: Call consequence review API when backend is built
-    // For now, show a placeholder consequence
-    setTimeout(() => {
-      const evt = allEvents.find(e => e.id === drag.eventId)
-      const timeStr = formatTime(newTimeIso, timezone)
-      setConsequence({
-        eventId: drag.eventId,
-        newTime: newTimeIso,
-        message: `Přesunout "${evt?.title || 'událost'}" na ${timeStr}?`,
-        loading: false,
-      })
-    }, 500)
+    // For now, show the consequence prompt directly
+    const evt = allEvents.find(e => e.id === draggedEventId)
+    const timeStr = formatTime(newTimeIso, timezone)
+    setConsequence({
+      eventId: draggedEventId,
+      newTime: newTimeIso,
+      message: `Přesunout "${evt?.title || 'událost'}" na ${timeStr}?`,
+      loading: false,
+    })
   }, [drag, allEvents, timezone])
 
   const confirmReschedule = useCallback(() => {
@@ -141,6 +147,55 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone }: Itinera
     setLocalEvents(allEvents)
     setConsequence(null)
   }, [allEvents])
+
+  // Item 32: Handle time edit confirmation
+  const handleTimeEditConfirm = useCallback((eventId: string, newTimeValue: string) => {
+    const event = localEvents.find(e => e.id === eventId)
+    if (!event) { setTimeEdit(null); return }
+
+    const [hours, minutes] = newTimeValue.split(':').map(Number)
+    const originalDate = new Date(event.start_time)
+    const newDate = new Date(originalDate)
+    newDate.setHours(hours, minutes, 0, 0)
+    const newTimeIso = newDate.toISOString()
+    const duration = new Date(event.end_time).getTime() - new Date(event.start_time).getTime()
+
+    setLocalEvents(prev => prev.map(e => {
+      if (e.id !== eventId) return e
+      return { ...e, start_time: newTimeIso, end_time: new Date(newDate.getTime() + duration).toISOString() }
+    }))
+
+    const timeStr = formatTime(newTimeIso, timezone)
+    setConsequence({
+      eventId,
+      newTime: newTimeIso,
+      message: `Přesunout "${event.title || 'událost'}" na ${timeStr}?`,
+      loading: false,
+    })
+    setTimeEdit(null)
+  }, [localEvents, timezone])
+
+  const onMouseDown = useCallback((eventId: string, clientY: number, originalTime: string) => {
+    onDragStart(eventId, clientY, originalTime)
+  }, [onDragStart])
+
+  // Global mouse listeners for desktop drag
+  useEffect(() => {
+    if (!drag) return
+    const handleMove = (e: MouseEvent) => {
+      e.preventDefault()
+      onDragMove(e.clientY)
+    }
+    const handleUp = () => {
+      onDragEnd()
+    }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [drag, onDragMove, onDragEnd])
 
   if (localEvents.length === 0) return null
 
@@ -199,6 +254,10 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone }: Itinera
                   onTouchEnd={() => {
                     if (drag?.eventId === event.id) onDragEnd()
                   }}
+                  onMouseDown={(e: React.MouseEvent) => {
+                    e.preventDefault()
+                    onMouseDown(event.id, e.clientY, event.start_time)
+                  }}
                   style={{
                     display: 'flex',
                     alignItems: 'baseline',
@@ -243,16 +302,46 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone }: Itinera
                     ⋮⋮
                   </span>
 
-                  {/* Time */}
-                  <span style={{
-                    fontSize: theme.typography.sizes.sm,
-                    fontWeight: theme.typography.weights.medium,
-                    color: theme.colors.text,
-                    minWidth: '50px',
-                    fontVariantNumeric: 'tabular-nums',
-                  }}>
-                    {formatTime(event.start_time, timezone)}
-                  </span>
+                  {/* Time — Item 32: tap to edit */}
+                  {timeEdit?.eventId === event.id ? (
+                    <input
+                      type="time"
+                      value={timeEdit.value}
+                      onChange={e => setTimeEdit({ ...timeEdit, value: e.target.value })}
+                      onBlur={() => handleTimeEditConfirm(event.id, timeEdit.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleTimeEditConfirm(event.id, timeEdit.value) }}
+                      autoFocus
+                      style={{
+                        width: '70px', minWidth: '50px',
+                        fontSize: theme.typography.sizes.sm,
+                        fontWeight: theme.typography.weights.medium,
+                        color: theme.colors.primary,
+                        border: `1px solid ${theme.colors.primary}`,
+                        borderRadius: theme.borderRadius.sm,
+                        padding: '2px 4px',
+                        fontVariantNumeric: 'tabular-nums',
+                        outline: 'none',
+                      }}
+                    />
+                  ) : (
+                    <span
+                      onClick={e => {
+                        e.stopPropagation()
+                        setTimeEdit({ eventId: event.id, value: formatTime(event.start_time, timezone) })
+                      }}
+                      style={{
+                        fontSize: theme.typography.sizes.sm,
+                        fontWeight: theme.typography.weights.medium,
+                        color: theme.colors.text,
+                        minWidth: '50px',
+                        fontVariantNumeric: 'tabular-nums',
+                        cursor: 'text',
+                        borderBottom: `1px dashed ${theme.colors.border}`,
+                      }}
+                    >
+                      {formatTime(event.start_time, timezone)}
+                    </span>
+                  )}
 
                   {/* Title */}
                   <span style={{

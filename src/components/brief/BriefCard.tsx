@@ -20,13 +20,35 @@ interface BriefCardProps {
   onPostpone: (postponeTo: string) => Promise<void>
   onRegenerateDraft: (instruction: string) => Promise<{ subject: string; body: string }>
   onSaveDraft: (data: { meetingType?: string; dynamicFields?: Record<string, string>; notes?: string }) => Promise<void>
+  onConvertQuestionTodo?: (question: string) => Promise<void>
   done?: boolean
+  showPostponePicker?: boolean
 }
 
-function getUrgencySignal(urgency: number): string {
-  if (urgency >= 10) return '🔥🔥🔥 '
-  if (urgency >= 9) return '🔥 '
-  return ''
+/** Urgency badge — positioned dot instead of inline emoji (Item 49) */
+function UrgencyBadge({ urgency }: { urgency: number }) {
+  if (urgency >= 10) {
+    return (
+      <>
+        <style>{`@keyframes mila-urgency-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.6; transform: scale(1.3); } }`}</style>
+        <span style={{
+          display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%',
+          backgroundColor: theme.colors.error, marginRight: '6px', flexShrink: 0,
+          boxShadow: `0 0 6px ${theme.colors.error}`,
+          animation: 'mila-urgency-pulse 1.5s ease-in-out infinite',
+        }} />
+      </>
+    )
+  }
+  if (urgency >= 9) {
+    return (
+      <span style={{
+        display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%',
+        backgroundColor: theme.colors.error, marginRight: '6px', flexShrink: 0,
+      }} />
+    )
+  }
+  return null
 }
 
 function getUrgencyAccent(urgency: number): string | undefined {
@@ -35,30 +57,51 @@ function getUrgencyAccent(urgency: number): string | undefined {
   return undefined
 }
 
+/** Card background tint for extreme urgency (Item 49) */
+function getUrgencyBgTint(urgency: number): string | undefined {
+  if (urgency >= 10) return theme.colors.errorBg
+  return undefined
+}
+
 export function BriefCard({
   action, actionToken, expanded, onToggle,
   onExecute, onConvertTodo, onDismiss, onPostpone,
-  onRegenerateDraft, onSaveDraft, done,
+  onRegenerateDraft, onSaveDraft, onConvertQuestionTodo, done, showPostponePicker,
 }: BriefCardProps) {
   // Use headline if available, otherwise CP name
   const headline = action.headline || action.cpName || 'Akce'
   // Use story if available, otherwise a SHORT fallback — NOT the full intent_cs wall of text
   const story = action.story || action.rationale_cs || action.topic || null
-  const urgencySignal = getUrgencySignal(action.urgency)
   const urgencyAccent = getUrgencyAccent(action.urgency)
+  const urgencyBgTint = getUrgencyBgTint(action.urgency)
 
   const payload = action.payload as Record<string, unknown> | null
   const conflicts = (payload?.conflicts as ConflictCardData[]) || []
   const hasConflicts = conflicts.filter(c => !(c as Record<string, unknown>).resolved).length > 0
+
+  // Scroll into view on expand
+  const cardRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (expanded && cardRef.current) {
+      const timer = setTimeout(() => {
+        cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }, 380) // after expand animation
+      return () => clearTimeout(timer)
+    }
+  }, [expanded])
 
   // Animate expanded content
   const contentRef = useRef<HTMLDivElement>(null)
   const [contentHeight, setContentHeight] = useState(0)
   const [animating, setAnimating] = useState(false)
 
+  // Item 46: use rAF to measure after DOM updates — fixes 0-height on first render
   useEffect(() => {
     if (expanded && contentRef.current) {
-      setContentHeight(contentRef.current.scrollHeight)
+      requestAnimationFrame(() => {
+        if (contentRef.current) setContentHeight(contentRef.current.scrollHeight)
+      })
       setAnimating(true)
       const t = setTimeout(() => setAnimating(false), 350)
       return () => clearTimeout(t)
@@ -153,7 +196,7 @@ export function BriefCard({
   }
 
   return (
-    <div style={{ position: 'relative', borderRadius: theme.borderRadius.lg }}>
+    <div ref={cardRef} style={{ position: 'relative', borderRadius: theme.borderRadius.lg }}>
       {/* Swipe reveal backgrounds (collapsed only) */}
       {!expanded && (swipeX > 20 || swipeX < -20) && (
         <>
@@ -183,7 +226,7 @@ export function BriefCard({
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
-          backgroundColor: theme.colors.surface,
+          backgroundColor: urgencyBgTint || theme.colors.surface,
           borderRadius: theme.borderRadius.lg,
           borderLeft: urgencyAccent ? `3px solid ${urgencyAccent}` : `3px solid transparent`,
           boxShadow: expanded
@@ -193,7 +236,12 @@ export function BriefCard({
               : theme.shadows.card,
           overflow: 'hidden',
           transition: swiping ? 'none' : 'transform 0.3s ease, box-shadow 0.25s ease',
-          transform: !expanded && swipeX !== 0 ? `translateX(${swipeX}px)` : undefined,
+          // Item 47: hover lift for collapsed cards
+          transform: !expanded && swipeX !== 0
+            ? `translateX(${swipeX}px)`
+            : !expanded && hovered
+              ? 'translateY(-2px)'
+              : undefined,
           position: 'relative',
           zIndex: 1,
           cursor: expanded ? 'default' : 'pointer',
@@ -210,25 +258,33 @@ export function BriefCard({
           }}
         >
           <div style={{
-            fontSize: expanded ? theme.typography.sizes.lg : theme.typography.sizes.base,
-            fontWeight: theme.typography.weights.semibold,
-            color: theme.colors.text,
-            lineHeight: 1.3,
-            transition: 'font-size 0.25s ease',
+            display: 'flex',
+            alignItems: 'center',
           }}>
-            {urgencySignal}{headline}
+            <UrgencyBadge urgency={action.urgency} />
+            <span style={{
+              fontSize: expanded ? theme.typography.sizes.lg : theme.typography.sizes.base,
+              fontWeight: theme.typography.weights.semibold,
+              color: theme.colors.text,
+              lineHeight: 1.3,
+              transition: 'font-size 0.25s ease',
+            }}>
+              {headline}
+            </span>
           </div>
-          {/* Story — only shown when collapsed, 2-line clamp */}
-          {!expanded && story && (
+          {/* Story — visible both collapsed and expanded as context */}
+          {story && (
             <div style={{
               fontSize: theme.typography.sizes.sm,
               color: theme.colors.textMuted,
               lineHeight: 1.5,
               marginTop: '4px',
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical' as const,
-              overflow: 'hidden',
+              ...(!expanded ? {
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical' as const,
+                overflow: 'hidden',
+              } : {}),
             }}>
               {story}
             </div>
@@ -254,13 +310,15 @@ export function BriefCard({
               </div>
             )}
 
-            {/* Type-specific content — NO inline CTAs, those are in StickyBar */}
+            {/* Type-specific content */}
             <div style={{ padding: `0 ${theme.spacing.lg} ${theme.spacing.lg}` }}>
               {action.action_type === 'REPLY' && (
                 <ReplyCard
                   action={action}
                   token={actionToken}
                   onRegenerateDraft={onRegenerateDraft}
+                  onSaveDraft={onSaveDraft}
+                  onConvertTodo={onConvertQuestionTodo}
                 />
               )}
               {action.action_type === 'SCHEDULE' && (
@@ -275,8 +333,69 @@ export function BriefCard({
                 <TodoCard
                   action={action}
                   onPostpone={onPostpone}
+                  showPostponePicker={showPostponePicker}
                 />
               )}
+
+              {/* Inline CTAs — visible on desktop, duplicates StickyBar for reachability */}
+              <div className="brief-inline-ctas" style={{
+                display: 'flex',
+                gap: theme.spacing.sm,
+                marginTop: theme.spacing.lg,
+                paddingTop: theme.spacing.md,
+                borderTop: `1px solid ${theme.colors.border}`,
+              }}>
+                <button
+                  onClick={onExecute}
+                  style={{
+                    flex: 1,
+                    padding: `10px ${theme.spacing.lg}`,
+                    backgroundColor: theme.colors.primary,
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: theme.borderRadius.md,
+                    cursor: 'pointer',
+                    fontWeight: theme.typography.weights.semibold,
+                    fontSize: theme.typography.sizes.base,
+                  }}
+                >
+                  {action.action_type === 'REPLY' ? 'Odeslat' : action.action_type === 'SCHEDULE' ? 'Potvrdit' : 'Hotovo'}
+                </button>
+                {action.action_type !== 'TODO' && (
+                  <button
+                    onClick={onConvertTodo}
+                    style={{
+                      padding: `10px ${theme.spacing.lg}`,
+                      backgroundColor: theme.colors.secondary,
+                      color: theme.colors.text,
+                      border: 'none',
+                      borderRadius: theme.borderRadius.md,
+                      cursor: 'pointer',
+                      fontWeight: theme.typography.weights.medium,
+                      fontSize: theme.typography.sizes.base,
+                    }}
+                  >
+                    {'Úkol'}
+                  </button>
+                )}
+                {action.action_type === 'TODO' && (
+                  <button
+                    onClick={onDismiss}
+                    style={{
+                      padding: `10px ${theme.spacing.lg}`,
+                      backgroundColor: 'transparent',
+                      color: theme.colors.textMuted,
+                      border: 'none',
+                      borderRadius: theme.borderRadius.md,
+                      cursor: 'pointer',
+                      fontWeight: theme.typography.weights.medium,
+                      fontSize: theme.typography.sizes.base,
+                    }}
+                  >
+                    Smazat
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -166,7 +166,7 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
         </div>
         <div style={{ display: 'flex', gap: theme.spacing.sm }}>
           {DURATION_CHIPS.map(d => (
-            <button key={d} onClick={() => { setDuration(d); setCustomDuration(false) }}
+            <button key={d} onClick={() => { setDuration(d); setCustomDuration(false); onSaveDraft({ dynamicFields: { duration: String(d) } }) }}
               style={chipStyle(duration === d && !customDuration)}>
               {d} min
             </button>
@@ -178,6 +178,7 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
         {customDuration && (
           <input type="number" min={5} max={480} step={5} value={duration}
             onChange={e => setDuration(parseInt(e.target.value, 10) || 30)}
+            onBlur={() => onSaveDraft({ dynamicFields: { duration: String(duration) } })}
             style={{
               marginTop: theme.spacing.sm, width: '80px',
               padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
@@ -206,10 +207,10 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
 
       {/* Pevný / Flexibilní */}
       <div style={{ display: 'flex', gap: theme.spacing.sm }}>
-        <button onClick={() => setIsFlexible(false)} style={{ ...chipStyle(!isFlexible), flex: 1 }}>
+        <button onClick={() => { setIsFlexible(false); onSaveDraft({ notes: 'Pevný termín (weight 10)' }) }} style={{ ...chipStyle(!isFlexible), flex: 1 }}>
           Pevný termín
         </button>
-        <button onClick={() => setIsFlexible(true)} style={{ ...chipStyle(isFlexible), flex: 1 }}>
+        <button onClick={() => { setIsFlexible(true); onSaveDraft({ notes: 'Flexibilní termín (weight 1)' }) }} style={{ ...chipStyle(isFlexible), flex: 1 }}>
           Flexibilní
         </button>
       </div>
