@@ -143,10 +143,9 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: action ? getActionToken(action) : token }),
     })
-    if (res.ok) {
-      setDoneIds(prev => new Set(prev).add(actionId))
-      setExpandedId(null)
-    }
+    if (!res.ok) throw new Error(`Nepodařilo se provést (${res.status})`)
+    setDoneIds(prev => new Set(prev).add(actionId))
+    setExpandedId(null)
   }
 
   async function handleConvertTodo(actionId: string) {
@@ -156,10 +155,9 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: action ? getActionToken(action) : token }),
     })
-    if (res.ok) {
-      setDoneIds(prev => new Set(prev).add(actionId))
-      setExpandedId(null)
-    }
+    if (!res.ok) throw new Error(`Nepodařilo se převést na úkol (${res.status})`)
+    setDoneIds(prev => new Set(prev).add(actionId))
+    setExpandedId(null)
   }
 
   async function handleDismiss(actionId: string) {
@@ -169,10 +167,9 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: action ? getActionToken(action) : token }),
     })
-    if (res.ok) {
-      setDoneIds(prev => new Set(prev).add(actionId))
-      setExpandedId(null)
-    }
+    if (!res.ok) throw new Error(`Nepodařilo se zahodit (${res.status})`)
+    setDoneIds(prev => new Set(prev).add(actionId))
+    setExpandedId(null)
   }
 
   async function handlePostpone(actionId: string, postponeTo: string) {
@@ -182,10 +179,9 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: action ? getActionToken(action) : token, postponeTo }),
     })
-    if (res.ok) {
-      setData(prev => ({ ...prev, actions: prev.actions.filter(a => a.id !== actionId) }))
-      setExpandedId(null)
-    }
+    if (!res.ok) throw new Error(`Nepodařilo se odložit (${res.status})`)
+    setData(prev => ({ ...prev, actions: prev.actions.filter(a => a.id !== actionId) }))
+    setExpandedId(null)
   }
 
   async function handleRegenerateDraft(actionId: string, instruction: string): Promise<{ subject: string; body: string }> {

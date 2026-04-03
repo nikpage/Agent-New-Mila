@@ -64,7 +64,13 @@ export function BriefCard({
   async function handleCta(label: string, fn: () => Promise<void>) {
     setCtaLoading(label)
     setCtaError(null)
-    try { await fn() } finally { setCtaLoading(null) }
+    try {
+      await fn()
+    } catch (err) {
+      setCtaError(err instanceof Error ? err.message : 'Něco se pokazilo')
+    } finally {
+      setCtaLoading(null)
+    }
   }
 
   const payload = action.payload as Record<string, unknown> | null
@@ -496,13 +502,7 @@ export function BriefCard({
                   )}
 
                   <button
-                    onClick={() => handleCta('dismiss', async () => {
-                      try {
-                        await onDismiss()
-                      } catch {
-                        setCtaError('Nepodařilo se zahodit')
-                      }
-                    })}
+                    onClick={() => handleCta('dismiss', onDismiss)}
                     disabled={ctaLoading !== null}
                     style={{
                       fontFamily: 'system-ui, -apple-system, sans-serif',
