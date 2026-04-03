@@ -58,11 +58,13 @@ export function BriefCard({
   const urgencyClass = getUrgencyClass(action.urgency)
   const intentCs = action.intent_cs || null
 
-  // Loading state for CTAs
+  // Loading + error state for CTAs
   const [ctaLoading, setCtaLoading] = useState<string | null>(null)
+  const [ctaError, setCtaError] = useState<string | null>(null)
 
   async function handleCta(label: string, fn: () => Promise<void>) {
     setCtaLoading(label)
+    setCtaError(null)
     try { await fn() } finally { setCtaLoading(null) }
   }
 
@@ -414,7 +416,7 @@ export function BriefCard({
                 />
               )}
 
-              {/* "Navrhuji" section — Mila's plan */}
+              {/* Mila's plan — what she recommends and why */}
               {intentCs && (
                 <>
                   <div style={{
@@ -425,11 +427,11 @@ export function BriefCard({
                     color: urgencyClass === 'uh' ? 'var(--uh)' : urgencyClass === 'um' ? 'var(--um)' : 'var(--acc)',
                     margin: '13px 0 7px',
                   }}>
-                    Navrhuji
+                    Plán Míly
                   </div>
                   <div style={{
                     fontSize: '13.5px',
-                    color: 'var(--mtd)',
+                    color: 'var(--txt)',
                     lineHeight: 1.62,
                     paddingLeft: '11px',
                     borderLeft: urgencyClass === 'uh'
@@ -446,6 +448,7 @@ export function BriefCard({
               {/* Action buttons */}
               <div style={{
                 display: 'flex',
+                flexDirection: 'column',
                 gap: '8px',
                 marginTop: '16px',
               }}>
@@ -455,15 +458,15 @@ export function BriefCard({
                   style={{
                     fontFamily: 'system-ui, -apple-system, sans-serif',
                     fontWeight: 600,
-                    fontSize: '13px',
+                    fontSize: '14px',
                     borderRadius: '9px',
                     border: 'none',
                     cursor: ctaLoading ? 'not-allowed' : 'pointer',
                     letterSpacing: '0.01em',
                     outline: 'none',
                     WebkitTapHighlightColor: 'transparent',
-                    flex: 1,
-                    padding: '10px 14px',
+                    width: '100%',
+                    padding: '12px 14px',
                     background: 'var(--pbg)',
                     color: 'var(--ptxt)',
                     opacity: ctaLoading === 'primary' ? 0.6 : 1,
@@ -473,75 +476,69 @@ export function BriefCard({
                   {ctaLoading === 'primary' ? '...' : PRIMARY_LABELS[action.action_type] || 'Hotovo'}
                 </button>
 
-                {action.action_type !== 'TODO' ? (
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                  {action.action_type === 'TODO' && (
+                    <button
+                      onClick={() => handleCta('postpone', async () => { /* Toggle postpone picker via parent */ })}
+                      style={{
+                        fontFamily: 'system-ui, -apple-system, sans-serif',
+                        fontWeight: 500,
+                        fontSize: '13px',
+                        borderRadius: '9px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        letterSpacing: '0.01em',
+                        outline: 'none',
+                        WebkitTapHighlightColor: 'transparent',
+                        padding: '8px 12px',
+                        background: 'transparent',
+                        color: 'var(--sub)',
+                        transition: 'transform .08s ease',
+                      }}
+                    >
+                      Odložit
+                    </button>
+                  )}
+
                   <button
-                    onClick={() => handleCta('secondary', onConvertTodo)}
+                    onClick={() => handleCta('dismiss', async () => {
+                      try {
+                        await onDismiss()
+                      } catch {
+                        setCtaError('Nepodařilo se zahodit')
+                      }
+                    })}
                     disabled={ctaLoading !== null}
                     style={{
                       fontFamily: 'system-ui, -apple-system, sans-serif',
-                      fontWeight: 600,
+                      fontWeight: 500,
                       fontSize: '13px',
                       borderRadius: '9px',
-                      border: '1px solid var(--obrd)',
+                      border: 'none',
                       cursor: ctaLoading ? 'not-allowed' : 'pointer',
                       letterSpacing: '0.01em',
                       outline: 'none',
                       WebkitTapHighlightColor: 'transparent',
-                      padding: '10px 14px',
-                      background: 'transparent',
-                      color: 'var(--otxt)',
-                      opacity: ctaLoading === 'secondary' ? 0.6 : 1,
-                      transition: 'transform .08s ease',
-                    }}
-                  >
-                    {ctaLoading === 'secondary' ? '...' : 'Upravit'}
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => handleCta('postpone', async () => { /* Toggle postpone picker via parent */ })}
-                    style={{
-                      fontFamily: 'system-ui, -apple-system, sans-serif',
-                      fontWeight: 600,
-                      fontSize: '13px',
-                      borderRadius: '9px',
-                      border: 'none',
-                      cursor: 'pointer',
-                      letterSpacing: '0.01em',
-                      outline: 'none',
-                      WebkitTapHighlightColor: 'transparent',
-                      padding: '10px 12px',
+                      padding: '8px 12px',
                       background: 'transparent',
                       color: 'var(--sub)',
-                      marginLeft: 'auto',
+                      opacity: ctaLoading === 'dismiss' ? 0.6 : 1,
                       transition: 'transform .08s ease',
                     }}
                   >
-                    Odložit
+                    {ctaLoading === 'dismiss' ? '...' : 'Zahodit'}
                   </button>
-                )}
+                </div>
 
-                <button
-                  onClick={() => handleCta('dismiss', onDismiss)}
-                  disabled={ctaLoading !== null}
-                  style={{
-                    fontFamily: 'system-ui, -apple-system, sans-serif',
-                    fontWeight: 600,
-                    fontSize: '13px',
-                    borderRadius: '9px',
-                    border: 'none',
-                    cursor: ctaLoading ? 'not-allowed' : 'pointer',
-                    letterSpacing: '0.01em',
-                    outline: 'none',
-                    WebkitTapHighlightColor: 'transparent',
-                    padding: '10px 12px',
-                    background: 'transparent',
-                    color: 'var(--sub)',
-                    opacity: ctaLoading === 'dismiss' ? 0.6 : 1,
-                    transition: 'transform .08s ease',
-                  }}
-                >
-                  {ctaLoading === 'dismiss' ? '...' : 'Zahodit'}
-                </button>
+                {ctaError && (
+                  <div style={{
+                    fontSize: '12px',
+                    color: 'var(--uh)',
+                    textAlign: 'center',
+                  }}>
+                    {ctaError}
+                  </div>
+                )}
               </div>
             </div>
           </div>

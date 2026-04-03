@@ -35,14 +35,13 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
   )
   const [location, setLocation] = useState((payload?.location as string) || '')
   const locationPartial = !!payload?.location_partial
-  const [duration, setDuration] = useState(() => {
-    if (holdStart && holdEnd) {
-      return Math.round((new Date(holdEnd).getTime() - new Date(holdStart).getTime()) / 60000)
-    }
-    return 30
-  })
+  const initialDuration = holdStart && holdEnd
+    ? Math.round((new Date(holdEnd).getTime() - new Date(holdStart).getTime()) / 60000)
+    : 30
+  const [duration, setDuration] = useState(initialDuration)
   const [customDuration, setCustomDuration] = useState(false)
   const [isFlexible, setIsFlexible] = useState((action.weight ?? 0) <= 3)
+  const [adjustedEnd, setAdjustedEnd] = useState(holdEnd || '')
   const [instruction, setInstruction] = useState('')
   const [regenerating, setRegenerating] = useState(false)
   const [draftBody, setDraftBody] = useState(action.draft_body_text || '')
@@ -50,16 +49,28 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
 
   const summary = action.summaryJson
 
-  // Format slot
-  const slotText = holdStart && holdEnd ? (() => {
+  // Format slot — uses adjustedEnd so duration changes are reflected
+  const slotText = holdStart && adjustedEnd ? (() => {
     const tz = 'Europe/Prague'
     const s = new Date(holdStart)
-    const e = new Date(holdEnd)
+    const e = new Date(adjustedEnd)
     const dateStr = s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
     const startStr = s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
     const endStr = e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
     return `${dateStr}, ${startStr} – ${endStr}`
   })() : null
+
+  /** Update end time when duration changes */
+  function changeDuration(newDuration: number) {
+    setDuration(newDuration)
+    if (holdStart) {
+      const newEnd = new Date(new Date(holdStart).getTime() + newDuration * 60000).toISOString()
+      setAdjustedEnd(newEnd)
+      onSaveDraft({ dynamicFields: { duration: String(newDuration), end: newEnd } })
+    } else {
+      onSaveDraft({ dynamicFields: { duration: String(newDuration) } })
+    }
+  }
 
   // Auto-load draft
   useEffect(() => {
@@ -118,11 +129,20 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
     <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
       {/* Deal context */}
       {summary?.currentState && (
-        <div style={{
-          fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted, lineHeight: 1.6,
-          borderLeft: `2px solid ${theme.colors.border}`, paddingLeft: theme.spacing.md,
-        }}>
-          {summary.currentState}
+        <div>
+          <div style={{
+            fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.semibold,
+            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em',
+            marginBottom: theme.spacing.xs,
+          }}>
+            Kontext
+          </div>
+          <div style={{
+            fontSize: theme.typography.sizes.sm, color: theme.colors.text, lineHeight: 1.6,
+            borderLeft: `2px solid ${theme.colors.border}`, paddingLeft: theme.spacing.md,
+          }}>
+            {summary.currentState}
+          </div>
         </div>
       )}
 
@@ -167,7 +187,7 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
         </div>
         <div style={{ display: 'flex', gap: theme.spacing.sm }}>
           {DURATION_CHIPS.map(d => (
-            <button key={d} onClick={() => { setDuration(d); setCustomDuration(false); onSaveDraft({ dynamicFields: { duration: String(d) } }) }}
+            <button key={d} onClick={() => { changeDuration(d); setCustomDuration(false) }}
               style={chipStyle(duration === d && !customDuration)}>
               {d} min
             </button>
@@ -178,13 +198,16 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
         </div>
         {customDuration && (
           <input type="number" min={5} max={480} step={5} value={duration}
-            onChange={e => setDuration(parseInt(e.target.value, 10) || 30)}
-            onBlur={() => onSaveDraft({ dynamicFields: { duration: String(duration) } })}
+            onChange={e => {
+              const val = parseInt(e.target.value, 10) || 30
+              changeDuration(val)
+            }}
             style={{
               marginTop: theme.spacing.sm, width: '80px',
               padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
               border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
               fontSize: theme.typography.sizes.sm, color: theme.colors.text,
+              backgroundColor: theme.colors.surface,
             }}
           />
         )}
