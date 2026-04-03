@@ -266,7 +266,6 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       onTouchEnd={onPullTouchEnd}
       className="mila-page"
       style={{
-        margin: '0 auto',
         paddingBottom: '80px',
         minHeight: '100dvh',
         transform: pullY > 0 ? `translateY(${pullY}px)` : undefined,

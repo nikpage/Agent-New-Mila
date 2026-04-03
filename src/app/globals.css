@@ -136,34 +136,20 @@ input:focus:not(:focus-visible) {
 
 /* Responsive page container */
 .mila-page {
-  max-width: 460px;
+  max-width: 960px;
+  margin: 0 auto;
   padding: 22px 16px 0;
 }
 
-/* Desktop layout */
+.mila-desktop-grid {
+  display: block;
+}
+
 @media (min-width: 860px) {
-  .mila-page {
-    max-width: 960px;
-    padding: 32px 32px 0;
-  }
-  .mila-page .mila-htitle {
-    font-size: 22px;
-  }
   .mila-desktop-grid {
     display: grid;
-    grid-template-columns: 1fr 340px;
+    grid-template-columns: 1fr 320px;
     gap: 32px;
     align-items: start;
-  }
-  .mila-sbar-inner {
-    max-width: 960px;
-  }
-}
-@media (max-width: 859px) {
-  .mila-desktop-grid {
-    display: block;
-  }
-  .mila-sbar-inner {
-    max-width: 460px;
   }
 }
