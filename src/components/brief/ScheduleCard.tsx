@@ -11,6 +11,7 @@ interface ScheduleCardProps {
   token: string
   onRegenerateDraft: (instruction: string) => Promise<{ subject: string; body: string }>
   onSaveDraft: (data: { meetingType?: string; dynamicFields?: Record<string, string>; notes?: string }) => Promise<void>
+  registerFlush?: (fn: () => Promise<void>) => void
 }
 
 const MEETING_TYPES: { value: MeetingType; label: string }[] = [
@@ -21,7 +22,7 @@ const MEETING_TYPES: { value: MeetingType; label: string }[] = [
 
 const DURATION_CHIPS = [10, 30, 60] as const
 
-export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: ScheduleCardProps) {
+export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft, registerFlush }: ScheduleCardProps) {
   const theme = useTheme()
   const [loading, setLoading] = useState(false)
 
@@ -59,6 +60,27 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
       }).catch(() => {})
     }, 1000)
   }, [action.id, token])
+
+  // Ref for current draft body (avoids stale closures in flush callback)
+  const currentDraftRef = useRef(draftBody)
+  currentDraftRef.current = draftBody
+
+  // Register flush function so parent can force-save before execute
+  useEffect(() => {
+    if (!registerFlush) return
+    registerFlush(async () => {
+      if (draftSaveTimer.current) {
+        clearTimeout(draftSaveTimer.current)
+        draftSaveTimer.current = null
+      }
+      if (!currentDraftRef.current) return
+      await fetch(`/api/action/${action.id}/draft`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, body: currentDraftRef.current }),
+      }).catch(() => {})
+    })
+  }, [registerFlush, action.id, token])
 
   const summary = action.summaryJson
 

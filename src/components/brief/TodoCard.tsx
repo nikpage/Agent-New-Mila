@@ -57,10 +57,24 @@ export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardPro
 
       {/* Task description */}
       <div style={{
-        fontSize: theme.typography.sizes.base, color: theme.colors.text,
-        lineHeight: 1.6, whiteSpace: 'pre-wrap',
+        display: 'flex',
+        gap: theme.spacing.sm,
+        padding: theme.spacing.md,
+        backgroundColor: theme.colors.background,
+        borderRadius: theme.borderRadius.md,
+        borderLeft: `3px solid ${theme.colors.primary}`,
       }}>
-        {intent}
+        <div style={{
+          width: '18px', height: '18px', borderRadius: '4px',
+          border: `2px solid ${theme.colors.border}`,
+          flexShrink: 0, marginTop: '2px',
+        }} />
+        <div style={{
+          fontSize: theme.typography.sizes.base, color: theme.colors.text,
+          lineHeight: 1.6,
+        }}>
+          {intent}
+        </div>
       </div>
 
       {/* Due date + Item 26: urgency context */}

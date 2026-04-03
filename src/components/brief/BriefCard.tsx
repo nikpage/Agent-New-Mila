@@ -62,10 +62,18 @@ export function BriefCard({
   const [ctaLoading, setCtaLoading] = useState<string | null>(null)
   const [ctaError, setCtaError] = useState<string | null>(null)
 
+  // Flush ref: child cards (ReplyCard/ScheduleCard) register a function
+  // that force-saves any pending draft edits before execute sends stale data
+  const flushRef = useRef<(() => Promise<void>) | null>(null)
+
   async function handleCta(label: string, fn: () => Promise<void>) {
     setCtaLoading(label)
     setCtaError(null)
     try {
+      // Flush pending draft saves before executing (prevents sending stale text)
+      if (label === 'primary' && flushRef.current) {
+        await flushRef.current()
+      }
       await fn()
     } catch (e) {
       setCtaError(e instanceof Error ? e.message : 'Nepodařilo se')
@@ -119,10 +127,10 @@ export function BriefCard({
     if (expanded || !swiping) { setSwipeX(0); setSwiping(false); return }
     if (swipeX > SWIPE_THRESHOLD) {
       setSwipedAway(true); setSwipeX(window.innerWidth)
-      setTimeout(() => onExecute(), 300)
+      setTimeout(() => { onExecute().catch(() => { setSwipedAway(false); setSwipeX(0) }) }, 300)
     } else if (swipeX < -SWIPE_THRESHOLD) {
       setSwipedAway(true); setSwipeX(-window.innerWidth)
-      setTimeout(() => onDismiss(), 300)
+      setTimeout(() => { onDismiss().catch(() => { setSwipedAway(false); setSwipeX(0) }) }, 300)
     } else {
       setSwipeX(0)
     }
@@ -404,6 +412,7 @@ export function BriefCard({
                   onRegenerateDraft={onRegenerateDraft}
                   onSaveDraft={onSaveDraft}
                   onConvertTodo={onConvertQuestionTodo}
+                  registerFlush={(fn) => { flushRef.current = fn }}
                 />
               )}
               {action.action_type === 'SCHEDULE' && (
@@ -412,6 +421,7 @@ export function BriefCard({
                   token={actionToken}
                   onRegenerateDraft={onRegenerateDraft}
                   onSaveDraft={onSaveDraft}
+                  registerFlush={(fn) => { flushRef.current = fn }}
                 />
               )}
               {action.action_type === 'TODO' && (

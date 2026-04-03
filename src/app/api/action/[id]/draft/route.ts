@@ -195,6 +195,16 @@ export async function PUT(
         payloadUpdates.location_partial = locationPartial
       }
 
+      // Persist schedule-specific fields (duration/end changes from ScheduleCard)
+      if (action.action_type === 'SCHEDULE') {
+        if (dynamicFields.end) {
+          payloadUpdates.end = dynamicFields.end
+        }
+        if (dynamicFields.duration) {
+          payloadUpdates.duration = parseInt(dynamicFields.duration, 10)
+        }
+      }
+
       if (typeof isOnline === 'boolean' && action.action_type === 'SCHEDULE') {
         payloadUpdates.is_online = isOnline
       }

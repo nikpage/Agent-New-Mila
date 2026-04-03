@@ -115,23 +115,49 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone, userId, t
     setDragOverIdx(null)
   }, [])
 
-  // Touch-based drag for mobile
+  // Touch-based drag for mobile — requires long-press (400ms hold) to activate
   const touchStartY = useRef(0)
   const [touchDrag, setTouchDrag] = useState<{ idx: number; deltaY: number } | null>(null)
+  const touchHoldTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const touchActivated = useRef(false)
 
   const handleTouchStart = useCallback((idx: number, e: React.TouchEvent) => {
     touchStartY.current = e.touches[0].clientY
-    setTouchDrag({ idx, deltaY: 0 })
+    touchActivated.current = false
+    // Start long-press timer — only activate drag after 400ms hold
+    touchHoldTimer.current = setTimeout(() => {
+      touchActivated.current = true
+      setTouchDrag({ idx, deltaY: 0 })
+    }, 400)
   }, [])
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!touchDrag) return
-    const dy = e.touches[0].clientY - touchStartY.current
-    setTouchDrag(prev => prev ? { ...prev, deltaY: dy } : null)
+    const dy = Math.abs(e.touches[0].clientY - touchStartY.current)
+    // If finger moves >10px before long-press fires, it's a scroll — cancel drag
+    if (!touchActivated.current && dy > 10) {
+      if (touchHoldTimer.current) {
+        clearTimeout(touchHoldTimer.current)
+        touchHoldTimer.current = null
+      }
+      return
+    }
+    if (!touchActivated.current || !touchDrag) return
+    const deltaY = e.touches[0].clientY - touchStartY.current
+    setTouchDrag(prev => prev ? { ...prev, deltaY } : null)
   }, [touchDrag])
 
   const handleTouchEnd = useCallback(() => {
-    if (!touchDrag) return
+    // Clean up hold timer
+    if (touchHoldTimer.current) {
+      clearTimeout(touchHoldTimer.current)
+      touchHoldTimer.current = null
+    }
+    if (!touchActivated.current || !touchDrag) {
+      touchActivated.current = false
+      setTouchDrag(null)
+      return
+    }
+    touchActivated.current = false
     const { idx, deltaY } = touchDrag
     const rowHeight = 50 // approximate
     const moveBy = Math.round(deltaY / rowHeight)

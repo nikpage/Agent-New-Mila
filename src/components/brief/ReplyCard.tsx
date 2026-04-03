@@ -10,6 +10,7 @@ interface ReplyCardProps {
   onRegenerateDraft: (instruction: string) => Promise<{ subject: string; body: string }>
   onSaveDraft: (data: { dynamicFields?: Record<string, string> }) => Promise<void>
   onConvertTodo?: (question: string) => Promise<void>
+  registerFlush?: (fn: () => Promise<void>) => void
 }
 
 /** Item 19: Detect input type from label text */
@@ -42,7 +43,7 @@ function DraftSkeleton() {
   )
 }
 
-export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onConvertTodo }: ReplyCardProps) {
+export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onConvertTodo, registerFlush }: ReplyCardProps) {
   const theme = useTheme()
   const [draftSubject, setDraftSubject] = useState(action.draft_subject || '')
   const [draftBody, setDraftBody] = useState(action.draft_body_text || '')
@@ -51,6 +52,32 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
   const [instruction, setInstruction] = useState('')
   const [regenerating, setRegenerating] = useState(false)
   const [todoLoading, setTodoLoading] = useState<string | null>(null)
+  const [todoConverted, setTodoConverted] = useState<Set<string>>(new Set())
+
+  // Ref for current draft values (avoids stale closures in flush callback)
+  const currentDraftRef = useRef({ subject: draftSubject, body: draftBody })
+  currentDraftRef.current = { subject: draftSubject, body: draftBody }
+
+  // Register flush function so parent can force-save before execute
+  useEffect(() => {
+    if (!registerFlush) return
+    registerFlush(async () => {
+      if (draftSaveTimer.current) {
+        clearTimeout(draftSaveTimer.current)
+        draftSaveTimer.current = null
+      }
+      if (!currentDraftRef.current.body) return
+      await fetch(`/api/action/${action.id}/draft`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          subject: currentDraftRef.current.subject,
+          body: currentDraftRef.current.body,
+        }),
+      }).catch(() => {})
+    })
+  }, [registerFlush, action.id, token])
 
   // Debounced auto-save for draft text edits
   const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -140,6 +167,9 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
     setTodoLoading(label)
     try {
       await onConvertTodo(label)
+      // Show success feedback
+      setTodoConverted(prev => new Set(prev).add(label))
+      setTimeout(() => setTodoConverted(prev => { const next = new Set(prev); next.delete(label); return next }), 2500)
     } finally {
       setTodoLoading(null)
     }
@@ -275,15 +305,15 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
                   {onConvertTodo && (
                     <button
                       onClick={() => handleConvertTodo(field.label)}
-                      disabled={todoLoading === field.label}
+                      disabled={todoLoading === field.label || todoConverted.has(field.label)}
                       title="Vytvořit úkol pro zjištění"
                       style={{
                         padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
-                        backgroundColor: theme.colors.secondary,
-                        color: theme.colors.textMuted,
-                        border: `1px solid ${theme.colors.border}`,
+                        backgroundColor: todoConverted.has(field.label) ? theme.colors.surface : theme.colors.secondary,
+                        color: todoConverted.has(field.label) ? theme.colors.primary : theme.colors.textMuted,
+                        border: `1px solid ${todoConverted.has(field.label) ? theme.colors.primary : theme.colors.border}`,
                         borderRadius: theme.borderRadius.md,
-                        cursor: todoLoading ? 'default' : 'pointer',
+                        cursor: todoLoading === field.label || todoConverted.has(field.label) ? 'default' : 'pointer',
                         fontSize: theme.typography.sizes.xs,
                         fontWeight: theme.typography.weights.medium,
                         whiteSpace: 'nowrap',
@@ -291,7 +321,7 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
                         flexShrink: 0,
                       }}
                     >
-                      {todoLoading === field.label ? '...' : 'Zjistím'}
+                      {todoLoading === field.label ? '...' : todoConverted.has(field.label) ? '✓ Úkol' : 'Zjistím'}
                     </button>
                   )}
                 </div>
