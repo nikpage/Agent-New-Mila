@@ -160,13 +160,21 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
       )}
 
       {/* Slot */}
-      {slotText && (
+      {slotText ? (
         <div style={{
           padding: theme.spacing.md, backgroundColor: theme.colors.background,
           borderRadius: theme.borderRadius.md, fontSize: theme.typography.sizes.sm,
           color: theme.colors.text, fontWeight: theme.typography.weights.medium,
         }}>
           {slotText}
+        </div>
+      ) : (
+        <div style={{
+          padding: theme.spacing.md, backgroundColor: theme.colors.warningBg,
+          borderRadius: theme.borderRadius.md, fontSize: theme.typography.sizes.sm,
+          color: theme.colors.warning, fontWeight: theme.typography.weights.medium,
+        }}>
+          Termín zatím nebyl stanoven — zvolte čas přes Upravit nebo klikněte Potvrdit pro návrh.
         </div>
       )}
 
