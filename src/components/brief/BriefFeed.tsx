@@ -264,10 +264,9 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       onTouchStart={onPullTouchStart}
       onTouchMove={onPullTouchMove}
       onTouchEnd={onPullTouchEnd}
+      className="mila-page"
       style={{
-        maxWidth: '460px',
         margin: '0 auto',
-        padding: '22px 16px 0',
         paddingBottom: '80px',
         minHeight: '100dvh',
         transform: pullY > 0 ? `translateY(${pullY}px)` : undefined,
@@ -310,13 +309,16 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
           }}>
             {dateStr}
           </div>
-          <div style={{
-            fontFamily: 'Georgia, serif',
-            fontStyle: 'italic',
-            fontSize: '19px',
-            color: 'var(--txt)',
-            lineHeight: 1.38,
-          }}>
+          <div
+            className="mila-htitle"
+            style={{
+              fontFamily: 'Georgia, serif',
+              fontStyle: 'italic',
+              fontSize: '19px',
+              color: 'var(--txt)',
+              lineHeight: 1.38,
+            }}
+          >
             {greeting}
           </div>
         </div>
@@ -359,95 +361,103 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
         </button>
       </header>
 
-      {/* ── Action cards ────────────────────────────────────────── */}
-      {sortedActions.length > 0 && (
-        <>
-          <div style={{
-            fontSize: '11px',
-            fontWeight: 600,
-            letterSpacing: '0.09em',
-            textTransform: 'uppercase',
-            color: 'var(--sub)',
-            margin: '0 0 10px 2px',
-          }}>
-            K vyřízení
-          </div>
+      {/* ── Desktop grid: cards left, sidebar right ─────────── */}
+      <div className="mila-desktop-grid">
+        {/* ── Main column: action cards ───────────────────────── */}
+        <div>
+          {sortedActions.length > 0 && (
+            <>
+              <div style={{
+                fontSize: '11px',
+                fontWeight: 600,
+                letterSpacing: '0.09em',
+                textTransform: 'uppercase',
+                color: 'var(--sub)',
+                margin: '0 0 10px 2px',
+              }}>
+                K vyřízení
+              </div>
 
-          {sortedActions.map(action => (
-            <div
-              key={action.id}
-              id={`action-${action.id}`}
-              ref={el => { if (el) cardRefs.current.set(action.id, el) }}
-              style={{ marginBottom: '12px' }}
-            >
-              <BriefCard
-                action={action}
-                actionToken={getActionToken(action)}
-                expanded={expandedId === action.id}
-                onToggle={() => { setExpandedId(expandedId === action.id ? null : action.id); setPostponePickerOpen(false) }}
-                onExecute={() => handleExecute(action.id)}
-                onConvertTodo={() => handleConvertTodo(action.id)}
-                onDismiss={() => handleDismiss(action.id)}
-                onPostpone={(postponeTo) => handlePostpone(action.id, postponeTo)}
-                onRegenerateDraft={(instruction) => handleRegenerateDraft(action.id, instruction)}
-                onSaveDraft={(d) => handleSaveDraft(action.id, d)}
-                onConvertQuestionTodo={(question) => handleConvertQuestionTodo(action.id, question)}
-                onUndo={() => { setDoneIds(prev => { const next = new Set(prev); next.delete(action.id); return next }) }}
-                done={doneIds.has(action.id)}
-                showPostponePicker={expandedId === action.id && action.action_type === 'TODO' ? postponePickerOpen : false}
-                isFirst={false}
-              />
+              {sortedActions.map(action => (
+                <div
+                  key={action.id}
+                  id={`action-${action.id}`}
+                  ref={el => { if (el) cardRefs.current.set(action.id, el) }}
+                  style={{ marginBottom: '12px' }}
+                >
+                  <BriefCard
+                    action={action}
+                    actionToken={getActionToken(action)}
+                    expanded={expandedId === action.id}
+                    onToggle={() => { setExpandedId(expandedId === action.id ? null : action.id); setPostponePickerOpen(false) }}
+                    onExecute={() => handleExecute(action.id)}
+                    onConvertTodo={() => handleConvertTodo(action.id)}
+                    onDismiss={() => handleDismiss(action.id)}
+                    onPostpone={(postponeTo) => handlePostpone(action.id, postponeTo)}
+                    onRegenerateDraft={(instruction) => handleRegenerateDraft(action.id, instruction)}
+                    onSaveDraft={(d) => handleSaveDraft(action.id, d)}
+                    onConvertQuestionTodo={(question) => handleConvertQuestionTodo(action.id, question)}
+                    onUndo={() => { setDoneIds(prev => { const next = new Set(prev); next.delete(action.id); return next }) }}
+                    done={doneIds.has(action.id)}
+                    showPostponePicker={expandedId === action.id && action.action_type === 'TODO' ? postponePickerOpen : false}
+                    isFirst={false}
+                  />
+                </div>
+              ))}
+            </>
+          )}
+
+          {sortedActions.length === 0 && (
+            <div style={{
+              textAlign: 'center',
+              padding: '48px 24px',
+              color: 'var(--mtd)',
+              fontSize: '13.5px',
+            }}>
+              Žádné akce k vyřízení.
             </div>
-          ))}
-        </>
-      )}
+          )}
 
-      {sortedActions.length === 0 && (
-        <div style={{
-          textAlign: 'center',
-          padding: '48px 24px',
-          color: 'var(--mtd)',
-          fontSize: '13.5px',
-        }}>
-          Žádné akce k vyřízení.
+          {/* Completed items — below cards in main column */}
+          {data.completed.length > 0 && (
+            <div style={{ marginTop: '24px' }}>
+              <CompletedSection items={data.completed} />
+            </div>
+          )}
         </div>
-      )}
 
-      {/* ── Cooling contacts ────────────────────────────────────── */}
-      {(data.coolingContacts || []).length > 0 && (
-        <>
-          <div style={{
-            fontSize: '11px',
-            fontWeight: 600,
-            letterSpacing: '0.09em',
-            textTransform: 'uppercase',
-            color: 'var(--sub)',
-            margin: '24px 0 10px 2px',
-          }}>
-            Chladnoucí kontakty
-          </div>
+        {/* ── Sidebar: cooling contacts + agenda ─────────────── */}
+        <div>
+          {/* Cooling contacts */}
+          {(data.coolingContacts || []).length > 0 && (
+            <>
+              <div style={{
+                fontSize: '11px',
+                fontWeight: 600,
+                letterSpacing: '0.09em',
+                textTransform: 'uppercase',
+                color: 'var(--sub)',
+                margin: '0 0 10px 2px',
+              }}>
+                Chladnoucí kontakty
+              </div>
 
-          {(data.coolingContacts || []).map(contact => (
-            <CoolingCard key={contact.conversationId} contact={contact} />
-          ))}
-        </>
-      )}
+              {(data.coolingContacts || []).map(contact => (
+                <CoolingCard key={contact.conversationId} contact={contact} />
+              ))}
+            </>
+          )}
 
-      {/* ── Completed items ─────────────────────────────────────── */}
-      {data.completed.length > 0 && (
-        <div style={{ marginTop: '24px' }}>
-          <CompletedSection items={data.completed} />
+          {/* Today's agenda */}
+          <ItineraryView
+            todayEvents={data.events.today as BriefEvent[]}
+            upcomingEvents={data.events.upcoming as BriefEvent[]}
+            timezone={data.settings.timezone}
+            userId={userId}
+            token={token}
+          />
         </div>
-      )}
-
-      {/* ── Today's agenda ──────────────────────────────────────── */}
-      <ItineraryView
-        todayEvents={data.events.today as BriefEvent[]}
-        upcomingEvents={data.events.upcoming as BriefEvent[]}
-        timezone={data.settings.timezone}
-        userId={userId}
-        token={token}
-      />
+      </div>
 
       {/* Toast */}
       {toast && (

@@ -37,8 +37,8 @@ export function StickyBar({ onCommand }: StickyBarProps) {
     }}>
       <form
         onSubmit={handleSubmit}
+        className="mila-sbar-inner"
         style={{
-          maxWidth: '460px',
           margin: '0 auto',
           display: 'flex',
           gap: '8px',
