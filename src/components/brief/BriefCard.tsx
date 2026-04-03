@@ -56,7 +56,6 @@ export function BriefCard({
   const headline = action.headline || action.cpName || 'Akce'
   const story = action.story || action.rationale_cs || action.topic || null
   const urgencyClass = getUrgencyClass(action.urgency)
-  const intentCs = action.intent_cs || null
 
   // Loading + error state for CTAs
   const [ctaLoading, setCtaLoading] = useState<string | null>(null)
@@ -373,7 +372,7 @@ export function BriefCard({
           gridTemplateRows: expanded ? '1fr' : '0fr',
           transition: 'grid-template-rows .32s cubic-bezier(.25,.46,.45,.94)',
         }}>
-          <div style={{ minHeight: 0, overflow: 'hidden' }}>
+          <div style={{ minHeight: 0, overflow: expanded ? 'visible' : 'hidden' }}>
             <div style={{
               padding: '2px 15px 16px 18px',
               borderTop: '1px solid var(--brd)',
@@ -414,35 +413,6 @@ export function BriefCard({
                   onPostpone={onPostpone}
                   showPostponePicker={showPostponePicker}
                 />
-              )}
-
-              {/* Mila's plan — what she recommends and why */}
-              {intentCs && (
-                <>
-                  <div style={{
-                    fontSize: '10.5px',
-                    fontWeight: 600,
-                    letterSpacing: '0.09em',
-                    textTransform: 'uppercase',
-                    color: urgencyClass === 'uh' ? 'var(--uh)' : urgencyClass === 'um' ? 'var(--um)' : 'var(--acc)',
-                    margin: '13px 0 7px',
-                  }}>
-                    Plán Míly
-                  </div>
-                  <div style={{
-                    fontSize: '13.5px',
-                    color: 'var(--txt)',
-                    lineHeight: 1.62,
-                    paddingLeft: '11px',
-                    borderLeft: urgencyClass === 'uh'
-                      ? '2px solid rgba(192,32,14,.3)'
-                      : urgencyClass === 'um'
-                        ? '2px solid rgba(122,98,0,.3)'
-                        : '2px solid rgba(176,92,20,.22)',
-                  }}>
-                    {intentCs}
-                  </div>
-                </>
               )}
 
               {/* Action buttons */}

@@ -35,6 +35,7 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
   )
   const [location, setLocation] = useState((payload?.location as string) || '')
   const locationPartial = !!payload?.location_partial
+  const [meetingLink, setMeetingLink] = useState((payload?.meeting_link as string) || '')
   const initialDuration = holdStart && holdEnd
     ? Math.round((new Date(holdEnd).getTime() - new Date(holdStart).getTime()) / 60000)
     : 30
@@ -99,6 +100,10 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
 
   async function handleLocationBlur() {
     if (location.trim()) await onSaveDraft({ dynamicFields: { 'Adresa schůzky': location } })
+  }
+
+  async function handleMeetingLinkBlur() {
+    if (meetingLink.trim()) await onSaveDraft({ dynamicFields: { meeting_link: meetingLink } })
   }
 
   async function handleRegenerate() {
@@ -185,32 +190,38 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
         }}>
           Délka
         </div>
-        <div style={{ display: 'flex', gap: theme.spacing.sm }}>
+        <div style={{ display: 'flex', gap: theme.spacing.sm, alignItems: 'center' }}>
           {DURATION_CHIPS.map(d => (
             <button key={d} onClick={() => { changeDuration(d); setCustomDuration(false) }}
               style={chipStyle(duration === d && !customDuration)}>
               {d} min
             </button>
           ))}
-          <button onClick={() => setCustomDuration(true)} style={chipStyle(customDuration)}>
-            Jinak
-          </button>
+          {customDuration ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <input type="number" min={5} max={480} step={5} value={duration}
+                autoFocus
+                onChange={e => {
+                  const val = parseInt(e.target.value, 10) || 30
+                  changeDuration(val)
+                }}
+                style={{
+                  width: '64px',
+                  padding: `${theme.spacing.sm} ${theme.spacing.xs}`,
+                  border: `1.5px solid ${theme.colors.primary}`, borderRadius: theme.borderRadius.md,
+                  fontSize: theme.typography.sizes.sm, color: theme.colors.text,
+                  backgroundColor: theme.colors.surface, textAlign: 'center',
+                  outline: 'none',
+                }}
+              />
+              <span style={{ fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted }}>min</span>
+            </div>
+          ) : (
+            <button onClick={() => setCustomDuration(true)} style={chipStyle(false)}>
+              Jinak
+            </button>
+          )}
         </div>
-        {customDuration && (
-          <input type="number" min={5} max={480} step={5} value={duration}
-            onChange={e => {
-              const val = parseInt(e.target.value, 10) || 30
-              changeDuration(val)
-            }}
-            style={{
-              marginTop: theme.spacing.sm, width: '80px',
-              padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
-              border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
-              fontSize: theme.typography.sizes.sm, color: theme.colors.text,
-              backgroundColor: theme.colors.surface,
-            }}
-          />
-        )}
       </div>
 
       {/* Location */}
@@ -227,6 +238,52 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
             outline: 'none',
           }}
         />
+      )}
+
+      {/* Online meeting link */}
+      {meetingType === 'online' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.xs }}>
+          <div style={{
+            fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.semibold,
+            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            Odkaz na schůzku
+          </div>
+          <div style={{ display: 'flex', gap: theme.spacing.sm, alignItems: 'center' }}>
+            <input
+              type="url" value={meetingLink} onChange={e => setMeetingLink(e.target.value)}
+              onBlur={handleMeetingLinkBlur} placeholder="https://meet.google.com/..."
+              style={{
+                flex: 1, padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                border: `1px solid ${theme.colors.border}`,
+                borderRadius: theme.borderRadius.md, fontSize: theme.typography.sizes.base,
+                color: theme.colors.text,
+                backgroundColor: theme.colors.surface,
+                outline: 'none',
+              }}
+            />
+            {meetingLink.trim() && (
+              <a
+                href={meetingLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                  backgroundColor: theme.colors.primary,
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: theme.borderRadius.md,
+                  fontSize: theme.typography.sizes.sm,
+                  fontWeight: theme.typography.weights.semibold,
+                  textDecoration: 'none',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                Připojit se
+              </a>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Pevný / Flexibilní */}
@@ -262,8 +319,9 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
               width: '100%', padding: theme.spacing.md,
               border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
               fontSize: theme.typography.sizes.base, color: theme.colors.text,
-              backgroundColor: theme.colors.surface, outline: 'none',
+              backgroundColor: theme.colors.background, outline: 'none',
               resize: 'vertical', lineHeight: 1.6, fontFamily: theme.typography.fontFamily,
+              cursor: 'text',
             }}
           />
         </div>

@@ -156,4 +156,12 @@ input:focus:not(:focus-visible) {
     gap: 32px;
     align-items: start;
   }
+
+  /* Expanded card spans into sidebar column */
+  .mila-card-expanded {
+    /* 360px sidebar + 32px gap */
+    margin-right: -392px;
+    position: relative;
+    z-index: 2;
+  }
 }

@@ -382,6 +382,7 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
                   key={action.id}
                   id={`action-${action.id}`}
                   ref={el => { if (el) cardRefs.current.set(action.id, el) }}
+                  className={expandedId === action.id ? 'mila-card-expanded' : ''}
                   style={{ marginBottom: '12px' }}
                 >
                   <BriefCard
