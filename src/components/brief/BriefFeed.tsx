@@ -35,41 +35,31 @@ function getGreeting(): string {
 export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFeedProps) {
   const { isDark, toggleTheme, ...theme } = useTheme()
   const [data, setData] = useState(initialData)
-  const [expandedId, setExpandedId] = useState<string | null>(focusActionId || null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set())
   const [postponePickerOpen, setPostponePickerOpen] = useState(false)
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
-  // Check hash for #action-{id} deep links (from email templates)
+  // One-time: expand + scroll to focused card from email deep link, then clear URL
   useEffect(() => {
+    let targetId = focusActionId || null
     const hash = window.location.hash
-    if (hash && hash.startsWith('#action-')) {
-      const hashActionId = hash.replace('#action-', '')
-      if (hashActionId && !expandedId) {
-        setExpandedId(hashActionId)
-      }
+    if (!targetId && hash && hash.startsWith('#action-')) {
+      targetId = hash.replace('#action-', '')
+    }
+    if (targetId) {
+      setExpandedId(targetId)
+      // Clear focus/hash from URL so reload starts clean
+      const url = new URL(window.location.href)
+      url.searchParams.delete('focus')
+      url.hash = ''
+      window.history.replaceState({}, '', url.toString())
+      setTimeout(() => {
+        const el = cardRefs.current.get(targetId!)
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 100)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Scroll to focused card on mount
-  useEffect(() => {
-    if (focusActionId) {
-      const el = cardRefs.current.get(focusActionId)
-      if (el) {
-        setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100)
-      }
-    }
-  }, [focusActionId])
-
-  // Scroll to hash-linked card
-  useEffect(() => {
-    if (expandedId && !focusActionId) {
-      const el = cardRefs.current.get(expandedId)
-      if (el) {
-        setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100)
-      }
-    }
-  }, [expandedId, focusActionId])
 
   // Refresh function
   const refreshData = useCallback(async () => {
