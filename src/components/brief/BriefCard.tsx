@@ -58,8 +58,6 @@ export function BriefCard({
   const headline = action.headline || action.cpName || 'Akce'
   const story = action.story || action.rationale_cs || action.topic || null
   const urgencyClass = getUrgencyClass(action.urgency)
-  const intentCs = action.intent_cs || null
-
   // Loading + error state for CTAs
   const [ctaLoading, setCtaLoading] = useState<string | null>(null)
   const [ctaError, setCtaError] = useState<string | null>(null)
