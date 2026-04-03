@@ -19,7 +19,6 @@ export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardPro
   const effectivePostponeOpen = postponeOpen || externalToggle
   const [loading, setLoading] = useState<string | null>(null)
 
-  const summary = action.summaryJson
   const intent = action.intent_cs || action.rationale_cs || action.rationale
   const payload = action.payload as Record<string, unknown> | null
   const dueDate = payload?.due_date as string | null
@@ -32,25 +31,6 @@ export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardPro
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
-      {/* Deal context */}
-      {summary?.currentState && (
-        <div>
-          <div style={{
-            fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.semibold,
-            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em',
-            marginBottom: theme.spacing.xs,
-          }}>
-            Kontext
-          </div>
-          <div style={{
-            fontSize: theme.typography.sizes.sm, color: theme.colors.text, lineHeight: 1.6,
-            borderLeft: `2px solid ${theme.colors.border}`, paddingLeft: theme.spacing.md,
-          }}>
-            {summary.currentState}
-          </div>
-        </div>
-      )}
-
       {/* Task description */}
       <div style={{
         fontSize: theme.typography.sizes.base, color: theme.colors.text,

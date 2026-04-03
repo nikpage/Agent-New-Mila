@@ -389,6 +389,31 @@ export function BriefCard({
                 </div>
               )}
 
+              {/* Shared context block — all card types */}
+              {action.summaryJson?.currentState && (
+                <div style={{ marginBottom: '12px' }}>
+                  <div style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    letterSpacing: '0.05em',
+                    textTransform: 'uppercase',
+                    color: 'var(--mtd)',
+                    marginBottom: '4px',
+                  }}>
+                    Kontext
+                  </div>
+                  <div style={{
+                    fontSize: '13.5px',
+                    color: 'var(--txt)',
+                    lineHeight: 1.6,
+                    borderLeft: '2px solid var(--brd)',
+                    paddingLeft: '16px',
+                  }}>
+                    {action.summaryJson.currentState}
+                  </div>
+                </div>
+              )}
+
               {/* Type-specific content */}
               {action.action_type === 'REPLY' && (
                 <ReplyCard
