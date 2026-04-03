@@ -139,20 +139,24 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
   })
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
       {/* Deal context */}
       {summary?.currentState && (
-        <div>
+        <div style={{
+          padding: theme.spacing.md,
+          backgroundColor: theme.colors.background,
+          borderRadius: theme.borderRadius.md,
+          borderLeft: `3px solid ${theme.colors.border}`,
+        }}>
           <div style={{
-            fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.semibold,
-            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em',
-            marginBottom: theme.spacing.xs,
+            fontSize: '10px', fontWeight: theme.typography.weights.semibold,
+            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em',
+            marginBottom: '6px',
           }}>
             Kontext
           </div>
           <div style={{
             fontSize: theme.typography.sizes.sm, color: theme.colors.text, lineHeight: 1.6,
-            borderLeft: `2px solid ${theme.colors.border}`, paddingLeft: theme.spacing.md,
           }}>
             {summary.currentState}
           </div>
@@ -269,11 +273,14 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
           {loading ? 'Mila připravuje koncept...' : ''}
         </div>
       ) : (
-        <div>
+        <div style={{
+          paddingTop: '14px',
+          borderTop: `1px solid ${theme.colors.border}`,
+        }}>
           <div style={{
-            fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.semibold,
-            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em',
-            marginBottom: theme.spacing.xs,
+            fontSize: '10px', fontWeight: theme.typography.weights.semibold,
+            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em',
+            marginBottom: '8px',
           }}>
             Zpráva pro {action.cpName || 'protistranu'}
           </div>
@@ -283,7 +290,7 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
               width: '100%', padding: theme.spacing.md,
               border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
               fontSize: theme.typography.sizes.base, color: theme.colors.text,
-              backgroundColor: theme.colors.surface, outline: 'none',
+              backgroundColor: theme.colors.background, outline: 'none',
               resize: 'vertical', lineHeight: 1.6, fontFamily: theme.typography.fontFamily,
             }}
           />

@@ -381,12 +381,12 @@ export function BriefCard({
         }}>
           <div style={{ minHeight: 0, overflow: 'hidden' }}>
             <div style={{
-              padding: '2px 15px 16px 18px',
+              padding: '14px 15px 18px 18px',
               borderTop: '1px solid var(--brd)',
             }}>
               {/* Conflict section (SCHEDULE only) */}
               {hasConflicts && action.action_type === 'SCHEDULE' && (
-                <div style={{ marginBottom: '12px' }}>
+                <div style={{ marginBottom: '16px' }}>
                   <ConflictSection
                     conflicts={conflicts}
                     cpName={action.cpName || ''}
@@ -427,7 +427,9 @@ export function BriefCard({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '8px',
-                marginTop: '16px',
+                marginTop: '20px',
+                paddingTop: '16px',
+                borderTop: '1px solid var(--brd)',
               }}>
                 <button
                   onClick={() => handleCta('primary', onExecute)}

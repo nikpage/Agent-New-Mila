@@ -146,20 +146,24 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
       {/* Deal context — compact */}
       {summary?.currentState && (
-        <div>
+        <div style={{
+          padding: theme.spacing.md,
+          backgroundColor: theme.colors.background,
+          borderRadius: theme.borderRadius.md,
+          borderLeft: `3px solid ${theme.colors.border}`,
+        }}>
           <div style={{
-            fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.semibold,
-            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em',
-            marginBottom: theme.spacing.xs,
+            fontSize: '10px', fontWeight: theme.typography.weights.semibold,
+            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em',
+            marginBottom: '6px',
           }}>
             Kontext
           </div>
           <div style={{
             fontSize: theme.typography.sizes.sm, color: theme.colors.text, lineHeight: 1.6,
-            borderLeft: `2px solid ${theme.colors.border}`, paddingLeft: theme.spacing.md,
           }}>
             {summary.currentState}
           </div>
@@ -271,7 +275,7 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
                   {onConvertTodo && (
                     <button
                       onClick={() => handleConvertTodo(field.label)}
-                      disabled={todoLoading !== null}
+                      disabled={todoLoading === field.label}
                       title="Vytvořit úkol pro zjištění"
                       style={{
                         padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
@@ -301,10 +305,14 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
       {!draftLoaded ? (
         loading ? <DraftSkeleton /> : null
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+        <div style={{
+          display: 'flex', flexDirection: 'column', gap: theme.spacing.sm,
+          paddingTop: '14px',
+          borderTop: `1px solid ${theme.colors.border}`,
+        }}>
           <div style={{
-            fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.semibold,
-            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em',
+            fontSize: '10px', fontWeight: theme.typography.weights.semibold,
+            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em',
           }}>
             Koncept {channel === 'whatsapp' ? 'zprávy' : 'emailu'}
           </div>
@@ -329,7 +337,7 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
               width: '100%', padding: theme.spacing.md,
               border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
               fontSize: theme.typography.sizes.base, color: theme.colors.text,
-              backgroundColor: theme.colors.surface, outline: 'none',
+              backgroundColor: theme.colors.background, outline: 'none',
               resize: 'vertical', lineHeight: 1.6, fontFamily: theme.typography.fontFamily,
             }}
           />
