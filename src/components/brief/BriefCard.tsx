@@ -424,35 +424,6 @@ export function BriefCard({
                 />
               )}
 
-              {/* Mila's plan — what she recommends and why (skip for TODO — intent IS the task) */}
-              {intentCs && action.action_type !== 'TODO' && (
-                <>
-                  <div style={{
-                    fontSize: '10.5px',
-                    fontWeight: 600,
-                    letterSpacing: '0.09em',
-                    textTransform: 'uppercase',
-                    color: urgencyClass === 'uh' ? 'var(--uh)' : urgencyClass === 'um' ? 'var(--um)' : 'var(--acc)',
-                    margin: '13px 0 7px',
-                  }}>
-                    Plán Míly
-                  </div>
-                  <div style={{
-                    fontSize: '13.5px',
-                    color: 'var(--txt)',
-                    lineHeight: 1.62,
-                    paddingLeft: '11px',
-                    borderLeft: urgencyClass === 'uh'
-                      ? '2px solid rgba(192,32,14,.3)'
-                      : urgencyClass === 'um'
-                        ? '2px solid rgba(122,98,0,.3)'
-                        : '2px solid rgba(176,92,20,.22)',
-                  }}>
-                    {intentCs}
-                  </div>
-                </>
-              )}
-
               {/* Action buttons */}
               <div style={{
                 display: 'flex',
