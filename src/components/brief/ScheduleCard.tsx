@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTheme } from '@/contexts/ThemeContext'
 import type { BriefAction } from './types'
 
@@ -46,6 +46,19 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
   const [regenerating, setRegenerating] = useState(false)
   const [draftBody, setDraftBody] = useState(action.draft_body_text || '')
   const [draftLoaded, setDraftLoaded] = useState(!!action.draft_body_text)
+
+  // Debounced auto-save for draft text edits
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveDraftText = useCallback((body: string) => {
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current)
+    draftSaveTimer.current = setTimeout(() => {
+      fetch(`/api/action/${action.id}/draft`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, body }),
+      }).catch(() => {})
+    }, 1000)
+  }, [action.id, token])
 
   const summary = action.summaryJson
 
@@ -98,7 +111,7 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
   }
 
   async function handleLocationBlur() {
-    if (location.trim()) await onSaveDraft({ dynamicFields: { 'Adresa schůzky': location } })
+    if (location.trim()) await onSaveDraft({ dynamicFields: { 'adresa schůzky': location } })
   }
 
   async function handleRegenerate() {
@@ -257,7 +270,7 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
             Zpráva pro {action.cpName || 'protistranu'}
           </div>
           <textarea
-            value={draftBody} onChange={e => setDraftBody(e.target.value)} rows={5}
+            value={draftBody} onChange={e => { setDraftBody(e.target.value); saveDraftText(e.target.value) }} rows={5}
             style={{
               width: '100%', padding: theme.spacing.md,
               border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,

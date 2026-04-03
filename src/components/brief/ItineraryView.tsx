@@ -85,11 +85,30 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone, userId, t
     const newEvents = [...localEvents]
     const [moved] = newEvents.splice(draggedIdx, 1)
     newEvents.splice(targetIdx, 0, moved)
-    setLocalEvents(newEvents)
 
-    // If the moved event has a different position, we could persist the time change
-    // For now, this is visual reordering
-  }, [draggedIdx, localEvents])
+    // Recalculate time for the moved event based on its new neighbor
+    const neighbor = newEvents[targetIdx > 0 ? targetIdx - 1 : targetIdx + 1]
+    if (neighbor && moved) {
+      const moveDuration = new Date(moved.end_time).getTime() - new Date(moved.start_time).getTime()
+      // Place after the previous event (or at the previous event's start if first)
+      const newStart = targetIdx > 0
+        ? new Date(neighbor.end_time)
+        : new Date(neighbor.start_time)
+      // If placing before the first event, shift back by duration
+      if (targetIdx === 0 && newEvents.length > 1) {
+        const firstStart = new Date(newEvents[1].start_time)
+        newStart.setTime(firstStart.getTime() - moveDuration - 15 * 60000) // 15 min gap
+      }
+      const newEnd = new Date(newStart.getTime() + moveDuration)
+
+      moved.start_time = newStart.toISOString()
+      moved.end_time = newEnd.toISOString()
+
+      persistReschedule(moved.id, moved.start_time, moved.end_time)
+    }
+
+    setLocalEvents(newEvents)
+  }, [draggedIdx, localEvents, persistReschedule])
 
   const handleDragEnd = useCallback(() => {
     setDraggedIdx(null)
@@ -122,11 +141,25 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone, userId, t
         const newEvents = [...localEvents]
         const [moved] = newEvents.splice(idx, 1)
         newEvents.splice(newIdx, 0, moved)
+
+        // Recalculate time for the moved event
+        const neighbor = newEvents[newIdx > 0 ? newIdx - 1 : newIdx + 1]
+        if (neighbor && moved) {
+          const moveDuration = new Date(moved.end_time).getTime() - new Date(moved.start_time).getTime()
+          const newStart = newIdx > 0
+            ? new Date(neighbor.end_time)
+            : new Date(new Date(newEvents[1]?.start_time || neighbor.start_time).getTime() - moveDuration - 15 * 60000)
+          const newEnd = new Date(newStart.getTime() + moveDuration)
+          moved.start_time = newStart.toISOString()
+          moved.end_time = newEnd.toISOString()
+          persistReschedule(moved.id, moved.start_time, moved.end_time)
+        }
+
         setLocalEvents(newEvents)
       }
     }
     setTouchDrag(null)
-  }, [touchDrag, localEvents])
+  }, [touchDrag, localEvents, persistReschedule])
 
   if (localEvents.length === 0) return null
 
@@ -194,12 +227,12 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone, userId, t
                 {formatTime(event.start_time, timezone)}
               </div>
 
-              {/* Status dot */}
+              {/* Status dot — accent for busy events, border for free, hold gets muted */}
               <div style={{
                 width: '7px',
                 height: '7px',
                 borderRadius: '50%',
-                background: isMilaAdded ? 'var(--uh)' : isBusy ? 'var(--acc)' : 'var(--brd)',
+                background: isHold ? 'var(--sub)' : isBusy ? 'var(--acc)' : 'var(--brd)',
                 flexShrink: 0,
                 marginTop: '5px',
                 transition: 'background .3s',

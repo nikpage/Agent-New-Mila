@@ -52,6 +52,19 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
   const [regenerating, setRegenerating] = useState(false)
   const [todoLoading, setTodoLoading] = useState<string | null>(null)
 
+  // Debounced auto-save for draft text edits
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveDraftText = useCallback((subject: string, body: string) => {
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current)
+    draftSaveTimer.current = setTimeout(() => {
+      fetch(`/api/action/${action.id}/draft`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, subject, body }),
+      }).catch(() => {})
+    }, 1000)
+  }, [action.id, token])
+
   const summary = action.summaryJson
   const payload = action.payload as Record<string, unknown> | null
   const channel = (payload?.channel as string) || 'email'
@@ -69,14 +82,23 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
     return initial
   })
 
-  // Item 22: Debounce draft save when answers change
+  // Item 22: Debounce draft save when answers change, then regenerate draft
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const saveAnswers = useCallback((updated: Record<string, string>) => {
     if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => {
-      onSaveDraft({ dynamicFields: updated })
+    saveTimer.current = setTimeout(async () => {
+      await onSaveDraft({ dynamicFields: updated })
+      // All answers filled? Regenerate draft with the new info
+      const allFilled = missingInfo.every(f => updated[f.label]?.trim())
+      if (allFilled) {
+        try {
+          const result = await onRegenerateDraft('Doplň odpovědi do konceptu')
+          setDraftSubject(result.subject)
+          setDraftBody(result.body)
+        } catch { /* ignore regen failure */ }
+      }
     }, 800)
-  }, [onSaveDraft])
+  }, [onSaveDraft, onRegenerateDraft, missingInfo])
 
   // Auto-load draft on mount
   useEffect(() => {
@@ -290,7 +312,7 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
             <input
               type="text"
               value={draftSubject}
-              onChange={e => setDraftSubject(e.target.value)}
+              onChange={e => { setDraftSubject(e.target.value); saveDraftText(e.target.value, draftBody) }}
               style={{
                 width: '100%', padding: `${theme.spacing.sm} ${theme.spacing.md}`,
                 border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
@@ -301,7 +323,7 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
           )}
           <textarea
             value={draftBody}
-            onChange={e => setDraftBody(e.target.value)}
+            onChange={e => { setDraftBody(e.target.value); saveDraftText(draftSubject, e.target.value) }}
             rows={6}
             style={{
               width: '100%', padding: theme.spacing.md,

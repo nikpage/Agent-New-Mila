@@ -88,8 +88,8 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     }
   }, [userId, token])
 
-  // Hydrate on mount
-  useEffect(() => { refreshData() }, [refreshData])
+  // Skip auto-refresh on mount — SSR data is already fresh.
+  // Pull-to-refresh and post-action refreshes handle updates.
 
   // Pull-to-refresh
   const [pullY, setPullY] = useState(0)
@@ -143,10 +143,12 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: action ? getActionToken(action) : token }),
     })
-    if (res.ok) {
-      setDoneIds(prev => new Set(prev).add(actionId))
-      setExpandedId(null)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `Chyba (${res.status})` }))
+      throw new Error(err.error || `Nepodařilo se (${res.status})`)
     }
+    setDoneIds(prev => new Set(prev).add(actionId))
+    setExpandedId(prev => prev === actionId ? null : prev)
   }
 
   async function handleConvertTodo(actionId: string) {
@@ -158,7 +160,7 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     })
     if (res.ok) {
       setDoneIds(prev => new Set(prev).add(actionId))
-      setExpandedId(null)
+      setExpandedId(prev => prev === actionId ? null : prev)
     }
   }
 
@@ -169,10 +171,12 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: action ? getActionToken(action) : token }),
     })
-    if (res.ok) {
-      setDoneIds(prev => new Set(prev).add(actionId))
-      setExpandedId(null)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `Chyba (${res.status})` }))
+      throw new Error(err.error || `Nepodařilo se zahodit (${res.status})`)
     }
+    setDoneIds(prev => new Set(prev).add(actionId))
+    setExpandedId(prev => prev === actionId ? null : prev)
   }
 
   async function handlePostpone(actionId: string, postponeTo: string) {
@@ -184,7 +188,7 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     })
     if (res.ok) {
       setData(prev => ({ ...prev, actions: prev.actions.filter(a => a.id !== actionId) }))
-      setExpandedId(null)
+      setExpandedId(prev => prev === actionId ? null : prev)
     }
   }
 
@@ -399,6 +403,7 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
                     onUndo={() => { setDoneIds(prev => { const next = new Set(prev); next.delete(action.id); return next }) }}
                     done={doneIds.has(action.id)}
                     showPostponePicker={expandedId === action.id && action.action_type === 'TODO' ? postponePickerOpen : false}
+                    onTogglePostponePicker={() => setPostponePickerOpen(prev => !prev)}
                     isFirst={false}
                   />
                 </div>

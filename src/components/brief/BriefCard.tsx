@@ -31,11 +31,12 @@ interface BriefCardProps {
   onDismiss: () => Promise<void>
   onPostpone: (postponeTo: string) => Promise<void>
   onRegenerateDraft: (instruction: string) => Promise<{ subject: string; body: string }>
-  onSaveDraft: (data: { meetingType?: string; dynamicFields?: Record<string, string>; notes?: string }) => Promise<void>
+  onSaveDraft: (data: { meetingType?: string; dynamicFields?: Record<string, string>; notes?: string; subject?: string; body?: string }) => Promise<void>
   onConvertQuestionTodo?: (question: string) => Promise<void>
   onUndo?: () => void
   done?: boolean
   showPostponePicker?: boolean
+  onTogglePostponePicker?: () => void
   isFirst?: boolean
 }
 
@@ -50,6 +51,7 @@ export function BriefCard({
   action, actionToken, expanded, onToggle,
   onExecute, onConvertTodo, onDismiss, onPostpone,
   onRegenerateDraft, onSaveDraft, onConvertQuestionTodo, onUndo, done, showPostponePicker,
+  onTogglePostponePicker,
 }: BriefCardProps) {
   const theme = useTheme()
 
@@ -65,7 +67,13 @@ export function BriefCard({
   async function handleCta(label: string, fn: () => Promise<void>) {
     setCtaLoading(label)
     setCtaError(null)
-    try { await fn() } finally { setCtaLoading(null) }
+    try {
+      await fn()
+    } catch (e) {
+      setCtaError(e instanceof Error ? e.message : 'Nepodařilo se')
+    } finally {
+      setCtaLoading(null)
+    }
   }
 
   const payload = action.payload as Record<string, unknown> | null
@@ -416,8 +424,8 @@ export function BriefCard({
                 />
               )}
 
-              {/* Mila's plan — what she recommends and why */}
-              {intentCs && (
+              {/* Mila's plan — what she recommends and why (skip for TODO — intent IS the task) */}
+              {intentCs && action.action_type !== 'TODO' && (
                 <>
                   <div style={{
                     fontSize: '10.5px',
@@ -479,7 +487,7 @@ export function BriefCard({
                 <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                   {action.action_type === 'TODO' && (
                     <button
-                      onClick={() => handleCta('postpone', async () => { /* Toggle postpone picker via parent */ })}
+                      onClick={() => { if (onTogglePostponePicker) onTogglePostponePicker() }}
                       style={{
                         fontFamily: 'system-ui, -apple-system, sans-serif',
                         fontWeight: 500,
@@ -501,13 +509,7 @@ export function BriefCard({
                   )}
 
                   <button
-                    onClick={() => handleCta('dismiss', async () => {
-                      try {
-                        await onDismiss()
-                      } catch {
-                        setCtaError('Nepodařilo se zahodit')
-                      }
-                    })}
+                    onClick={() => handleCta('dismiss', onDismiss)}
                     disabled={ctaLoading !== null}
                     style={{
                       fontFamily: 'system-ui, -apple-system, sans-serif',

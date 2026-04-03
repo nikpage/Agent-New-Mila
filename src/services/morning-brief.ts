@@ -546,7 +546,7 @@ function generateBriefEmailHtml(
         const needsPhysicalLocation = meetingType === 'address'
         const hasUnfilledLocation = needsPhysicalLocation && (
           !payloadLocation
-            ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
+            ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.toLowerCase().includes('adresa'))
             : locationPartial
         )
         // Conflicts show a warning but don't block UDĚLAT — user decides
@@ -598,9 +598,9 @@ function generateBriefEmailHtml(
 
     ${completedItems.length > 0 ? `
     <div style="margin-top: 40px; padding-top: 24px; border-top: 1px solid ${theme.colors.border};">
-      <h2 style="font-size: 18px; color: ${theme.colors.textMuted}; margin-bottom: 16px;">Co uz Mila vyridila</h2>
+      <h2 style="font-size: 18px; color: ${theme.colors.textMuted}; margin-bottom: 16px;">Co už Mila vyřídila</h2>
       ${completedItems.map(item => {
-        const typeLabel = item.actionType === 'REPLY' ? 'Odpoved' : item.actionType === 'SCHEDULE' ? 'Schuzka' : 'Ukol'
+        const typeLabel = item.actionType === 'REPLY' ? 'Odpověď' : item.actionType === 'SCHEDULE' ? 'Schůzka' : 'Úkol'
         return `
         <div style="padding: 12px 16px; margin-bottom: 8px; background: ${theme.colors.surface}; border-radius: 8px; border-left: 3px solid ${theme.colors.success};">
           <div style="font-size: 14px; color: ${theme.colors.text}; font-weight: 500;">${item.cpName} · ${typeLabel}</div>
@@ -647,17 +647,17 @@ function generateBriefEmailText(
     text += `------------------------------------------\n\n`;
   }
   if (completedItems.length > 0) {
-    text += `\n=== Co uz Mila vyridila ===\n\n`;
+    text += `\n=== Co už Mila vyřídila ===\n\n`;
     for (const item of completedItems) {
-      const typeLabel = item.actionType === 'REPLY' ? 'Odpoved' : item.actionType === 'SCHEDULE' ? 'Schuzka' : 'Ukol'
+      const typeLabel = item.actionType === 'REPLY' ? 'Odpověď' : item.actionType === 'SCHEDULE' ? 'Schůzka' : 'Úkol'
       text += `✓ ${item.cpName} · ${typeLabel}\n`;
       text += `  ${item.topic}\n\n`;
     }
   }
   if (commandItems.length > 0) {
-    text += `\n=== Zpracovane prikazy ===\n\n`;
+    text += `\n=== Zpracované příkazy ===\n\n`;
     for (const item of commandItems) {
-      const typeLabel = item.commandType === 'new_contact' ? 'Novy kontakt' : item.commandType === 'todo' ? 'Ukol' : item.commandType
+      const typeLabel = item.commandType === 'new_contact' ? 'Nový kontakt' : item.commandType === 'todo' ? 'Úkol' : item.commandType
       text += `✓ ${typeLabel}: ${item.summary}\n\n`;
     }
   }
@@ -1050,7 +1050,7 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
         const needsPhysicalLocation = meetingType === 'address'
         const hasUnfilledLocation = needsPhysicalLocation && (
           !payloadLocation
-            ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
+            ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.toLowerCase().includes('adresa'))
             : locationPartial
         )
         // Conflicts show a warning but don't block UDĚLAT — user decides
