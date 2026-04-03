@@ -6,13 +6,23 @@ import { BriefCard } from './BriefCard'
 import { ItineraryView } from './ItineraryView'
 import { CompletedSection } from './CompletedSection'
 import { StickyBar } from './StickyBar'
-import type { BriefData, BriefAction, BriefEvent, StickyBarCTA } from './types'
+import type { BriefData, BriefAction, BriefEvent, CoolingContact } from './types'
 
 interface BriefFeedProps {
   initialData: BriefData
   userId: string
   token: string
   focusActionId?: string | null
+}
+
+function formatDateCzech(): string {
+  const now = new Date()
+  return now.toLocaleDateString('cs-CZ', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  })
 }
 
 function getGreeting(): string {
@@ -23,7 +33,7 @@ function getGreeting(): string {
 }
 
 export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFeedProps) {
-  const theme = useTheme()
+  const { isDark, toggleTheme, ...theme } = useTheme()
   const [data, setData] = useState(initialData)
   const [expandedId, setExpandedId] = useState<string | null>(focusActionId || null)
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set())
@@ -119,7 +129,7 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     return b.priority_score - a.priority_score
   })
 
-  // Get token for an action — use per-action token if available, fall back to page token
+  // Get token for an action
   function getActionToken(action: BriefAction): string {
     return action.actionToken || token
   }
@@ -208,7 +218,6 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     toastTimer.current = setTimeout(() => setToast(null), 4000)
   }
 
-  // Item 35: Wire command to API
   async function handleCommand(command: string) {
     const res = await fetch('/api/commands', {
       method: 'POST',
@@ -226,7 +235,6 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     }
   }
 
-  // Item 20: Convert a specific question to TODO
   async function handleConvertQuestionTodo(actionId: string, question: string) {
     const action = sortedActions.find(a => a.id === actionId)
     const res = await fetch(`/api/action/${actionId}/convert-todo`, {
@@ -242,126 +250,31 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     }
   }
 
-  // ── StickyBar CTA generation (mobile only — desktop uses inline CTAs) ──
-
-  const expandedAction = expandedId ? sortedActions.find(a => a.id === expandedId) : null
-  const [isMobile, setIsMobile] = useState(false)
-
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 768px)')
-    setIsMobile(mq.matches)
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }, [])
-
-  function getExpandedCTAs(): StickyBarCTA[] | null {
-    // On desktop, inline CTAs handle actions — StickyBar shows command input only
-    if (!isMobile) return null
-    if (!expandedAction || doneIds.has(expandedAction.id)) return null
-
-    const id = expandedAction.id
-    switch (expandedAction.action_type) {
-      case 'REPLY':
-        return [
-          { label: 'Odeslat', action: () => handleExecute(id), primary: true },
-          { label: 'Úkol', action: () => handleConvertTodo(id) },
-        ]
-      case 'SCHEDULE':
-        return [
-          { label: 'Potvrdit', action: () => handleExecute(id), primary: true },
-          { label: 'Úkol', action: () => handleConvertTodo(id) },
-        ]
-      case 'TODO':
-        return [
-          { label: 'Hotovo', action: () => handleExecute(id), primary: true },
-          { label: 'Odložit', action: () => { setPostponePickerOpen(prev => !prev) } },
-          { label: 'Smazat', action: () => handleDismiss(id), destructive: true },
-        ]
-      default:
-        return null
-    }
-  }
-
-  // Item 37: History / dismissed items toggle
-  const [showHistory, setShowHistory] = useState(false)
-  const [historyItems, setHistoryItems] = useState<BriefAction[]>([])
-  const [historyLoading, setHistoryLoading] = useState(false)
-
-  async function loadHistory() {
-    if (showHistory) { setShowHistory(false); return }
-    setHistoryLoading(true)
-    try {
-      const res = await fetch(`/api/brief/${userId}/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, includeDismissed: true }),
-      })
-      if (res.ok) {
-        const result = await res.json()
-        // Filter to only dismissed/completed items not already shown
-        const activeIds = new Set(data.actions.map(a => a.id))
-        const dismissed = (result.actions || []).filter((a: BriefAction) =>
-          !activeIds.has(a.id) && (a.status === 'dismissed' || a.status === 'completed')
-        )
-        setHistoryItems(dismissed)
-      }
-    } catch {
-      // Silently fail
-    } finally {
-      setHistoryLoading(false)
-      setShowHistory(true)
-    }
-  }
-
-  // Item 51: Swipe hint — show once via localStorage
-  const [showSwipeHint, setShowSwipeHint] = useState(false)
-  useEffect(() => {
-    if (sortedActions.length > 0 && typeof window !== 'undefined') {
-      const key = 'mila_swipe_hint_shown'
-      if (!localStorage.getItem(key)) {
-        setShowSwipeHint(true)
-        localStorage.setItem(key, '1')
-        const t = setTimeout(() => setShowSwipeHint(false), 4000)
-        return () => clearTimeout(t)
-      }
-    }
-  }, [sortedActions.length])
-
   const pendingCount = sortedActions.filter(a => !doneIds.has(a.id)).length
-  const greeting = getGreeting()
-  const firstName = data.userName?.split(' ')[0] || ''
+  const dateStr = formatDateCzech()
+  const greeting = data.greeting || `${getGreeting()}${data.userName ? `, ${data.userName.split(' ')[0]}` : ''}.`
+
+  // Generate a contextual subtitle
+  const subtitle = pendingCount > 0
+    ? `${pendingCount} ${pendingCount === 1 ? 'věc k vyřízení' : pendingCount < 5 ? 'věci k vyřízení' : 'věcí k vyřízení'}`
+    : 'Vše vyřízeno'
 
   return (
     <div
       onTouchStart={onPullTouchStart}
       onTouchMove={onPullTouchMove}
       onTouchEnd={onPullTouchEnd}
-
-      className="brief-feed-container"
       style={{
-        maxWidth: '960px',
+        maxWidth: '460px',
         margin: '0 auto',
-        padding: '0',
-        paddingBottom: '88px',
+        padding: '22px 16px 0',
+        paddingBottom: '80px',
         minHeight: '100dvh',
         transform: pullY > 0 ? `translateY(${pullY}px)` : undefined,
         transition: isPulling.current ? 'none' : 'transform 0.3s ease',
         position: 'relative',
       }}
     >
-      {/* Item 45: Desktop responsive styles */}
-      <style>{`
-        @media (max-width: 768px) {
-          .brief-feed-container { max-width: 768px !important; }
-          .brief-inline-ctas { display: none !important; }
-        }
-        @media (min-width: 1025px) {
-          .brief-desktop-layout { display: flex !important; gap: 24px !important; align-items: flex-start; }
-          .brief-cards-column { flex: 3; min-width: 0; }
-          .brief-sidebar-column { flex: 2; min-width: 0; position: sticky; top: 16px; }
-        }
-      `}</style>
       {/* Pull-to-refresh indicator */}
       {(pullY > 0 || refreshing) && (
         <div style={{
@@ -370,8 +283,8 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
           left: 0,
           right: 0,
           textAlign: 'center',
-          fontSize: theme.typography.sizes.xs,
-          color: theme.colors.textMuted,
+          fontSize: '11px',
+          color: 'var(--sub)',
           opacity: pullY >= PULL_THRESHOLD || refreshing ? 1 : pullY / PULL_THRESHOLD,
         }}>
           {refreshing ? 'Aktualizuji...' : pullY >= PULL_THRESHOLD ? 'Pusťte pro obnovení' : ''}
@@ -380,190 +293,161 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
 
       {/* ── Header ──────────────────────────────────────────────── */}
       <header style={{
-        padding: `${theme.spacing.xl} ${theme.spacing.lg} ${theme.spacing.md}`,
         display: 'flex',
-        justifyContent: 'space-between',
         alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        gap: '12px',
+        marginBottom: '28px',
       }}>
         <div>
           <div style={{
-            fontSize: theme.typography.sizes.xxl,
-            fontWeight: theme.typography.weights.bold,
-            color: theme.colors.text,
-            lineHeight: 1.2,
-          }}>
-            {greeting}{firstName ? `, ${firstName}` : ''}
-          </div>
-          <div style={{
-            fontSize: theme.typography.sizes.sm,
-            color: theme.colors.textMuted,
-            marginTop: theme.spacing.xs,
-          }}>
-            {pendingCount > 0
-              ? `${pendingCount} ${pendingCount === 1 ? 'věc k vyřízení' : pendingCount < 5 ? 'věci k vyřízení' : 'věcí k vyřízení'}`
-              : 'Vše vyřízeno'
-            }
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: theme.spacing.sm }}>
-          <button
-            onClick={() => refreshData()}
-            disabled={refreshing}
-            title="Obnovit"
-            style={{
-              width: '32px', height: '32px',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              borderRadius: theme.borderRadius.full,
-              border: `1px solid ${theme.colors.border}`,
-              backgroundColor: theme.colors.surface,
-              color: theme.colors.textMuted,
-              cursor: refreshing ? 'not-allowed' : 'pointer',
-              fontSize: '14px', flexShrink: 0,
-              opacity: refreshing ? 0.5 : 1,
-              transition: 'opacity 0.15s ease',
-            }}
-          >
-            ↻
-          </button>
-          <div style={{
             fontSize: '11px',
-            fontWeight: theme.typography.weights.semibold,
-            color: theme.colors.primary,
-            letterSpacing: '0.08em',
+            fontWeight: 600,
+            letterSpacing: '0.09em',
             textTransform: 'uppercase',
+            color: 'var(--sub)',
+            marginBottom: '7px',
           }}>
-            Mila
+            {dateStr}
+          </div>
+          <div style={{
+            fontFamily: 'Georgia, serif',
+            fontStyle: 'italic',
+            fontSize: '19px',
+            color: 'var(--txt)',
+            lineHeight: 1.38,
+          }}>
+            {greeting}
           </div>
         </div>
+        <button
+          onClick={toggleTheme}
+          style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '50%',
+            background: 'var(--surf)',
+            border: '1px solid var(--brd)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            marginTop: '2px',
+            outline: 'none',
+            WebkitTapHighlightColor: 'transparent',
+            transition: 'background .3s, border-color .3s',
+          }}
+        >
+          {isDark ? (
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--sub)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="5" />
+              <line x1="12" y1="1" x2="12" y2="3" />
+              <line x1="12" y1="21" x2="12" y2="23" />
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+              <line x1="1" y1="12" x2="3" y2="12" />
+              <line x1="21" y1="12" x2="23" y2="12" />
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+            </svg>
+          ) : (
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--sub)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          )}
+        </button>
       </header>
 
-      {/* Item 51: Swipe hint */}
-      {showSwipeHint && sortedActions.length > 0 && (
+      {/* ── Action cards ────────────────────────────────────────── */}
+      {sortedActions.length > 0 && (
+        <>
+          <div style={{
+            fontSize: '11px',
+            fontWeight: 600,
+            letterSpacing: '0.09em',
+            textTransform: 'uppercase',
+            color: 'var(--sub)',
+            margin: '0 0 10px 2px',
+          }}>
+            K vyřízení
+          </div>
+
+          {sortedActions.map(action => (
+            <div
+              key={action.id}
+              id={`action-${action.id}`}
+              ref={el => { if (el) cardRefs.current.set(action.id, el) }}
+              style={{ marginBottom: '12px' }}
+            >
+              <BriefCard
+                action={action}
+                actionToken={getActionToken(action)}
+                expanded={expandedId === action.id}
+                onToggle={() => { setExpandedId(expandedId === action.id ? null : action.id); setPostponePickerOpen(false) }}
+                onExecute={() => handleExecute(action.id)}
+                onConvertTodo={() => handleConvertTodo(action.id)}
+                onDismiss={() => handleDismiss(action.id)}
+                onPostpone={(postponeTo) => handlePostpone(action.id, postponeTo)}
+                onRegenerateDraft={(instruction) => handleRegenerateDraft(action.id, instruction)}
+                onSaveDraft={(d) => handleSaveDraft(action.id, d)}
+                onConvertQuestionTodo={(question) => handleConvertQuestionTodo(action.id, question)}
+                onUndo={() => { setDoneIds(prev => { const next = new Set(prev); next.delete(action.id); return next }) }}
+                done={doneIds.has(action.id)}
+                showPostponePicker={expandedId === action.id && action.action_type === 'TODO' ? postponePickerOpen : false}
+                isFirst={false}
+              />
+            </div>
+          ))}
+        </>
+      )}
+
+      {sortedActions.length === 0 && (
         <div style={{
-          textAlign: 'center', padding: `${theme.spacing.xs} ${theme.spacing.md}`,
-          fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted,
-          animation: 'mila-hint-fade 4s ease forwards',
+          textAlign: 'center',
+          padding: '48px 24px',
+          color: 'var(--mtd)',
+          fontSize: '13.5px',
         }}>
-          <style>{`@keyframes mila-hint-fade { 0% { opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { opacity: 0; } }`}</style>
-          Swipe vpravo = potvrdit, vlevo = zrušit
+          Žádné akce k vyřízení.
         </div>
       )}
 
-      {/* Item 45: Desktop two-column layout wrapper */}
-      <div className="brief-desktop-layout" style={{ padding: `0 ${theme.spacing.md}` }}>
-        {/* Cards column */}
-        <div className="brief-cards-column">
+      {/* ── Cooling contacts ────────────────────────────────────── */}
+      {(data.coolingContacts || []).length > 0 && (
+        <>
           <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: theme.spacing.sm,
+            fontSize: '11px',
+            fontWeight: 600,
+            letterSpacing: '0.09em',
+            textTransform: 'uppercase',
+            color: 'var(--sub)',
+            margin: '24px 0 10px 2px',
           }}>
-            {sortedActions.map((action, idx) => (
-              <div
-                key={action.id}
-                id={`action-${action.id}`}
-                ref={el => { if (el) cardRefs.current.set(action.id, el) }}
-              >
-                <BriefCard
-                  action={action}
-                  actionToken={getActionToken(action)}
-                  expanded={expandedId === action.id}
-                  onToggle={() => { setExpandedId(expandedId === action.id ? null : action.id); setPostponePickerOpen(false) }}
-                  onExecute={() => handleExecute(action.id)}
-                  onConvertTodo={() => handleConvertTodo(action.id)}
-                  onDismiss={() => handleDismiss(action.id)}
-                  onPostpone={(postponeTo) => handlePostpone(action.id, postponeTo)}
-                  onRegenerateDraft={(instruction) => handleRegenerateDraft(action.id, instruction)}
-                  onSaveDraft={(d) => handleSaveDraft(action.id, d)}
-                  onConvertQuestionTodo={(question) => handleConvertQuestionTodo(action.id, question)}
-                  onUndo={() => { setDoneIds(prev => { const next = new Set(prev); next.delete(action.id); return next }) }}
-                  done={doneIds.has(action.id)}
-                  showPostponePicker={expandedId === action.id && action.action_type === 'TODO' ? postponePickerOpen : false}
-                  isFirst={idx === 0}
-                />
-              </div>
-            ))}
-
-            {sortedActions.length === 0 && (
-              <div style={{
-                textAlign: 'center',
-                padding: `${theme.spacing.xxl} ${theme.spacing.lg}`,
-                color: theme.colors.textMuted,
-                fontSize: theme.typography.sizes.base,
-              }}>
-                Žádné akce k vyřízení.
-              </div>
-            )}
+            Chladnoucí kontakty
           </div>
 
-          {/* Completed items — below cards */}
-          <div style={{ marginTop: theme.spacing.lg }}>
-            <CompletedSection items={data.completed} />
-          </div>
+          {(data.coolingContacts || []).map(contact => (
+            <CoolingCard key={contact.conversationId} contact={contact} />
+          ))}
+        </>
+      )}
 
-          {/* Item 37: History link */}
-          <div style={{ marginTop: theme.spacing.md, textAlign: 'center' }}>
-            <button
-              onClick={loadHistory}
-              disabled={historyLoading}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer',
-                fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted,
-                textDecoration: 'underline', opacity: historyLoading ? 0.5 : 1,
-              }}
-            >
-              {historyLoading ? '...' : showHistory ? 'Skrýt historii' : 'Historie'}
-            </button>
-          </div>
-
-          {/* History items */}
-          {showHistory && historyItems.length > 0 && (
-            <div style={{
-              display: 'flex', flexDirection: 'column', gap: theme.spacing.xs,
-              padding: `${theme.spacing.md} 0`,
-            }}>
-              {historyItems.map(action => (
-                <div key={action.id} style={{
-                  padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                  backgroundColor: theme.colors.surface, borderRadius: theme.borderRadius.md,
-                  border: `1px solid ${theme.colors.border}`, opacity: 0.6,
-                }}>
-                  <div style={{
-                    fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted,
-                    textDecoration: 'line-through',
-                  }}>
-                    {action.headline || action.cpName || action.action_type}
-                  </div>
-                  <div style={{ fontSize: theme.typography.sizes.xs, color: theme.colors.textMuted }}>
-                    {action.status === 'dismissed' ? 'Zrušeno' : 'Hotovo'}
-                    {' · '}
-                    {new Date(action.updated_at).toLocaleDateString('cs-CZ')}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {showHistory && historyItems.length === 0 && !historyLoading && (
-            <div style={{
-              textAlign: 'center', padding: theme.spacing.md,
-              fontSize: theme.typography.sizes.sm, color: theme.colors.textMuted,
-            }}>
-              Žádná historie.
-            </div>
-          )}
+      {/* ── Completed items ─────────────────────────────────────── */}
+      {data.completed.length > 0 && (
+        <div style={{ marginTop: '24px' }}>
+          <CompletedSection items={data.completed} />
         </div>
+      )}
 
-        {/* Sidebar column — itinerary (on desktop, right side; on mobile, below cards) */}
-        <div className="brief-sidebar-column" style={{ marginTop: theme.spacing.xl }}>
-          <ItineraryView
-            todayEvents={data.events.today as BriefEvent[]}
-            upcomingEvents={data.events.upcoming as BriefEvent[]}
-            timezone={data.settings.timezone}
-            userId={userId}
-            token={token}
-          />
-        </div>
-      </div>
+      {/* ── Today's agenda ──────────────────────────────────────── */}
+      <ItineraryView
+        todayEvents={data.events.today as BriefEvent[]}
+        upcomingEvents={data.events.upcoming as BriefEvent[]}
+        timezone={data.settings.timezone}
+        userId={userId}
+        token={token}
+      />
 
       {/* Toast */}
       {toast && (
@@ -572,13 +456,13 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
           bottom: '80px',
           left: '50%',
           transform: 'translateX(-50%)',
-          backgroundColor: theme.colors.text,
-          color: theme.colors.background,
-          padding: `${theme.spacing.sm} ${theme.spacing.lg}`,
-          borderRadius: theme.borderRadius.lg,
-          fontSize: theme.typography.sizes.sm,
-          fontWeight: theme.typography.weights.medium,
-          boxShadow: theme.shadows.modal,
+          backgroundColor: 'var(--txt)',
+          color: 'var(--bg)',
+          padding: '8px 24px',
+          borderRadius: '14px',
+          fontSize: '13.5px',
+          fontWeight: 500,
+          boxShadow: 'var(--sdw-h)',
           zIndex: 50,
           maxWidth: '80vw',
           textAlign: 'center',
@@ -588,10 +472,57 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       )}
 
       {/* ── Sticky bottom bar ───────────────────────────────────── */}
-      <StickyBar
-        ctas={getExpandedCTAs()}
-        onCommand={handleCommand}
-      />
+      <StickyBar onCommand={handleCommand} />
+    </div>
+  )
+}
+
+/** Cooling contact card */
+function CoolingCard({ contact }: { contact: CoolingContact }) {
+  const label = contact.topic
+    ? `${contact.cpName} — ${contact.topic}`
+    : contact.cpName
+
+  return (
+    <div style={{
+      marginBottom: '10px',
+      borderRadius: '14px',
+      border: '1px solid var(--brd)',
+      background: 'var(--surf)',
+      padding: '13px 15px 13px 18px',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '12px',
+      boxShadow: 'var(--sdw), inset 4px 0 0 var(--cool)',
+      transition: 'background .2s, box-shadow .25s, transform .25s cubic-bezier(.34,1.56,.64,1)',
+      cursor: 'default',
+    }}>
+      <span style={{
+        width: '7px',
+        height: '7px',
+        borderRadius: '50%',
+        background: 'var(--cool)',
+        flexShrink: 0,
+        opacity: 0.75,
+      }} />
+      <span style={{
+        fontFamily: 'Georgia, serif',
+        fontSize: '14px',
+        fontWeight: 700,
+        color: 'var(--mtd)',
+        flex: 1,
+        lineHeight: 1.25,
+      }}>
+        {label}
+      </span>
+      <span style={{
+        fontSize: '11px',
+        fontWeight: 600,
+        color: 'var(--cool)',
+        whiteSpace: 'nowrap',
+      }}>
+        {contact.daysSilent} {contact.daysSilent === 1 ? 'den' : contact.daysSilent < 5 ? 'dny' : 'dní'} ticha
+      </span>
     </div>
   )
 }

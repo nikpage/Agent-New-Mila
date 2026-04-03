@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { useTheme } from '@/contexts/ThemeContext'
 import type { CompletedActionSummary } from './types'
 
 const TYPE_LABEL: Record<string, string> = {
@@ -13,26 +12,25 @@ interface CompletedSectionProps {
 }
 
 export function CompletedSection({ items }: CompletedSectionProps) {
-  const theme = useTheme()
   const [expanded, setExpanded] = useState(false)
 
   if (items.length === 0) return null
 
   return (
-    <div style={{ marginTop: theme.spacing.lg }}>
+    <div>
       <button
         onClick={() => setExpanded(!expanded)}
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: theme.spacing.sm,
-          padding: `${theme.spacing.sm} 0`,
+          gap: '8px',
+          padding: '8px 0',
           background: 'none',
           border: 'none',
           cursor: 'pointer',
-          fontSize: theme.typography.sizes.sm,
-          color: theme.colors.textMuted,
-          fontWeight: theme.typography.weights.medium,
+          fontSize: '13.5px',
+          color: 'var(--mtd)',
+          fontWeight: 500,
         }}
       >
         <span style={{
@@ -41,15 +39,19 @@ export function CompletedSection({ items }: CompletedSectionProps) {
           justifyContent: 'center',
           width: '20px',
           height: '20px',
-          borderRadius: theme.borderRadius.full,
-          backgroundColor: theme.colors.successBg,
-          color: theme.colors.success,
+          borderRadius: '50%',
+          backgroundColor: 'var(--success-bg)',
+          color: 'var(--success)',
           fontSize: '12px',
         }}>
           ✓
         </span>
         Mila vyřídila {items.length} {items.length === 1 ? 'věc' : items.length < 5 ? 'věci' : 'věcí'}
-        <span style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+        <span style={{
+          transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+          transition: 'transform 0.2s',
+          fontSize: '10px',
+        }}>
           ▸
         </span>
       </button>
@@ -58,18 +60,18 @@ export function CompletedSection({ items }: CompletedSectionProps) {
         <div style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: theme.spacing.sm,
-          paddingLeft: theme.spacing.lg,
-          borderLeft: `2px solid ${theme.colors.successBg}`,
+          gap: '8px',
+          paddingLeft: '24px',
+          borderLeft: '2px solid var(--success-bg)',
         }}>
           {items.map(item => (
             <div key={item.id} style={{
-              padding: theme.spacing.sm,
-              fontSize: theme.typography.sizes.sm,
-              color: theme.colors.textMuted,
+              padding: '8px',
+              fontSize: '13.5px',
+              color: 'var(--mtd)',
               lineHeight: 1.5,
             }}>
-              <span style={{ color: theme.colors.text, fontWeight: theme.typography.weights.medium }}>
+              <span style={{ color: 'var(--txt)', fontWeight: 500 }}>
                 {item.cpName || 'Neznámý'}
               </span>
               {' · '}

@@ -34,6 +34,8 @@ export interface BriefEvent {
   event_type: string | null
   /** Travel buffer annotation (minutes), computed by parent */
   travelMinutes?: number
+  /** CP name associated with this event */
+  cpName?: string | null
 }
 
 /** Todo for display in the brief */
@@ -45,9 +47,18 @@ export interface BriefTodo {
   scheduled_time: string | null
 }
 
+/** Cooling contact — conversation with no recent inbound activity */
+export interface CoolingContact {
+  conversationId: string
+  cpName: string
+  topic: string | null
+  daysSilent: number
+}
+
 /** All data for one brief page render */
 export interface BriefData {
   userName: string
+  greeting: string | null
   actions: BriefAction[]
   events: {
     today: BriefEvent[]
@@ -55,6 +66,7 @@ export interface BriefData {
   }
   todos: BriefTodo[]
   completed: CompletedActionSummary[]
+  coolingContacts: CoolingContact[]
   settings: {
     timezone: string
     aiLanguage: string

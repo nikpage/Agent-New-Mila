@@ -257,3 +257,106 @@ export async function getOrphanCallLogs(
   const hasNote = new Set((voiceNotes || []).map(v => v.parent_id))
   return callLogs.filter(c => !hasNote.has(c.id))
 }
+
+/**
+ * Get conversations where the CP has gone silent (no inbound activity for N+ days).
+ * Used for the "Chladnoucí kontakty" section in the web brief.
+ */
+export async function getCoolingConversations(
+  userId: string,
+  minDaysSilent: number = 5,
+  limit: number = 5
+): Promise<{ conversationId: string; cpName: string; topic: string | null; daysSilent: number }[]> {
+  const supabase = getSupabaseAdmin()
+
+  // Get active conversations for this user
+  const { data: conversations, error: convErr } = await supabase
+    .from('conversation_threads')
+    .select('id, topic')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+
+  if (convErr || !conversations?.length) return []
+
+  // Get latest inbound timeline entry per conversation in a single query
+  const convIds = conversations.map(c => c.id)
+  const { data: latestEntries, error: tlErr } = await supabase
+    .from('deal_timeline')
+    .select('conversation_id, occurred_at')
+    .eq('user_id', userId)
+    .eq('direction', 'in')
+    .in('conversation_id', convIds)
+    .order('occurred_at', { ascending: false })
+
+  if (tlErr) return []
+
+  // Find latest inbound per conversation
+  const latestByConv = new Map<string, string>()
+  for (const entry of latestEntries || []) {
+    if (!entry.conversation_id) continue
+    if (!latestByConv.has(entry.conversation_id)) {
+      latestByConv.set(entry.conversation_id, entry.occurred_at)
+    }
+  }
+
+  const cutoffMs = minDaysSilent * 24 * 60 * 60 * 1000
+  const now = Date.now()
+  const cooling: { conversationId: string; topic: string | null; daysSilent: number }[] = []
+
+  for (const conv of conversations) {
+    const lastInbound = latestByConv.get(conv.id)
+    if (!lastInbound) continue // No inbound ever — skip (probably a new conversation)
+    const elapsed = now - new Date(lastInbound).getTime()
+    if (elapsed >= cutoffMs) {
+      cooling.push({
+        conversationId: conv.id,
+        topic: conv.topic,
+        daysSilent: Math.floor(elapsed / (24 * 60 * 60 * 1000)),
+      })
+    }
+  }
+
+  // Sort by most silent first, limit
+  cooling.sort((a, b) => b.daysSilent - a.daysSilent)
+  const topCooling = cooling.slice(0, limit)
+
+  if (topCooling.length === 0) return []
+
+  // Fetch CP names for these conversations via thread_participants
+  const coolingConvIds = topCooling.map(c => c.conversationId)
+  const { data: participants } = await supabase
+    .from('thread_participants')
+    .select('thread_id, cp_id')
+    .in('thread_id', coolingConvIds)
+
+  if (!participants?.length) {
+    return topCooling.map(c => ({ ...c, cpName: 'Neznámý' }))
+  }
+
+  // Get unique CP IDs
+  const cpIdByConv = new Map<string, string>()
+  for (const p of participants) {
+    if (!cpIdByConv.has(p.thread_id)) {
+      cpIdByConv.set(p.thread_id, p.cp_id)
+    }
+  }
+
+  const uniqueCpIds = [...new Set(cpIdByConv.values())]
+  const { data: cps } = await supabase
+    .from('cps')
+    .select('id, name, primary_identifier')
+    .in('id', uniqueCpIds)
+
+  const cpNameMap = new Map<string, string>()
+  for (const cp of cps || []) {
+    cpNameMap.set(cp.id, cp.name || cp.primary_identifier || 'Neznámý')
+  }
+
+  return topCooling.map(c => {
+    const cpId = cpIdByConv.get(c.conversationId)
+    return {
+      ...c,
+      cpName: cpId ? cpNameMap.get(cpId) || 'Neznámý' : 'Neznámý',
+    }
+  })
+}

@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from 'next'
 import './globals.css'
-import { theme } from '@/config/theme'
 import { ThemeProvider } from '@/contexts/ThemeContext'
 
 export const metadata: Metadata = {
@@ -14,8 +13,8 @@ export const viewport: Viewport = {
   maximumScale: 1,
   userScalable: false,
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#f8f5f2' },
-    { media: '(prefers-color-scheme: dark)', color: '#0f1a2e' },
+    { media: '(prefers-color-scheme: light)', color: '#f0ebe2' },
+    { media: '(prefers-color-scheme: dark)', color: '#0c1320' },
   ],
 }
 
@@ -25,19 +24,15 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en">
+    <html lang="cs">
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
         <link rel="manifest" href="/manifest.json" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
       </head>
-      <body className="antialiased" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+      <body style={{ paddingTop: 'env(safe-area-inset-top)' }}>
         <ThemeProvider>
           {children}
         </ThemeProvider>

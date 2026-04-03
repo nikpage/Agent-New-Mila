@@ -6,10 +6,11 @@ import { getEventsForToday, getUpcomingEvents } from '@/lib/db/events'
 import { getTodosDueToday, getOverdueTodos } from '@/lib/db/todos'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
+import { getCoolingConversations } from '@/lib/db/timeline'
 
 /**
  * POST /api/brief/[userId]/refresh
- * Returns latest actions + events + completed items + todos for client hydration.
+ * Returns latest actions + events + completed items + todos + cooling contacts for client hydration.
  * Auth: trigger token (HMAC tied to userId).
  */
 export async function POST(
@@ -29,13 +30,14 @@ export async function POST(
     const tz = settings.timezone || 'Europe/Prague'
 
     // Fetch all data in parallel
-    const [pendingActions, todayEvents, upcomingEvents, todosDueToday, overdueTodos, completedActions] = await Promise.all([
+    const [pendingActions, todayEvents, upcomingEvents, todosDueToday, overdueTodos, completedActions, coolingRaw] = await Promise.all([
       getPendingActionsForBrief(userId),
       getEventsForToday(userId, tz),
       getUpcomingEvents(userId, 3),
       getTodosDueToday(userId),
       getOverdueTodos(userId),
       getRecentlyCompletedActions(userId, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()),
+      getCoolingConversations(userId, 5, 5),
     ])
 
     // Enrich actions with CP names and conversation topics (batched)
@@ -93,10 +95,19 @@ export async function POST(
       return true
     })
 
+    // Cooling contacts
+    const coolingContacts = coolingRaw.map(c => ({
+      conversationId: c.conversationId,
+      cpName: c.cpName,
+      topic: c.topic,
+      daysSilent: c.daysSilent,
+    }))
+
     const userName = settings.client_name || ''
 
     return NextResponse.json({
       userName,
+      greeting: null,
       actions: enrichedActions,
       events: {
         today: todayEvents,
@@ -104,6 +115,7 @@ export async function POST(
       },
       todos: allTodos,
       completed: enrichedCompleted,
+      coolingContacts,
       settings: {
         timezone: tz,
         aiLanguage: settings.ai_language,

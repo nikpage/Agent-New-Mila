@@ -6,10 +6,10 @@ import { getEventsForToday, getUpcomingEvents } from '@/lib/db/events'
 import { getTodosDueToday, getOverdueTodos } from '@/lib/db/todos'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
+import { getCoolingConversations } from '@/lib/db/timeline'
 import { validateTriggerToken, generateActionToken } from '@/lib/auth/tokens'
 import { BriefFeed } from '@/components/brief/BriefFeed'
-import { theme } from '@/config/theme'
-import type { BriefData, BriefAction, CompletedActionSummary } from '@/components/brief/types'
+import type { BriefData, BriefAction, CompletedActionSummary, CoolingContact } from '@/components/brief/types'
 
 interface PageProps {
   params: Promise<{ userId: string }>
@@ -20,13 +20,14 @@ async function loadBriefData(userId: string): Promise<BriefData> {
   const settings = await getUserSettings(userId)
   const tz = settings.timezone || 'Europe/Prague'
 
-  const [pendingActions, todayEvents, upcomingEvents, todosDueToday, overdueTodos, completedActions] = await Promise.all([
+  const [pendingActions, todayEvents, upcomingEvents, todosDueToday, overdueTodos, completedActions, coolingRaw] = await Promise.all([
     getPendingActionsForBrief(userId),
     getEventsForToday(userId, tz),
     getUpcomingEvents(userId, 3),
     getTodosDueToday(userId),
     getOverdueTodos(userId),
     getRecentlyCompletedActions(userId, new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()),
+    getCoolingConversations(userId, 5, 5),
   ])
 
   // Enrich actions with CP + conversation data
@@ -79,11 +80,20 @@ async function loadBriefData(userId: string): Promise<BriefData> {
     return true
   })
 
+  // Cooling contacts
+  const coolingContacts: CoolingContact[] = coolingRaw.map(c => ({
+    conversationId: c.conversationId,
+    cpName: c.cpName,
+    topic: c.topic,
+    daysSilent: c.daysSilent,
+  }))
+
   // User name from settings
   const userName = settings.client_name || ''
 
   return {
     userName,
+    greeting: null, // AI greeting populated by brief sender; web brief generates its own
     actions: enrichedActions,
     events: {
       today: todayEvents as any,
@@ -91,6 +101,7 @@ async function loadBriefData(userId: string): Promise<BriefData> {
     },
     todos: allTodos as any,
     completed: enrichedCompleted,
+    coolingContacts,
     settings: {
       timezone: tz,
       aiLanguage: settings.ai_language || 'Czech',
@@ -130,13 +141,13 @@ export default async function BriefPage({ params, searchParams }: PageProps) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: theme.spacing.md,
+        padding: '16px',
       }}>
         <div style={{ textAlign: 'center', maxWidth: '400px' }}>
-          <h1 style={{ fontSize: theme.typography.sizes.xl, color: theme.colors.text, marginBottom: theme.spacing.sm }}>
+          <h1 style={{ fontSize: '19px', color: 'var(--txt)', marginBottom: '8px', fontFamily: 'Georgia, serif' }}>
             Neautorizovaný přístup
           </h1>
-          <p style={{ color: theme.colors.textMuted }}>
+          <p style={{ color: 'var(--mtd)' }}>
             Tento odkaz je neplatný nebo vypršel. Otevřete brief z emailu od Míly.
           </p>
         </div>
@@ -145,16 +156,14 @@ export default async function BriefPage({ params, searchParams }: PageProps) {
   }
 
   return (
-    <main style={{
-      minHeight: '100dvh',
-      fontFamily: theme.typography.fontFamily,
-    }}>
+    <main style={{ minHeight: '100dvh' }}>
       <Suspense fallback={
         <div style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           minHeight: '100dvh',
+          color: 'var(--sub)',
         }}>
           Načítání...
         </div>
