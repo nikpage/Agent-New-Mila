@@ -12,6 +12,7 @@ import { getTodosDueToday, getOverdueTodos } from '@/lib/db/todos'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefIntro, generateQuietBriefIntro, generateUrgentIntro, generateBriefHeadline } from '@/lib/ai/mila-voice'
 import { optimizeScheduleActions, scheduleSingleAction } from '@/services/scheduling'
+import { runAgentForUser } from '@/services/agent'
 import { ensureBriefSchedules } from '@/lib/qstash/client'
 import { generateActionToken, generateTriggerToken } from '@/lib/auth/tokens'
 import { getActionCardEmailHtml, formatSlotText, getActionIntent, prepareEmailCardParams, PRAGUE_TZ } from '../components/action/action-card-template';
@@ -60,6 +61,14 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       await ensureBriefSchedules(userId, settings, updateUserSettings)
     } catch (scheduleError) {
       console.error(`[Brief] User ${user.email || userId}: schedule self-heal failed:`, scheduleError)
+    }
+
+    // Run agent pipeline to ensure fresh data before brief
+    try {
+      const agentResult = await runAgentForUser(userId)
+      console.log(`[Brief] User ${user.email || userId}: agent run — ${agentResult.emailsIngested} emails, ${agentResult.actionsGenerated} actions`)
+    } catch (agentError) {
+      console.error(`[Brief] User ${user.email || userId}: agent run failed, continuing with existing data:`, agentError)
     }
 
     // Run batch schedule optimizer BEFORE loading actions —
