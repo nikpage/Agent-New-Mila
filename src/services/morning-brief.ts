@@ -14,7 +14,7 @@ import { generateBriefIntro, generateQuietBriefIntro, generateUrgentIntro, gener
 import { optimizeScheduleActions, scheduleSingleAction } from '@/services/scheduling'
 import { ensureBriefSchedules } from '@/lib/qstash/client'
 import { generateActionToken, generateTriggerToken } from '@/lib/auth/tokens'
-import { getActionCardEmailHtml } from '../components/action/action-card-template';
+import { getActionCardEmailHtml, formatSlotText, getActionIntent, prepareEmailCardParams, PRAGUE_TZ } from '../components/action/action-card-template';
 import { getHeadlineEmailHtml, getHeadlineEmailText } from '../components/brief/headline-email-template'
 import type { HeadlineAction, HeadlineEvent, HeadlineCompleted } from '../components/brief/headline-email-template'
 import { theme } from '@/config/theme'
@@ -358,14 +358,9 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
 
     const headlineResults = await Promise.allSettled(
       briefActions.map(ba => {
-        const payload = ba.action.payload as Record<string, unknown> | null
-        let slotText: string | null = null
-        if (ba.action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
-          const tz = 'Europe/Prague'
-          const s = new Date(payload.start as string)
-          const e = new Date(payload.end as string)
-          slotText = `${s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })}, ${s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })} - ${e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })}`
-        }
+        const p = ba.action.payload as Record<string, unknown> | null
+        const holdSlotText = (ba.action.action_type === 'SCHEDULE' && p?.start && p?.end)
+          ? formatSlotText(p.start as string, p.end as string) : null
         const daysIgnored = Math.max(0, Math.floor((Date.now() - new Date(ba.action.created_at).getTime()) / 86_400_000))
         return generateBriefHeadline(
           {
@@ -373,9 +368,9 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
             cpName: ba.cpName,
             dealValue: ba.action.dollar_value || 0,
             urgency: ba.action.urgency,
-            intent: ba.action.intent_cs || ba.action.rationale_cs || ba.action.rationale || '',
+            intent: getActionIntent(ba.action),
             daysSinceContact: daysIgnored,
-            holdSlotText: slotText,
+            holdSlotText,
           },
           ba.summary ? { currentState: ba.summary.currentState, risks: ba.summary.risks, dealType: ba.summary.dealType } : null,
           calendarForHeadlines,
@@ -388,14 +383,9 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     const headlineActions: HeadlineAction[] = briefActions.map((ba, i) => {
       const result = headlineResults[i]
       const hl = result.status === 'fulfilled' ? result.value : { headline: ba.cpName, story: ba.action.intent_cs || ba.action.rationale || '' }
-      const payload = ba.action.payload as Record<string, unknown> | null
-      let slotText: string | null = null
-      if (ba.action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
-        const tz = 'Europe/Prague'
-        const s = new Date(payload.start as string)
-        const e = new Date(payload.end as string)
-        slotText = `${s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })}, ${s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })} - ${e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })}`
-      }
+      const p = ba.action.payload as Record<string, unknown> | null
+      const slotText = (ba.action.action_type === 'SCHEDULE' && p?.start && p?.end)
+        ? formatSlotText(p.start as string, p.end as string) : null
       return {
         id: ba.action.id,
         actionType: ba.action.action_type,
@@ -533,67 +523,11 @@ function generateBriefEmailHtml(
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
 
     ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl }) => {
-      const payload = action.payload as Record<string, unknown> | null
-      const payloadLocation = payload?.location as string | null
-      const isOnline = !!payload?.is_online
-      const meetingType = (payload?.meeting_type as 'address' | 'online' | 'phone') || (isOnline ? 'online' : 'address')
-      const locationPartial = !!payload?.location_partial
-      let needsInput = false
-      if (action.action_type === 'SCHEDULE') {
-        const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
-        const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
-        const hasHold = !!payload?.hold_event_id
-        const needsPhysicalLocation = meetingType === 'address'
-        const hasUnfilledLocation = needsPhysicalLocation && (
-          !payloadLocation
-            ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.toLowerCase().includes('adresa'))
-            : locationPartial
-        )
-        // Conflicts show a warning but don't block UDĚLAT — user decides
-        needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
-      }
-      const location = payloadLocation || null
-      // Build slotText from hold start/end if present
-      let slotText: string | null = null
-      if (action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
-        const tz = 'Europe/Prague'
-        const s = new Date(payload.start as string)
-        const e = new Date(payload.end as string)
-        const dateStr = s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
-        const startStr = s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
-        const endStr = e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
-        slotText = `${dateStr}, ${startStr} - ${endStr}`
-      }
-      // Strip any "Termín: ..." line from intent — template renders it separately
-      let intentText = action.intent_cs || action.rationale_cs || action.rationale
-      if (slotText) {
-        intentText = intentText.replace(/\n*Termín:.*$/m, '').trim()
-      }
-      return getActionCardEmailHtml({
-        cpName,
-        cpRole,
-        topic,
-        actionType: action.action_type,
-        urgency: action.urgency,
-        intent: intentText,
-        actionUrl,
-        editUrl,
-        executeUrl,
-        todoUrl,
-        blacklistUrl,
-        needsInput,
-        location,
-        locationPartial,
-        isOnline,
-        meetingType,
-        cpPhone: (payload?.cp_phone as string) || null,
-        slotText,
-        conflicts: (payload?.conflicts as import('@/components/action/action-card-template').ConflictCardData[]) || undefined,
-        resolveRescheduleUrl: resolveRescheduleUrl || undefined,
-        resolveCancelUrl: resolveCancelUrl || undefined,
-        resolveMoveNewUrl: resolveMoveNewUrl || undefined,
-        resolveKeepBothUrl: resolveKeepBothUrl || undefined,
-      })
+      return getActionCardEmailHtml(prepareEmailCardParams(
+        action,
+        { cpName, cpRole, topic },
+        { actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl },
+      ))
     }).join('')}
 
     ${completedItems.length > 0 ? `
@@ -923,14 +857,9 @@ async function sendInstantNotificationForConversation(
     const urgentSettings = await getUserSettings(userId)
     const urgentHeadlineResults = await Promise.allSettled(
       briefActions.map(ba => {
-        const payload = ba.action.payload as Record<string, unknown> | null
-        let slotText: string | null = null
-        if (ba.action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
-          const tz = 'Europe/Prague'
-          const s = new Date(payload.start as string)
-          const e = new Date(payload.end as string)
-          slotText = `${s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })}, ${s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })} - ${e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })}`
-        }
+        const p = ba.action.payload as Record<string, unknown> | null
+        const holdSlotText = (ba.action.action_type === 'SCHEDULE' && p?.start && p?.end)
+          ? formatSlotText(p.start as string, p.end as string) : null
         const daysIgnored = Math.max(0, Math.floor((Date.now() - new Date(ba.action.created_at).getTime()) / 86_400_000))
         return generateBriefHeadline(
           {
@@ -938,9 +867,9 @@ async function sendInstantNotificationForConversation(
             cpName: ba.cpName,
             dealValue: ba.action.dollar_value || 0,
             urgency: ba.action.urgency,
-            intent: ba.action.intent_cs || ba.action.rationale_cs || ba.action.rationale || '',
+            intent: getActionIntent(ba.action),
             daysSinceContact: daysIgnored,
-            holdSlotText: slotText,
+            holdSlotText,
           },
           ba.summary ? { currentState: ba.summary.currentState, risks: ba.summary.risks, dealType: ba.summary.dealType } : null,
           [],
@@ -952,14 +881,9 @@ async function sendInstantNotificationForConversation(
     const urgentHeadlineActions: HeadlineAction[] = briefActions.map((ba, i) => {
       const result = urgentHeadlineResults[i]
       const hl = result.status === 'fulfilled' ? result.value : { headline: ba.cpName, story: ba.action.intent_cs || ba.action.rationale || '' }
-      const payload = ba.action.payload as Record<string, unknown> | null
-      let slotText: string | null = null
-      if (ba.action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
-        const tz = 'Europe/Prague'
-        const s = new Date(payload.start as string)
-        const e = new Date(payload.end as string)
-        slotText = `${s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })}, ${s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })} - ${e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })}`
-      }
+      const p = ba.action.payload as Record<string, unknown> | null
+      const slotText = (ba.action.action_type === 'SCHEDULE' && p?.start && p?.end)
+        ? formatSlotText(p.start as string, p.end as string) : null
       return {
         id: ba.action.id,
         actionType: ba.action.action_type,
@@ -1037,67 +961,11 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${body}</p>
 
     ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl }) => {
-      const payload = action.payload as Record<string, unknown> | null
-      const payloadLocation = payload?.location as string | null
-      const isOnline = !!payload?.is_online
-      const meetingType = (payload?.meeting_type as 'address' | 'online' | 'phone') || (isOnline ? 'online' : 'address')
-      const locationPartial = !!payload?.location_partial
-      let needsInput = false
-      if (action.action_type === 'SCHEDULE') {
-        const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
-        const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
-        const hasHold = !!payload?.hold_event_id
-        const needsPhysicalLocation = meetingType === 'address'
-        const hasUnfilledLocation = needsPhysicalLocation && (
-          !payloadLocation
-            ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.toLowerCase().includes('adresa'))
-            : locationPartial
-        )
-        // Conflicts show a warning but don't block UDĚLAT — user decides
-        needsInput = hasUnfilledLocation || (hasUnfilled && !hasHold)
-      }
-      const location = payloadLocation || null
-      // Build slotText from hold start/end if present
-      let slotText: string | null = null
-      if (action.action_type === 'SCHEDULE' && payload?.start && payload?.end) {
-        const tz = 'Europe/Prague'
-        const s = new Date(payload.start as string)
-        const e = new Date(payload.end as string)
-        const dateStr = s.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
-        const startStr = s.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
-        const endStr = e.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
-        slotText = `${dateStr}, ${startStr} - ${endStr}`
-      }
-      // Strip any "Termín: ..." line from intent — template renders it separately
-      let intentText = action.intent_cs || action.rationale_cs || action.rationale
-      if (slotText) {
-        intentText = intentText.replace(/\n*Termín:.*$/m, '').trim()
-      }
-      return getActionCardEmailHtml({
-        cpName,
-        cpRole,
-        topic,
-        actionType: action.action_type,
-        urgency: action.urgency,
-        intent: intentText,
-        actionUrl,
-        editUrl,
-        executeUrl,
-        todoUrl,
-        blacklistUrl,
-        needsInput,
-        location,
-        locationPartial,
-        isOnline,
-        meetingType,
-        cpPhone: (payload?.cp_phone as string) || null,
-        slotText,
-        conflicts: (payload?.conflicts as import('@/components/action/action-card-template').ConflictCardData[]) || undefined,
-        resolveRescheduleUrl: resolveRescheduleUrl || undefined,
-        resolveCancelUrl: resolveCancelUrl || undefined,
-        resolveMoveNewUrl: resolveMoveNewUrl || undefined,
-        resolveKeepBothUrl: resolveKeepBothUrl || undefined,
-      })
+      return getActionCardEmailHtml(prepareEmailCardParams(
+        action,
+        { cpName, cpRole, topic },
+        { actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl },
+      ))
     }).join('')}
   </div>
 </body>

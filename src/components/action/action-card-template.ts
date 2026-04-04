@@ -4,6 +4,7 @@
  */
 
 import { theme } from '@/config/theme'
+import type { ActionProposal } from '@/lib/supabase/types'
 
 /** Enriched conflict data for rendering in action cards and conflict resolution UI */
 export interface ConflictCardData {
@@ -23,6 +24,142 @@ export interface ConflictCardData {
   alt_slot_start: string | null
   alt_slot_end: string | null
   new_event_score: number
+}
+
+// ─── Shared Helpers ─────────────────────────────────────────────────────────
+// Used by ActionCard.tsx, morning-brief.ts, scheduling.ts — change once, works everywhere.
+
+/** Default timezone. Every date/time in the app goes through this. */
+export const PRAGUE_TZ = 'Europe/Prague'
+
+/** "10:00" */
+export function formatTimeCzech(date: Date, tz: string = PRAGUE_TZ): string {
+  return date.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
+}
+
+/** Short: "po 7. dub" — Long (default): "pondělí 7. dubna" */
+export function formatDateCzech(date: Date, opts?: { short?: boolean }, tz: string = PRAGUE_TZ): string {
+  return date.toLocaleDateString('cs-CZ', {
+    weekday: opts?.short ? 'short' : 'long',
+    day: 'numeric',
+    month: opts?.short ? 'short' : 'long',
+    timeZone: tz,
+  })
+}
+
+/** "pondělí 7. dubna, 10:00 - 11:00" */
+export function formatSlotText(start: string | Date, end: string | Date, tz: string = PRAGUE_TZ): string {
+  const s = typeof start === 'string' ? new Date(start) : start
+  const e = typeof end === 'string' ? new Date(end) : end
+  return `${formatDateCzech(s, undefined, tz)}, ${formatTimeCzech(s, tz)} - ${formatTimeCzech(e, tz)}`
+}
+
+/** Intent fallback chain: intent_cs → rationale_cs → rationale */
+export function getActionIntent(action: Pick<ActionProposal, 'intent_cs' | 'rationale_cs' | 'rationale'>): string {
+  return action.intent_cs || action.rationale_cs || action.rationale || ''
+}
+
+/** Fields extracted from action.payload that every card renderer needs. */
+export interface CardPayloadFields {
+  location: string | null
+  locationPartial: boolean
+  isOnline: boolean
+  meetingType: 'address' | 'online' | 'phone'
+  cpPhone: string | null
+  hasHold: boolean
+  holdStart: string | null
+  holdEnd: string | null
+  conflicts: ConflictCardData[]
+}
+
+/** Extract rendering-relevant fields from action.payload. */
+export function resolvePayloadFields(action: Pick<ActionProposal, 'payload'>): CardPayloadFields {
+  const p = action.payload as Record<string, unknown> | null
+  const isOnline = !!p?.is_online
+  return {
+    location: (p?.location as string) || null,
+    locationPartial: !!p?.location_partial,
+    isOnline,
+    meetingType: (p?.meeting_type as 'address' | 'online' | 'phone') || (isOnline ? 'online' : 'address'),
+    cpPhone: (p?.cp_phone as string) || null,
+    hasHold: !!p?.hold_event_id,
+    holdStart: (p?.start as string) || null,
+    holdEnd: (p?.end as string) || null,
+    conflicts: (p?.conflicts as ConflictCardData[]) || [],
+  }
+}
+
+/**
+ * Should UDĚLAT be disabled? Only SCHEDULE can be blocked.
+ * REPLY, TODO, and all others are never blocked.
+ */
+export function computeNeedsInput(action: Pick<ActionProposal, 'action_type' | 'payload' | 'missing_info'>): boolean {
+  if (action.action_type !== 'SCHEDULE') return false
+
+  const { meetingType, location, locationPartial, hasHold } = resolvePayloadFields(action)
+  const missingInfo = (action.missing_info as { label: string; value: string | null }[] | null) || []
+  const hasUnfilled = missingInfo.length > 0 && missingInfo.some(f => f.value === null || f.value === '')
+  const needsPhysicalLocation = meetingType === 'address'
+  const hasUnfilledLocation = needsPhysicalLocation && (
+    !location
+      ? missingInfo.some(f => (f.value === null || f.value === '') && f.label.toLowerCase().includes('adresa'))
+      : locationPartial
+  )
+  return hasUnfilledLocation || (hasUnfilled && !hasHold)
+}
+
+/**
+ * Build ActionCardEmailParams from an action + metadata + URLs.
+ * Single source of truth — used by both morning brief and instant notification renderers.
+ */
+export function prepareEmailCardParams(
+  action: ActionProposal,
+  meta: { cpName: string; cpRole: string | null; topic: string },
+  urls: {
+    actionUrl: string; editUrl: string; executeUrl: string; todoUrl: string; blacklistUrl: string
+    resolveRescheduleUrl?: string | null; resolveCancelUrl?: string | null
+    resolveMoveNewUrl?: string | null; resolveKeepBothUrl?: string | null
+  },
+  tz: string = PRAGUE_TZ,
+): ActionCardEmailParams {
+  const pf = resolvePayloadFields(action)
+  const needsInput = computeNeedsInput(action)
+
+  let slotText: string | null = null
+  if (action.action_type === 'SCHEDULE' && pf.holdStart && pf.holdEnd) {
+    slotText = formatSlotText(pf.holdStart, pf.holdEnd, tz)
+  }
+
+  let intentText = getActionIntent(action)
+  if (slotText) {
+    intentText = intentText.replace(/\n*Termín:.*$/m, '').trim()
+  }
+
+  return {
+    cpName: meta.cpName,
+    cpRole: meta.cpRole,
+    topic: meta.topic,
+    actionType: action.action_type,
+    urgency: action.urgency,
+    intent: intentText,
+    actionUrl: urls.actionUrl,
+    editUrl: urls.editUrl,
+    executeUrl: urls.executeUrl,
+    todoUrl: urls.todoUrl,
+    blacklistUrl: urls.blacklistUrl,
+    needsInput,
+    location: pf.location,
+    locationPartial: pf.locationPartial,
+    isOnline: pf.isOnline,
+    meetingType: pf.meetingType,
+    cpPhone: pf.cpPhone,
+    slotText,
+    conflicts: pf.conflicts.length > 0 ? pf.conflicts : undefined,
+    resolveRescheduleUrl: urls.resolveRescheduleUrl || undefined,
+    resolveCancelUrl: urls.resolveCancelUrl || undefined,
+    resolveMoveNewUrl: urls.resolveMoveNewUrl || undefined,
+    resolveKeepBothUrl: urls.resolveKeepBothUrl || undefined,
+  }
 }
 
 // ─── Shared Constants ────────────────────────────────────────────────────────

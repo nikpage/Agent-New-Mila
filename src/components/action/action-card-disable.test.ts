@@ -19,11 +19,9 @@ function readSrc(relativePath: string): string {
 describe('UDĚLAT disable logic — ActionCard.tsx', () => {
   const code = readSrc('src/components/action/ActionCard.tsx')
 
-  it('doItDisabled is scoped to SCHEDULE actions only', () => {
-    // The disable logic must be inside an if (action.action_type === 'SCHEDULE') block
-    expect(code).toContain("action.action_type === 'SCHEDULE'")
-    // doItDisabled must default to false (non-SCHEDULE actions are never blocked)
-    expect(code).toContain('let doItDisabled = false')
+  it('doItDisabled uses shared computeNeedsInput', () => {
+    // ActionCard imports and calls the shared disable logic
+    expect(code).toContain('computeNeedsInput')
   })
 
   it('does NOT disable REPLY or TODO actions', () => {
@@ -36,14 +34,18 @@ describe('UDĚLAT disable logic — ActionCard.tsx', () => {
 describe('UDĚLAT disable logic — morning-brief.ts', () => {
   const code = readSrc('src/services/morning-brief.ts')
 
-  it('needsInput is scoped to SCHEDULE actions only', () => {
-    expect(code).toContain("action.action_type === 'SCHEDULE'")
-    expect(code).toContain('let needsInput = false')
+  it('uses shared prepareEmailCardParams for card rendering', () => {
+    expect(code).toContain('prepareEmailCardParams')
   })
 })
 
-describe('UDĚLAT disable logic — action-card-template.ts', () => {
+describe('UDĚLAT disable logic — action-card-template.ts (shared)', () => {
   const code = readSrc('src/components/action/action-card-template.ts')
+
+  it('computeNeedsInput is scoped to SCHEDULE actions only', () => {
+    expect(code).toContain("action.action_type !== 'SCHEDULE'")
+    expect(code).toContain('computeNeedsInput')
+  })
 
   it('needsInput parameter exists', () => {
     expect(code).toContain('needsInput')

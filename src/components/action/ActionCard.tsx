@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Textarea } from '@/components/ui/Input'
 import { Card } from '@/components/ui/Card'
 import { EditForm } from './EditForm'
-import { TYPE_LABEL, TYPE_VARIANT } from './action-card-template'
+import { TYPE_LABEL, TYPE_VARIANT, getActionIntent, resolvePayloadFields, computeNeedsInput } from './action-card-template'
 import { theme } from '@/config/theme'
 import type { ActionProposal, ConversationThread, CP, ConversationSummary } from '@/lib/supabase/types'
 
@@ -14,9 +14,7 @@ function daysIgnored(createdAt: string): number {
   return Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 86_400_000))
 }
 
-function getIntent(action: ActionProposal): string {
-  return action.intent_cs || action.rationale_cs || action.rationale
-}
+// getActionIntent imported from action-card-template
 
 /**
  * Render intent text with bulleted lists.
@@ -100,33 +98,12 @@ export function ActionCard({
   const summary  = conversation.summary_json as ConversationSummary | null
   const days     = daysIgnored(action.created_at)
   const adjValue = action.dollar_value * (action.offer_multiplier ?? 1)
-  const intent   = getIntent(action)
+  const intent   = getActionIntent(action)
 
-  // Payload fields used for rendering and disable logic
-  const actionPayload = action.payload as Record<string, unknown> | null
-  const payloadLocation = actionPayload?.location as string | null
-  const locationPartial = !!actionPayload?.location_partial
-  const isOnline = !!actionPayload?.is_online
-  const meetingType = (actionPayload?.meeting_type as 'address' | 'online' | 'phone') || (isOnline ? 'online' : 'address')
-  const hasHold = !!actionPayload?.hold_event_id
-
-  // Determine if UDĚLAT should be disabled:
-  // Only SCHEDULE actions can be blocked — they need location or hold.
-  // REPLY, TODO, and other action types are never blocked.
-  let doItDisabled = false
-  if (action.action_type === 'SCHEDULE') {
-    const missingInfoFields = (action.missing_info as { label: string; value: string | null }[] | null) || []
-    const hasUnfilledFields = missingInfoFields.length > 0 && missingInfoFields.some(f => f.value === null || f.value === '')
-    const needsPhysicalLocation = meetingType === 'address'
-    const hasUnfilledLocation = needsPhysicalLocation && (
-      !payloadLocation
-        ? missingInfoFields.some(f => (f.value === null || f.value === '') && f.label.includes('adresa'))
-        : locationPartial
-    )
-    doItDisabled = hasUnfilledLocation || (hasUnfilledFields && !hasHold)
-  }
-  // Conflicts show a warning but don't block UDĚLAT — user decides
-  const hasConflicts = action.action_type === 'SCHEDULE' && Array.isArray(actionPayload?.conflicts) && (actionPayload.conflicts as unknown[]).length > 0
+  // Shared payload extraction + disable logic
+  const { location: payloadLocation, locationPartial, isOnline, meetingType, hasHold, conflicts: conflictList } = resolvePayloadFields(action)
+  const doItDisabled = computeNeedsInput(action)
+  const hasConflicts = action.action_type === 'SCHEDULE' && conflictList.length > 0
 
   const getUrgencyLabel = (urgency: number): string => {
     if (urgency >= 8) return 'TEĎ'

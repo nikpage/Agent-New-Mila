@@ -151,6 +151,7 @@ export interface ConflictInfo {
 
 // Re-export ConflictCardData from action-card-template (single source of truth)
 import type { ConflictCardData } from '@/components/action/action-card-template'
+import { formatSlotText } from '@/components/action/action-card-template'
 export type { ConflictCardData } from '@/components/action/action-card-template'
 
 /**
@@ -1223,11 +1224,7 @@ async function updateActionWithHold(
   const end = new Date(hold.end_time)
   const payload = (action.payload as Record<string, unknown>) || {}
 
-  const tz = 'Europe/Prague'
-  const dateStr = start.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', timeZone: tz })
-  const startStr = start.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
-  const endStr = end.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
-  const slotText = `${dateStr}, ${startStr} - ${endStr}`
+  const slotText = formatSlotText(start, end)
 
   const locationPartial = !!payload.location_partial
   let locationStatus: 'confirmed' | 'partial' | 'missing' | null = null
