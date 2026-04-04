@@ -1,7 +1,7 @@
 import { Suspense } from 'react'
 import { notFound } from 'next/navigation'
 import { getUserById, getUserSettings } from '@/lib/db/users'
-import { getPendingActionsForBrief, getRecentlyCompletedActions } from '@/lib/db/actions'
+import { getPendingActionsForBrief, getRecentlyCompletedActions, updateAction } from '@/lib/db/actions'
 import { getEventsForToday, getUpcomingEvents } from '@/lib/db/events'
 import { getTodosDueToday, getOverdueTodos } from '@/lib/db/todos'
 import { getCPById } from '@/lib/db/counterparties'
@@ -9,6 +9,8 @@ import { getConversationById } from '@/lib/db/conversations'
 import { getCoolingConversations } from '@/lib/db/timeline'
 import { validateTriggerToken, generateActionToken } from '@/lib/auth/tokens'
 import { BriefFeed } from '@/components/brief/BriefFeed'
+import { generateBriefHeadline } from '@/lib/ai/mila-voice'
+import { getActionIntent, formatSlotText } from '@/components/action/action-card-template'
 import type { BriefData, BriefAction, CompletedActionSummary, CoolingContact } from '@/components/brief/types'
 
 interface PageProps {
@@ -58,6 +60,44 @@ async function loadBriefData(userId: string): Promise<BriefData> {
       actionToken: generateActionToken(action.id, userId),
     }
   })
+
+  // On-demand headline generation: if any action is missing a headline, generate + persist it
+  const missingHeadlines = enrichedActions.filter(a => !a.headline)
+  if (missingHeadlines.length > 0) {
+    const results = await Promise.allSettled(
+      missingHeadlines.map(async (a) => {
+        const p = a.payload as Record<string, unknown> | null
+        const holdSlotText = (a.action_type === 'SCHEDULE' && p?.start && p?.end)
+          ? formatSlotText(p.start as string, p.end as string) : null
+        const daysIgnored = Math.max(0, Math.floor((Date.now() - new Date(a.created_at).getTime()) / 86_400_000))
+        const summary = a.summaryJson
+        const hl = await generateBriefHeadline(
+          {
+            actionType: a.action_type,
+            cpName: a.cpName || '',
+            dealValue: a.dollar_value || 0,
+            urgency: a.urgency,
+            intent: getActionIntent(a),
+            daysSinceContact: daysIgnored,
+            holdSlotText,
+          },
+          summary ? { currentState: summary.currentState, risks: summary.risks, dealType: summary.dealType } : null,
+          [],
+          settings
+        )
+        // Persist so next load is instant
+        const existingPayload = (a.payload as Record<string, unknown>) || {}
+        await updateAction(a.id, { payload: { ...existingPayload, headline: hl.headline, story: hl.story } })
+        // Update in-place for this render
+        a.headline = hl.headline
+        a.story = hl.story
+      })
+    )
+    // Log failures but don't block the page
+    for (const r of results) {
+      if (r.status === 'rejected') console.error('[BriefPage] Headline generation failed:', r.reason)
+    }
+  }
 
   const enrichedCompleted: CompletedActionSummary[] = completedActions.map(action => {
     const cp = cpMap.get(action.cp_id)

@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { validateTriggerToken, generateActionToken } from '@/lib/auth/tokens'
 import { getUserSettings } from '@/lib/db/users'
-import { getPendingActionsForBrief, getRecentlyCompletedActions } from '@/lib/db/actions'
+import { getPendingActionsForBrief, getRecentlyCompletedActions, updateAction } from '@/lib/db/actions'
 import { getEventsForToday, getUpcomingEvents } from '@/lib/db/events'
 import { getTodosDueToday, getOverdueTodos } from '@/lib/db/todos'
 import { getCPById } from '@/lib/db/counterparties'
 import { getConversationById } from '@/lib/db/conversations'
 import { getCoolingConversations } from '@/lib/db/timeline'
+import { generateBriefHeadline } from '@/lib/ai/mila-voice'
+import { getActionIntent, formatSlotText } from '@/components/action/action-card-template'
 
 /**
  * POST /api/brief/[userId]/refresh
@@ -67,6 +69,41 @@ export async function POST(
         actionToken: generateActionToken(action.id, userId),
       }
     })
+
+    // On-demand headline generation for actions missing headlines
+    const missingHeadlines = enrichedActions.filter(a => !a.headline)
+    if (missingHeadlines.length > 0) {
+      const hlResults = await Promise.allSettled(
+        missingHeadlines.map(async (a) => {
+          const p = a.payload as Record<string, unknown> | null
+          const holdSlotText = (a.action_type === 'SCHEDULE' && p?.start && p?.end)
+            ? formatSlotText(p.start as string, p.end as string) : null
+          const daysIgnored = Math.max(0, Math.floor((Date.now() - new Date(a.created_at).getTime()) / 86_400_000))
+          const summary = a.summaryJson as { currentState?: string; risks?: string[]; dealType?: string | null } | null
+          const hl = await generateBriefHeadline(
+            {
+              actionType: a.action_type,
+              cpName: (a as Record<string, unknown>).cpName as string || '',
+              dealValue: a.dollar_value || 0,
+              urgency: a.urgency,
+              intent: getActionIntent(a),
+              daysSinceContact: daysIgnored,
+              holdSlotText,
+            },
+            summary ? { currentState: summary.currentState, risks: summary.risks, dealType: summary.dealType } : null,
+            [],
+            settings
+          )
+          const existingPayload = (a.payload as Record<string, unknown>) || {}
+          await updateAction(a.id, { payload: { ...existingPayload, headline: hl.headline, story: hl.story } })
+          ;(a as Record<string, unknown>).headline = hl.headline
+          ;(a as Record<string, unknown>).story = hl.story
+        })
+      )
+      for (const r of hlResults) {
+        if (r.status === 'rejected') console.error('[BriefRefresh] Headline generation failed:', r.reason)
+      }
+    }
 
     // Enrich completed actions with CP names
     const completedCpIds = [...new Set(completedActions.map(a => a.cp_id))]
