@@ -471,7 +471,10 @@ ${calendarText}
 RULES:
 - Output in ${settings.ai_language || 'Czech'}. Plain text only. No markdown, no bullet points.
 - Address user as "vy" (you). Never "uživatel".
-- headline: Bold, direct. Like a newspaper headline. Max 10 words. Name the CP. Convey the urgency through words — no labels like "REPLY" or "SCHEDULE". Examples: "Novotný POTŘEBUJE odpověď do poledne", "Zavolejte Evě do 10".
+- headline: Newspaper-style, ~5 words. Not a grammatical sentence. Use CP LAST NAME only. Content depends on action type:
+  - TODO: what needs to be done. E.g. "Král — verify financing"
+  - REPLY: why the reply is needed. E.g. "Král — price confirmation needed"
+  - SCHEDULE: purpose of the meeting. E.g. "Dvořáková — contract signing"
 - story: 2-3 sentences. What's at stake, what Mila already did, what user needs to do. Reference the user's schedule if relevant ("než dojedete na schůzku v 14:00"). Be a human assistant, not a system notification.
 - Urgency 9-10: Lead with consequence. What will the user LOSE if they don't act NOW.
 - Urgency 7-8: Clear time pressure. Name the deadline.
