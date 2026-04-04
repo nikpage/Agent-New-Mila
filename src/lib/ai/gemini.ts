@@ -407,7 +407,6 @@ async function reviewUrgency(
 ): Promise<ProposedAction[]> {
   const actionsToReview = actions
     .map((a, i) => ({ index: i, urgency: a.urgency || 0, justification: (a as Record<string, unknown>).urgencyJustification || '' }))
-    .filter(a => a.urgency >= 5)
 
   if (actionsToReview.length === 0) return actions
 
