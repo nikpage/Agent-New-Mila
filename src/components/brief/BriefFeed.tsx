@@ -35,41 +35,31 @@ function getGreeting(): string {
 export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFeedProps) {
   const { isDark, toggleTheme, ...theme } = useTheme()
   const [data, setData] = useState(initialData)
-  const [expandedId, setExpandedId] = useState<string | null>(focusActionId || null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
   const [doneIds, setDoneIds] = useState<Set<string>>(new Set())
   const [postponePickerOpen, setPostponePickerOpen] = useState(false)
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
-  // Check hash for #action-{id} deep links (from email templates)
+  // One-time: expand + scroll to focused card from email deep link, then clear URL
   useEffect(() => {
+    let targetId = focusActionId || null
     const hash = window.location.hash
-    if (hash && hash.startsWith('#action-')) {
-      const hashActionId = hash.replace('#action-', '')
-      if (hashActionId && !expandedId) {
-        setExpandedId(hashActionId)
-      }
+    if (!targetId && hash && hash.startsWith('#action-')) {
+      targetId = hash.replace('#action-', '')
+    }
+    if (targetId) {
+      setExpandedId(targetId)
+      // Clear focus/hash from URL so reload starts clean
+      const url = new URL(window.location.href)
+      url.searchParams.delete('focus')
+      url.hash = ''
+      window.history.replaceState({}, '', url.toString())
+      setTimeout(() => {
+        const el = cardRefs.current.get(targetId!)
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 100)
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Scroll to focused card on mount
-  useEffect(() => {
-    if (focusActionId) {
-      const el = cardRefs.current.get(focusActionId)
-      if (el) {
-        setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100)
-      }
-    }
-  }, [focusActionId])
-
-  // Scroll to hash-linked card
-  useEffect(() => {
-    if (expandedId && !focusActionId) {
-      const el = cardRefs.current.get(expandedId)
-      if (el) {
-        setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 100)
-      }
-    }
-  }, [expandedId, focusActionId])
 
   // Refresh function
   const refreshData = useCallback(async () => {
@@ -88,8 +78,8 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     }
   }, [userId, token])
 
-  // Hydrate on mount
-  useEffect(() => { refreshData() }, [refreshData])
+  // Skip auto-refresh on mount — SSR data is already fresh.
+  // Pull-to-refresh and post-action refreshes handle updates.
 
   // Pull-to-refresh
   const [pullY, setPullY] = useState(0)
@@ -143,9 +133,12 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: action ? getActionToken(action) : token }),
     })
-    if (!res.ok) throw new Error(`Nepodařilo se provést (${res.status})`)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `Chyba (${res.status})` }))
+      throw new Error(err.error || `Nepodařilo se (${res.status})`)
+    }
     setDoneIds(prev => new Set(prev).add(actionId))
-    setExpandedId(null)
+    setExpandedId(prev => prev === actionId ? null : prev)
   }
 
   async function handleConvertTodo(actionId: string) {
@@ -155,9 +148,10 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: action ? getActionToken(action) : token }),
     })
-    if (!res.ok) throw new Error(`Nepodařilo se převést na úkol (${res.status})`)
-    setDoneIds(prev => new Set(prev).add(actionId))
-    setExpandedId(null)
+    if (res.ok) {
+      setDoneIds(prev => new Set(prev).add(actionId))
+      setExpandedId(prev => prev === actionId ? null : prev)
+    }
   }
 
   async function handleDismiss(actionId: string) {
@@ -167,9 +161,12 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: action ? getActionToken(action) : token }),
     })
-    if (!res.ok) throw new Error(`Nepodařilo se zahodit (${res.status})`)
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: `Chyba (${res.status})` }))
+      throw new Error(err.error || `Nepodařilo se zahodit (${res.status})`)
+    }
     setDoneIds(prev => new Set(prev).add(actionId))
-    setExpandedId(null)
+    setExpandedId(prev => prev === actionId ? null : prev)
   }
 
   async function handlePostpone(actionId: string, postponeTo: string) {
@@ -179,9 +176,10 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: action ? getActionToken(action) : token, postponeTo }),
     })
-    if (!res.ok) throw new Error(`Nepodařilo se odložit (${res.status})`)
-    setData(prev => ({ ...prev, actions: prev.actions.filter(a => a.id !== actionId) }))
-    setExpandedId(null)
+    if (res.ok) {
+      setData(prev => ({ ...prev, actions: prev.actions.filter(a => a.id !== actionId) }))
+      setExpandedId(prev => prev === actionId ? null : prev)
+    }
   }
 
   async function handleRegenerateDraft(actionId: string, instruction: string): Promise<{ subject: string; body: string }> {
@@ -396,6 +394,7 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
                     onUndo={() => { setDoneIds(prev => { const next = new Set(prev); next.delete(action.id); return next }) }}
                     done={doneIds.has(action.id)}
                     showPostponePicker={expandedId === action.id && action.action_type === 'TODO' ? postponePickerOpen : false}
+                    onTogglePostponePicker={() => setPostponePickerOpen(prev => !prev)}
                     isFirst={false}
                   />
                 </div>

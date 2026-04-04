@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTheme } from '@/contexts/ThemeContext'
 import type { BriefAction } from './types'
 
@@ -11,6 +11,7 @@ interface ScheduleCardProps {
   token: string
   onRegenerateDraft: (instruction: string) => Promise<{ subject: string; body: string }>
   onSaveDraft: (data: { meetingType?: string; dynamicFields?: Record<string, string>; notes?: string }) => Promise<void>
+  registerFlush?: (fn: () => Promise<void>) => void
 }
 
 const MEETING_TYPES: { value: MeetingType; label: string }[] = [
@@ -21,7 +22,7 @@ const MEETING_TYPES: { value: MeetingType; label: string }[] = [
 
 const DURATION_CHIPS = [10, 30, 60] as const
 
-export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: ScheduleCardProps) {
+export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft, registerFlush }: ScheduleCardProps) {
   const theme = useTheme()
   const [loading, setLoading] = useState(false)
 
@@ -47,6 +48,42 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
   const [regenerating, setRegenerating] = useState(false)
   const [draftBody, setDraftBody] = useState(action.draft_body_text || '')
   const [draftLoaded, setDraftLoaded] = useState(!!action.draft_body_text)
+
+  // Debounced auto-save for draft text edits
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveDraftText = useCallback((body: string) => {
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current)
+    draftSaveTimer.current = setTimeout(() => {
+      fetch(`/api/action/${action.id}/draft`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, body }),
+      }).catch(() => {})
+    }, 1000)
+  }, [action.id, token])
+
+  // Ref for current draft body (avoids stale closures in flush callback)
+  const currentDraftRef = useRef(draftBody)
+  currentDraftRef.current = draftBody
+
+  // Register flush function so parent can force-save before execute
+  useEffect(() => {
+    if (!registerFlush) return
+    registerFlush(async () => {
+      if (draftSaveTimer.current) {
+        clearTimeout(draftSaveTimer.current)
+        draftSaveTimer.current = null
+      }
+      if (!currentDraftRef.current) return
+      await fetch(`/api/action/${action.id}/draft`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, body: currentDraftRef.current }),
+      }).catch(() => {})
+    })
+  }, [registerFlush, action.id, token])
+
+  const summary = action.summaryJson
 
   // Format slot — uses adjustedEnd so duration changes are reflected
   const slotText = holdStart && adjustedEnd ? (() => {
@@ -97,7 +134,7 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
   }
 
   async function handleLocationBlur() {
-    if (location.trim()) await onSaveDraft({ dynamicFields: { 'Adresa schůzky': location } })
+    if (location.trim()) await onSaveDraft({ dynamicFields: { 'adresa schůzky': location } })
   }
 
   async function handleMeetingLinkBlur() {
@@ -129,15 +166,23 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
   })
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
       {/* Slot */}
-      {slotText && (
+      {slotText ? (
         <div style={{
           padding: theme.spacing.md, backgroundColor: theme.colors.background,
           borderRadius: theme.borderRadius.md, fontSize: theme.typography.sizes.sm,
           color: theme.colors.text, fontWeight: theme.typography.weights.medium,
         }}>
           {slotText}
+        </div>
+      ) : (
+        <div style={{
+          padding: theme.spacing.md, backgroundColor: theme.colors.warningBg,
+          borderRadius: theme.borderRadius.md, fontSize: theme.typography.sizes.sm,
+          color: theme.colors.warning, fontWeight: theme.typography.weights.medium,
+        }}>
+          Termín zatím nebyl stanoven — zvolte čas přes Upravit nebo klikněte Potvrdit pro návrh.
         </div>
       )}
 
@@ -284,16 +329,19 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft }: 
           {loading ? 'Mila připravuje koncept...' : ''}
         </div>
       ) : (
-        <div>
+        <div style={{
+          paddingTop: '14px',
+          borderTop: `1px solid ${theme.colors.border}`,
+        }}>
           <div style={{
-            fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.semibold,
-            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em',
-            marginBottom: theme.spacing.xs,
+            fontSize: '10px', fontWeight: theme.typography.weights.semibold,
+            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em',
+            marginBottom: '8px',
           }}>
             Zpráva pro {action.cpName || 'protistranu'}
           </div>
           <textarea
-            value={draftBody} onChange={e => setDraftBody(e.target.value)} rows={5}
+            value={draftBody} onChange={e => { setDraftBody(e.target.value); saveDraftText(e.target.value) }} rows={5}
             style={{
               width: '100%', padding: theme.spacing.md,
               border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,

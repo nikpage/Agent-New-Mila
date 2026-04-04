@@ -10,6 +10,7 @@ interface ReplyCardProps {
   onRegenerateDraft: (instruction: string) => Promise<{ subject: string; body: string }>
   onSaveDraft: (data: { dynamicFields?: Record<string, string> }) => Promise<void>
   onConvertTodo?: (question: string) => Promise<void>
+  registerFlush?: (fn: () => Promise<void>) => void
 }
 
 /** Item 19: Detect input type from label text */
@@ -42,7 +43,7 @@ function DraftSkeleton() {
   )
 }
 
-export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onConvertTodo }: ReplyCardProps) {
+export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onConvertTodo, registerFlush }: ReplyCardProps) {
   const theme = useTheme()
   const [draftSubject, setDraftSubject] = useState(action.draft_subject || '')
   const [draftBody, setDraftBody] = useState(action.draft_body_text || '')
@@ -51,6 +52,45 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
   const [instruction, setInstruction] = useState('')
   const [regenerating, setRegenerating] = useState(false)
   const [todoLoading, setTodoLoading] = useState<string | null>(null)
+  const [todoConverted, setTodoConverted] = useState<Set<string>>(new Set())
+
+  // Ref for current draft values (avoids stale closures in flush callback)
+  const currentDraftRef = useRef({ subject: draftSubject, body: draftBody })
+  currentDraftRef.current = { subject: draftSubject, body: draftBody }
+
+  // Register flush function so parent can force-save before execute
+  useEffect(() => {
+    if (!registerFlush) return
+    registerFlush(async () => {
+      if (draftSaveTimer.current) {
+        clearTimeout(draftSaveTimer.current)
+        draftSaveTimer.current = null
+      }
+      if (!currentDraftRef.current.body) return
+      await fetch(`/api/action/${action.id}/draft`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token,
+          subject: currentDraftRef.current.subject,
+          body: currentDraftRef.current.body,
+        }),
+      }).catch(() => {})
+    })
+  }, [registerFlush, action.id, token])
+
+  // Debounced auto-save for draft text edits
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const saveDraftText = useCallback((subject: string, body: string) => {
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current)
+    draftSaveTimer.current = setTimeout(() => {
+      fetch(`/api/action/${action.id}/draft`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, subject, body }),
+      }).catch(() => {})
+    }, 1000)
+  }, [action.id, token])
 
   const summary = action.summaryJson
   const payload = action.payload as Record<string, unknown> | null
@@ -69,14 +109,23 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
     return initial
   })
 
-  // Item 22: Debounce draft save when answers change
+  // Item 22: Debounce draft save when answers change, then regenerate draft
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const saveAnswers = useCallback((updated: Record<string, string>) => {
     if (saveTimer.current) clearTimeout(saveTimer.current)
-    saveTimer.current = setTimeout(() => {
-      onSaveDraft({ dynamicFields: updated })
+    saveTimer.current = setTimeout(async () => {
+      await onSaveDraft({ dynamicFields: updated })
+      // All answers filled? Regenerate draft with the new info
+      const allFilled = missingInfo.every(f => updated[f.label]?.trim())
+      if (allFilled) {
+        try {
+          const result = await onRegenerateDraft('Doplň odpovědi do konceptu')
+          setDraftSubject(result.subject)
+          setDraftBody(result.body)
+        } catch { /* ignore regen failure */ }
+      }
     }, 800)
-  }, [onSaveDraft])
+  }, [onSaveDraft, onRegenerateDraft, missingInfo])
 
   // Auto-load draft on mount
   useEffect(() => {
@@ -118,13 +167,16 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
     setTodoLoading(label)
     try {
       await onConvertTodo(label)
+      // Show success feedback
+      setTodoConverted(prev => new Set(prev).add(label))
+      setTimeout(() => setTodoConverted(prev => { const next = new Set(prev); next.delete(label); return next }), 2500)
     } finally {
       setTodoLoading(null)
     }
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.md }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
       {/* Item 23: Last CP message */}
       {lastCpMessage && (
         <div style={{
@@ -230,15 +282,15 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
                   {onConvertTodo && (
                     <button
                       onClick={() => handleConvertTodo(field.label)}
-                      disabled={todoLoading !== null}
+                      disabled={todoLoading === field.label || todoConverted.has(field.label)}
                       title="Vytvořit úkol pro zjištění"
                       style={{
                         padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
-                        backgroundColor: theme.colors.secondary,
-                        color: theme.colors.textMuted,
-                        border: `1px solid ${theme.colors.border}`,
+                        backgroundColor: todoConverted.has(field.label) ? theme.colors.surface : theme.colors.secondary,
+                        color: todoConverted.has(field.label) ? theme.colors.primary : theme.colors.textMuted,
+                        border: `1px solid ${todoConverted.has(field.label) ? theme.colors.primary : theme.colors.border}`,
                         borderRadius: theme.borderRadius.md,
-                        cursor: todoLoading ? 'default' : 'pointer',
+                        cursor: todoLoading === field.label || todoConverted.has(field.label) ? 'default' : 'pointer',
                         fontSize: theme.typography.sizes.xs,
                         fontWeight: theme.typography.weights.medium,
                         whiteSpace: 'nowrap',
@@ -246,7 +298,7 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
                         flexShrink: 0,
                       }}
                     >
-                      {todoLoading === field.label ? '...' : 'Zjistím'}
+                      {todoLoading === field.label ? '...' : todoConverted.has(field.label) ? '✓ Úkol' : 'Zjistím'}
                     </button>
                   )}
                 </div>
@@ -260,10 +312,14 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
       {!draftLoaded ? (
         loading ? <DraftSkeleton /> : null
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: theme.spacing.sm }}>
+        <div style={{
+          display: 'flex', flexDirection: 'column', gap: theme.spacing.sm,
+          paddingTop: '14px',
+          borderTop: `1px solid ${theme.colors.border}`,
+        }}>
           <div style={{
-            fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.semibold,
-            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em',
+            fontSize: '10px', fontWeight: theme.typography.weights.semibold,
+            color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.08em',
           }}>
             Koncept {channel === 'whatsapp' ? 'zprávy' : 'emailu'}
           </div>
@@ -271,7 +327,7 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
             <input
               type="text"
               value={draftSubject}
-              onChange={e => setDraftSubject(e.target.value)}
+              onChange={e => { setDraftSubject(e.target.value); saveDraftText(e.target.value, draftBody) }}
               style={{
                 width: '100%', padding: `${theme.spacing.sm} ${theme.spacing.md}`,
                 border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
@@ -282,13 +338,13 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
           )}
           <textarea
             value={draftBody}
-            onChange={e => setDraftBody(e.target.value)}
+            onChange={e => { setDraftBody(e.target.value); saveDraftText(draftSubject, e.target.value) }}
             rows={6}
             style={{
               width: '100%', padding: theme.spacing.md,
               border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
               fontSize: theme.typography.sizes.base, color: theme.colors.text,
-              backgroundColor: theme.colors.surface, outline: 'none',
+              backgroundColor: theme.colors.background, outline: 'none',
               resize: 'vertical', lineHeight: 1.6, fontFamily: theme.typography.fontFamily,
             }}
           />

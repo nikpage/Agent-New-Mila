@@ -15,7 +15,7 @@ export async function POST(
   try {
     const { id: actionId } = await params
     const body = await request.json()
-    const { token } = body
+    const { token, description: customDescription } = body
 
     if (!token) {
       return NextResponse.json({ error: 'Missing token' }, { status: 401 })
@@ -30,8 +30,8 @@ export async function POST(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
-    // Create a TODO from the action's intent
-    const description = action.intent_cs || action.rationale_cs || action.rationale
+    // Create a TODO — use custom description if provided (question-specific todo)
+    const description = customDescription || action.intent_cs || action.rationale_cs || action.rationale
     const todo = await createTodo({
       user_id: action.user_id,
       description,
@@ -39,8 +39,11 @@ export async function POST(
       cp_id: action.cp_id,
     })
 
-    // Dismiss the original action
-    await dismissAction(actionId)
+    // Only dismiss the action if this is a full conversion (no custom description).
+    // Question-specific todos (with custom description) keep the parent action alive.
+    if (!customDescription) {
+      await dismissAction(actionId)
+    }
 
     return NextResponse.json({
       success: true,

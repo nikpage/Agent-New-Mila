@@ -172,8 +172,11 @@ export async function PUT(
       })
 
       // Batch all payload updates into one write to avoid race conditions
-      const locationField = missingInfo.find(f => f.label.includes('adresa'))
-      const locationValue = locationField ? dynamicFields[locationField.label] : undefined
+      const locationField = missingInfo.find(f => f.label.toLowerCase().includes('adresa'))
+      // Check missing_info field first, then direct dynamicFields key (from ScheduleCard)
+      const locationValue = locationField
+        ? dynamicFields[locationField.label]
+        : (dynamicFields['adresa schůzky'] || dynamicFields['Adresa schůzky'] || undefined)
       const payloadUpdates: Record<string, unknown> = {}
 
       if (locationValue) {
@@ -190,6 +193,16 @@ export async function PUT(
         }
         payloadUpdates.location = resolvedLocation
         payloadUpdates.location_partial = locationPartial
+      }
+
+      // Persist schedule-specific fields (duration/end changes from ScheduleCard)
+      if (action.action_type === 'SCHEDULE') {
+        if (dynamicFields.end) {
+          payloadUpdates.end = dynamicFields.end
+        }
+        if (dynamicFields.duration) {
+          payloadUpdates.duration = parseInt(dynamicFields.duration, 10)
+        }
       }
 
       if (typeof isOnline === 'boolean' && action.action_type === 'SCHEDULE') {

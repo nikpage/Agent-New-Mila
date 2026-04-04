@@ -31,11 +31,12 @@ interface BriefCardProps {
   onDismiss: () => Promise<void>
   onPostpone: (postponeTo: string) => Promise<void>
   onRegenerateDraft: (instruction: string) => Promise<{ subject: string; body: string }>
-  onSaveDraft: (data: { meetingType?: string; dynamicFields?: Record<string, string>; notes?: string }) => Promise<void>
+  onSaveDraft: (data: { meetingType?: string; dynamicFields?: Record<string, string>; notes?: string; subject?: string; body?: string }) => Promise<void>
   onConvertQuestionTodo?: (question: string) => Promise<void>
   onUndo?: () => void
   done?: boolean
   showPostponePicker?: boolean
+  onTogglePostponePicker?: () => void
   isFirst?: boolean
 }
 
@@ -50,6 +51,7 @@ export function BriefCard({
   action, actionToken, expanded, onToggle,
   onExecute, onConvertTodo, onDismiss, onPostpone,
   onRegenerateDraft, onSaveDraft, onConvertQuestionTodo, onUndo, done, showPostponePicker,
+  onTogglePostponePicker,
 }: BriefCardProps) {
   const theme = useTheme()
 
@@ -61,13 +63,21 @@ export function BriefCard({
   const [ctaLoading, setCtaLoading] = useState<string | null>(null)
   const [ctaError, setCtaError] = useState<string | null>(null)
 
+  // Flush ref: child cards (ReplyCard/ScheduleCard) register a function
+  // that force-saves any pending draft edits before execute sends stale data
+  const flushRef = useRef<(() => Promise<void>) | null>(null)
+
   async function handleCta(label: string, fn: () => Promise<void>) {
     setCtaLoading(label)
     setCtaError(null)
     try {
+      // Flush pending draft saves before executing (prevents sending stale text)
+      if (label === 'primary' && flushRef.current) {
+        await flushRef.current()
+      }
       await fn()
-    } catch (err) {
-      setCtaError(err instanceof Error ? err.message : 'Něco se pokazilo')
+    } catch (e) {
+      setCtaError(e instanceof Error ? e.message : 'Nepodařilo se')
     } finally {
       setCtaLoading(null)
     }
@@ -118,10 +128,10 @@ export function BriefCard({
     if (expanded || !swiping) { setSwipeX(0); setSwiping(false); return }
     if (swipeX > SWIPE_THRESHOLD) {
       setSwipedAway(true); setSwipeX(window.innerWidth)
-      setTimeout(() => onExecute(), 300)
+      setTimeout(() => { onExecute().catch(() => { setSwipedAway(false); setSwipeX(0) }) }, 300)
     } else if (swipeX < -SWIPE_THRESHOLD) {
       setSwipedAway(true); setSwipeX(-window.innerWidth)
-      setTimeout(() => onDismiss(), 300)
+      setTimeout(() => { onDismiss().catch(() => { setSwipedAway(false); setSwipeX(0) }) }, 300)
     } else {
       setSwipeX(0)
     }
@@ -380,12 +390,12 @@ export function BriefCard({
         }}>
           <div style={{ minHeight: 0, overflow: expanded ? 'visible' : 'hidden' }}>
             <div style={{
-              padding: '2px 15px 16px 18px',
+              padding: '14px 15px 18px 18px',
               borderTop: '1px solid var(--brd)',
             }}>
               {/* Conflict section (SCHEDULE only) */}
               {hasConflicts && action.action_type === 'SCHEDULE' && (
-                <div style={{ marginBottom: '12px' }}>
+                <div style={{ marginBottom: '16px' }}>
                   <ConflictSection
                     conflicts={conflicts}
                     cpName={action.cpName || ''}
@@ -428,6 +438,7 @@ export function BriefCard({
                   onRegenerateDraft={onRegenerateDraft}
                   onSaveDraft={onSaveDraft}
                   onConvertTodo={onConvertQuestionTodo}
+                  registerFlush={(fn) => { flushRef.current = fn }}
                 />
               )}
               {action.action_type === 'SCHEDULE' && (
@@ -436,6 +447,7 @@ export function BriefCard({
                   token={actionToken}
                   onRegenerateDraft={onRegenerateDraft}
                   onSaveDraft={onSaveDraft}
+                  registerFlush={(fn) => { flushRef.current = fn }}
                 />
               )}
               {action.action_type === 'TODO' && (
@@ -451,7 +463,9 @@ export function BriefCard({
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '8px',
-                marginTop: '16px',
+                marginTop: '20px',
+                paddingTop: '16px',
+                borderTop: '1px solid var(--brd)',
               }}>
                 <button
                   onClick={() => handleCta('primary', onExecute)}
@@ -480,7 +494,7 @@ export function BriefCard({
                 <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                   {action.action_type === 'TODO' && (
                     <button
-                      onClick={() => handleCta('postpone', async () => { /* Toggle postpone picker via parent */ })}
+                      onClick={() => { if (onTogglePostponePicker) onTogglePostponePicker() }}
                       style={{
                         fontFamily: 'system-ui, -apple-system, sans-serif',
                         fontWeight: 500,

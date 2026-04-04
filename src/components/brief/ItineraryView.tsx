@@ -85,34 +85,79 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone, userId, t
     const newEvents = [...localEvents]
     const [moved] = newEvents.splice(draggedIdx, 1)
     newEvents.splice(targetIdx, 0, moved)
-    setLocalEvents(newEvents)
 
-    // If the moved event has a different position, we could persist the time change
-    // For now, this is visual reordering
-  }, [draggedIdx, localEvents])
+    // Recalculate time for the moved event based on its new neighbor
+    const neighbor = newEvents[targetIdx > 0 ? targetIdx - 1 : targetIdx + 1]
+    if (neighbor && moved) {
+      const moveDuration = new Date(moved.end_time).getTime() - new Date(moved.start_time).getTime()
+      // Place after the previous event (or at the previous event's start if first)
+      const newStart = targetIdx > 0
+        ? new Date(neighbor.end_time)
+        : new Date(neighbor.start_time)
+      // If placing before the first event, shift back by duration
+      if (targetIdx === 0 && newEvents.length > 1) {
+        const firstStart = new Date(newEvents[1].start_time)
+        newStart.setTime(firstStart.getTime() - moveDuration - 15 * 60000) // 15 min gap
+      }
+      const newEnd = new Date(newStart.getTime() + moveDuration)
+
+      moved.start_time = newStart.toISOString()
+      moved.end_time = newEnd.toISOString()
+
+      persistReschedule(moved.id, moved.start_time, moved.end_time)
+    }
+
+    setLocalEvents(newEvents)
+  }, [draggedIdx, localEvents, persistReschedule])
 
   const handleDragEnd = useCallback(() => {
     setDraggedIdx(null)
     setDragOverIdx(null)
   }, [])
 
-  // Touch-based drag for mobile
+  // Touch-based drag for mobile — requires long-press (400ms hold) to activate
   const touchStartY = useRef(0)
   const [touchDrag, setTouchDrag] = useState<{ idx: number; deltaY: number } | null>(null)
+  const touchHoldTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const touchActivated = useRef(false)
 
   const handleTouchStart = useCallback((idx: number, e: React.TouchEvent) => {
     touchStartY.current = e.touches[0].clientY
-    setTouchDrag({ idx, deltaY: 0 })
+    touchActivated.current = false
+    // Start long-press timer — only activate drag after 400ms hold
+    touchHoldTimer.current = setTimeout(() => {
+      touchActivated.current = true
+      setTouchDrag({ idx, deltaY: 0 })
+    }, 400)
   }, [])
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!touchDrag) return
-    const dy = e.touches[0].clientY - touchStartY.current
-    setTouchDrag(prev => prev ? { ...prev, deltaY: dy } : null)
+    const dy = Math.abs(e.touches[0].clientY - touchStartY.current)
+    // If finger moves >10px before long-press fires, it's a scroll — cancel drag
+    if (!touchActivated.current && dy > 10) {
+      if (touchHoldTimer.current) {
+        clearTimeout(touchHoldTimer.current)
+        touchHoldTimer.current = null
+      }
+      return
+    }
+    if (!touchActivated.current || !touchDrag) return
+    const deltaY = e.touches[0].clientY - touchStartY.current
+    setTouchDrag(prev => prev ? { ...prev, deltaY } : null)
   }, [touchDrag])
 
   const handleTouchEnd = useCallback(() => {
-    if (!touchDrag) return
+    // Clean up hold timer
+    if (touchHoldTimer.current) {
+      clearTimeout(touchHoldTimer.current)
+      touchHoldTimer.current = null
+    }
+    if (!touchActivated.current || !touchDrag) {
+      touchActivated.current = false
+      setTouchDrag(null)
+      return
+    }
+    touchActivated.current = false
     const { idx, deltaY } = touchDrag
     const rowHeight = 50 // approximate
     const moveBy = Math.round(deltaY / rowHeight)
@@ -122,11 +167,25 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone, userId, t
         const newEvents = [...localEvents]
         const [moved] = newEvents.splice(idx, 1)
         newEvents.splice(newIdx, 0, moved)
+
+        // Recalculate time for the moved event
+        const neighbor = newEvents[newIdx > 0 ? newIdx - 1 : newIdx + 1]
+        if (neighbor && moved) {
+          const moveDuration = new Date(moved.end_time).getTime() - new Date(moved.start_time).getTime()
+          const newStart = newIdx > 0
+            ? new Date(neighbor.end_time)
+            : new Date(new Date(newEvents[1]?.start_time || neighbor.start_time).getTime() - moveDuration - 15 * 60000)
+          const newEnd = new Date(newStart.getTime() + moveDuration)
+          moved.start_time = newStart.toISOString()
+          moved.end_time = newEnd.toISOString()
+          persistReschedule(moved.id, moved.start_time, moved.end_time)
+        }
+
         setLocalEvents(newEvents)
       }
     }
     setTouchDrag(null)
-  }, [touchDrag, localEvents])
+  }, [touchDrag, localEvents, persistReschedule])
 
   if (localEvents.length === 0) return null
 
@@ -194,12 +253,12 @@ export function ItineraryView({ todayEvents, upcomingEvents, timezone, userId, t
                 {formatTime(event.start_time, timezone)}
               </div>
 
-              {/* Status dot */}
+              {/* Status dot — accent for busy events, border for free, hold gets muted */}
               <div style={{
                 width: '7px',
                 height: '7px',
                 borderRadius: '50%',
-                background: isMilaAdded ? 'var(--uh)' : isBusy ? 'var(--acc)' : 'var(--brd)',
+                background: isHold ? 'var(--sub)' : isBusy ? 'var(--acc)' : 'var(--brd)',
                 flexShrink: 0,
                 marginTop: '5px',
                 transition: 'background .3s',
