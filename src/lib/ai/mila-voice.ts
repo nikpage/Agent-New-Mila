@@ -475,7 +475,7 @@ RULES:
   - TODO: what needs to be done. E.g. "Král — verify financing"
   - REPLY: why the reply is needed. E.g. "Král — price confirmation needed"
   - SCHEDULE: purpose of the meeting. E.g. "Dvořáková — contract signing"
-- story: 2-3 sentences. What's at stake, what Mila already did, what user needs to do. Reference the user's schedule if relevant ("než dojedete na schůzku v 14:00"). Be a human assistant, not a system notification.
+- story: 1-3 HIGH-VALUE sentences only. Elaborate on the action — do NOT repeat data shown elsewhere on the card (CP name, action type, slot times). Focus on: what is at stake, why now, insights from the conversation or timeline. This is where urgency is emphasized.
 - Urgency 9-10: Lead with consequence. What will the user LOSE if they don't act NOW.
 - Urgency 7-8: Clear time pressure. Name the deadline.
 - Urgency 1-6: Professional, calm. State the facts.

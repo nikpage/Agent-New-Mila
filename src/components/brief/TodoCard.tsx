@@ -78,16 +78,28 @@ export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardPro
               </ul>
             )
           }
-          // Single paragraph — split by sentence separators (. — ;) into bullet list
+          // Single paragraph — split by em dash (—) into bullet list
+          // Don't split on periods — too many false positives (dates like "17. dubna", abbreviations)
           const text = lines[0]
-          const sentences = text.split(/(?<=\.)\s+|(?<=—)\s+|(?<=;)\s+/).map(s => s.trim()).filter(Boolean)
-          if (sentences.length > 1) {
+          const parts = text.split(/\s*—\s*/).map(s => s.trim()).filter(Boolean)
+          if (parts.length > 1) {
             return (
               <ul style={{ margin: 0, paddingLeft: '20px', listStyleType: 'disc' }}>
-                {sentences.map((s, i) => (
+                {parts.map((s, i) => (
                   <li key={i} style={{ marginBottom: '6px' }}>{s}</li>
                 ))}
               </ul>
+            )
+          }
+          // Try splitting on numbered markers like (1), (2), (3)
+          const numbered = text.split(/(?=\(\d+\)\s)/).map(s => s.trim()).filter(Boolean)
+          if (numbered.length > 1) {
+            return (
+              <ol style={{ margin: 0, paddingLeft: '20px' }}>
+                {numbered.map((s, i) => (
+                  <li key={i} style={{ marginBottom: '6px' }}>{s.replace(/^\(\d+\)\s*/, '')}</li>
+                ))}
+              </ol>
             )
           }
           return <div>{intent}</div>
