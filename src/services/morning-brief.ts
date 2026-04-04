@@ -256,6 +256,69 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       })
     }
 
+    // ─── Generate AI headlines for ALL actions BEFORE filtering ───────────────
+    // Headlines are persisted on the action so they're ready when the action surfaces
+    // in a later brief (e.g. after a TODO is completed and the suppressed REPLY appears).
+    const briefSettings = await getUserSettings(userId)
+    const calendarForHeadlines = events.map(e => ({
+      time: new Date(e.start_time).toLocaleTimeString('cs-CZ', {
+        hour: '2-digit', minute: '2-digit', hour12: false, timeZone: user.email_timezone,
+      }),
+      title: e.title || 'Event',
+    }))
+
+    const allHeadlineResults = await Promise.allSettled(
+      briefActions.map(ba => {
+        const p = ba.action.payload as Record<string, unknown> | null
+        const holdSlotText = (ba.action.action_type === 'SCHEDULE' && p?.start && p?.end)
+          ? formatSlotText(p.start as string, p.end as string) : null
+        const daysIgnored = Math.max(0, Math.floor((Date.now() - new Date(ba.action.created_at).getTime()) / 86_400_000))
+        return generateBriefHeadline(
+          {
+            actionType: ba.action.action_type,
+            cpName: ba.cpName,
+            dealValue: ba.action.dollar_value || 0,
+            urgency: ba.action.urgency,
+            intent: getActionIntent(ba.action),
+            daysSinceContact: daysIgnored,
+            holdSlotText,
+          },
+          ba.summary ? { currentState: ba.summary.currentState, risks: ba.summary.risks, dealType: ba.summary.dealType } : null,
+          calendarForHeadlines,
+          briefSettings
+        )
+      })
+    )
+
+    // Build headline map and persist on ALL actions (including those that will be filtered)
+    const allHeadlineActions: HeadlineAction[] = briefActions.map((ba, i) => {
+      const result = allHeadlineResults[i]
+      const hl = result.status === 'fulfilled' ? result.value : { headline: ba.cpName, story: ba.action.intent_cs || ba.action.rationale || '' }
+      const p = ba.action.payload as Record<string, unknown> | null
+      const slotText = (ba.action.action_type === 'SCHEDULE' && p?.start && p?.end)
+        ? formatSlotText(p.start as string, p.end as string) : null
+      return {
+        id: ba.action.id,
+        actionType: ba.action.action_type,
+        cpName: ba.cpName,
+        urgency: ba.action.urgency,
+        headline: hl.headline,
+        story: hl.story,
+        slotText,
+      }
+    })
+
+    await Promise.allSettled(
+      allHeadlineActions.map(ha => {
+        const ba = briefActions.find(b => b.action.id === ha.id)
+        if (!ba) return Promise.resolve()
+        const existingPayload = (ba.action.payload as Record<string, unknown>) || {}
+        return updateAction(ha.id, {
+          payload: { ...existingPayload, headline: ha.headline, story: ha.story },
+        })
+      })
+    )
+
     // ─── Order and filter actions for the brief ─────────────────────────────
     // 1. Group by conversation
     // 2. Within each conversation: if both TODO (prep) and REPLY/SCHEDULE (CP action) exist,
@@ -347,67 +410,10 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       briefSubject = `Mila: ${briefActions.length} akci`
     }
 
-    // Generate AI headlines per action (parallel, with fallback)
-    const briefSettings = await getUserSettings(userId)
-    const calendarForHeadlines = events.map(e => ({
-      time: new Date(e.start_time).toLocaleTimeString('cs-CZ', {
-        hour: '2-digit', minute: '2-digit', hour12: false, timeZone: user.email_timezone,
-      }),
-      title: e.title || 'Event',
-    }))
-
-    const headlineResults = await Promise.allSettled(
-      briefActions.map(ba => {
-        const p = ba.action.payload as Record<string, unknown> | null
-        const holdSlotText = (ba.action.action_type === 'SCHEDULE' && p?.start && p?.end)
-          ? formatSlotText(p.start as string, p.end as string) : null
-        const daysIgnored = Math.max(0, Math.floor((Date.now() - new Date(ba.action.created_at).getTime()) / 86_400_000))
-        return generateBriefHeadline(
-          {
-            actionType: ba.action.action_type,
-            cpName: ba.cpName,
-            dealValue: ba.action.dollar_value || 0,
-            urgency: ba.action.urgency,
-            intent: getActionIntent(ba.action),
-            daysSinceContact: daysIgnored,
-            holdSlotText,
-          },
-          ba.summary ? { currentState: ba.summary.currentState, risks: ba.summary.risks, dealType: ba.summary.dealType } : null,
-          calendarForHeadlines,
-          briefSettings
-        )
-      })
-    )
-
-    // Build headline actions with fallbacks
-    const headlineActions: HeadlineAction[] = briefActions.map((ba, i) => {
-      const result = headlineResults[i]
-      const hl = result.status === 'fulfilled' ? result.value : { headline: ba.cpName, story: ba.action.intent_cs || ba.action.rationale || '' }
-      const p = ba.action.payload as Record<string, unknown> | null
-      const slotText = (ba.action.action_type === 'SCHEDULE' && p?.start && p?.end)
-        ? formatSlotText(p.start as string, p.end as string) : null
-      return {
-        id: ba.action.id,
-        actionType: ba.action.action_type,
-        cpName: ba.cpName,
-        urgency: ba.action.urgency,
-        headline: hl.headline,
-        story: hl.story,
-        slotText,
-      }
-    })
-
-    // Persist headlines on actions so the web brief page can display them
-    await Promise.allSettled(
-      headlineActions.map(ha => {
-        const ba = briefActions.find(b => b.action.id === ha.id)
-        if (!ba) return Promise.resolve()
-        const existingPayload = (ba.action.payload as Record<string, unknown>) || {}
-        return updateAction(ha.id, {
-          payload: { ...existingPayload, headline: ha.headline, story: ha.story },
-        })
-      })
-    )
+    // Headlines already generated + persisted for ALL actions above the filter.
+    // Now filter to only the actions that survived for the brief email.
+    const briefActionIds = new Set(briefActions.map(ba => ba.action.id))
+    const headlineActions = allHeadlineActions.filter(ha => briefActionIds.has(ha.id))
 
     // Build brief URL with trigger token
     const triggerToken = generateTriggerToken(userId)
