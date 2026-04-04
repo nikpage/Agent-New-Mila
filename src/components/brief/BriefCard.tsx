@@ -405,29 +405,36 @@ export function BriefCard({
                 </div>
               )}
 
-              {/* Shared context block — all card types */}
+              {/* Shared context block — all card types, collapsible, default closed */}
               {action.summaryJson?.currentState && (
-                <div style={{ marginBottom: '12px' }}>
-                  <div style={{
+                <details style={{ marginBottom: '12px' }}>
+                  <summary style={{
                     fontSize: '11px',
                     fontWeight: 600,
                     letterSpacing: '0.05em',
                     textTransform: 'uppercase',
                     color: 'var(--mtd)',
-                    marginBottom: '4px',
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    listStyle: 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
                   }}>
+                    <span style={{ fontSize: '9px', transition: 'transform .2s' }}>▸</span>
                     Kontext
-                  </div>
+                  </summary>
                   <div style={{
                     fontSize: '13.5px',
                     color: 'var(--txt)',
                     lineHeight: 1.6,
                     borderLeft: '2px solid var(--brd)',
                     paddingLeft: '16px',
+                    marginTop: '6px',
                   }}>
                     {action.summaryJson.currentState}
                   </div>
-                </div>
+                </details>
               )}
 
               {/* Type-specific content */}

@@ -31,26 +31,55 @@ export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardPro
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-      {/* Task description */}
+      {/* Task description — bullet/numbered list */}
       <div style={{
-        display: 'flex',
-        gap: theme.spacing.sm,
         padding: theme.spacing.md,
         backgroundColor: theme.colors.background,
         borderRadius: theme.borderRadius.md,
         borderLeft: `3px solid ${theme.colors.primary}`,
+        fontSize: theme.typography.sizes.base,
+        color: theme.colors.text,
+        lineHeight: 1.6,
       }}>
-        <div style={{
-          width: '18px', height: '18px', borderRadius: '4px',
-          border: `2px solid ${theme.colors.border}`,
-          flexShrink: 0, marginTop: '2px',
-        }} />
-        <div style={{
-          fontSize: theme.typography.sizes.base, color: theme.colors.text,
-          lineHeight: 1.6,
-        }}>
-          {intent}
-        </div>
+        {(() => {
+          if (!intent) return null
+          const lines = intent.split('\n').map(l => l.trim()).filter(Boolean)
+          // Detect if content has numbered (1. 2. 3.) or dashed (- ) list items
+          const hasNumbered = lines.some(l => /^\d+\.\s/.test(l))
+          const hasDashed = lines.some(l => l.startsWith('- '))
+
+          if (hasNumbered) {
+            return (
+              <ol style={{ margin: 0, paddingLeft: '20px' }}>
+                {lines.map((line, i) => {
+                  const cleaned = line.replace(/^\d+\.\s*/, '')
+                  return <li key={i} style={{ marginBottom: '4px' }}>{cleaned}</li>
+                })}
+              </ol>
+            )
+          }
+          if (hasDashed) {
+            return (
+              <ul style={{ margin: 0, paddingLeft: '20px', listStyleType: 'disc' }}>
+                {lines.map((line, i) => {
+                  const cleaned = line.replace(/^-\s*/, '')
+                  return <li key={i} style={{ marginBottom: '4px' }}>{cleaned}</li>
+                })}
+              </ul>
+            )
+          }
+          // Fallback: split into bullets if multiple sentences, otherwise plain text
+          if (lines.length > 1) {
+            return (
+              <ul style={{ margin: 0, paddingLeft: '20px', listStyleType: 'disc' }}>
+                {lines.map((line, i) => (
+                  <li key={i} style={{ marginBottom: '4px' }}>{line}</li>
+                ))}
+              </ul>
+            )
+          }
+          return <div>{intent}</div>
+        })()}
       </div>
 
       {/* Due date + Item 26: urgency context */}

@@ -528,10 +528,10 @@ function generateBriefEmailHtml(
     <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">${greeting}</h1>
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${headline}</p>
 
-    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl }) => {
+    ${actions.map(({ action, cpName, cpRole, topic, summary, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl }) => {
       return getActionCardEmailHtml(prepareEmailCardParams(
         action,
-        { cpName, cpRole, topic },
+        { cpName, cpRole, topic, context: summary?.currentState || null },
         { actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl },
       ))
     }).join('')}
@@ -966,10 +966,10 @@ function generateInstantNotifyEmailHtml(actions: BriefAction[], header: string, 
     <h1 style="font-size: 24px; margin-bottom: 8px; color: ${theme.colors.text};">${header}</h1>
     <p style="color: ${theme.colors.textMuted}; font-size: 16px; line-height: 1.5; margin-bottom: 32px;">${body}</p>
 
-    ${actions.map(({ action, cpName, cpRole, topic, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl }) => {
+    ${actions.map(({ action, cpName, cpRole, topic, summary, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl }) => {
       return getActionCardEmailHtml(prepareEmailCardParams(
         action,
-        { cpName, cpRole, topic },
+        { cpName, cpRole, topic, context: summary?.currentState || null },
         { actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl },
       ))
     }).join('')}

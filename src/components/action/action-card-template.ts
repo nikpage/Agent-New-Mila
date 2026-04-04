@@ -114,7 +114,7 @@ export function computeNeedsInput(action: Pick<ActionProposal, 'action_type' | '
  */
 export function prepareEmailCardParams(
   action: ActionProposal,
-  meta: { cpName: string; cpRole: string | null; topic: string },
+  meta: { cpName: string; cpRole: string | null; topic: string; context?: string | null },
   urls: {
     actionUrl: string; editUrl: string; executeUrl: string; todoUrl: string; blacklistUrl: string
     resolveRescheduleUrl?: string | null; resolveCancelUrl?: string | null
@@ -123,6 +123,7 @@ export function prepareEmailCardParams(
   tz: string = PRAGUE_TZ,
 ): ActionCardEmailParams {
   const pf = resolvePayloadFields(action)
+  const p = action.payload as Record<string, unknown> | null
   const needsInput = computeNeedsInput(action)
 
   let slotText: string | null = null
@@ -159,6 +160,9 @@ export function prepareEmailCardParams(
     resolveCancelUrl: urls.resolveCancelUrl || undefined,
     resolveMoveNewUrl: urls.resolveMoveNewUrl || undefined,
     resolveKeepBothUrl: urls.resolveKeepBothUrl || undefined,
+    headline: (p?.headline as string) || null,
+    story: (p?.story as string) || null,
+    context: meta.context || null,
   }
 }
 
@@ -212,6 +216,11 @@ export interface ActionCardEmailParams {
   /** New action's intent summary (for conflict comparison display) */
   newActionTopic?: string | null
   newActionScore?: number | null
+  /** Headline + story from generateBriefHeadline (persisted in payload) */
+  headline?: string | null
+  story?: string | null
+  /** Historical deal context from conversation summary */
+  context?: string | null
 }
 
 /**
@@ -249,15 +258,23 @@ function formatIntentHtml(text: string): string {
 }
 
 export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
-  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone, slotText, conflicts, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl } = params
+  const { cpName, cpRole, topic, actionType, urgency, intent, actionUrl, editUrl, executeUrl, todoUrl, blacklistUrl, needsInput, location, locationPartial, isOnline, meetingType, cpPhone, slotText, conflicts, resolveRescheduleUrl, resolveCancelUrl, resolveMoveNewUrl, resolveKeepBothUrl, headline, story, context } = params
   // Resolve effective meeting type: use meetingType if set, fall back to isOnline for backward compat
   const effectiveMeetingType = meetingType || (isOnline ? 'online' : 'address')
 
   const typeLabel = TYPE_LABEL[actionType] || actionType
   const typeVariant = TYPE_VARIANT[actionType] || 'default'
   const typeBadge = BADGE_EMAIL_COLORS[typeVariant] || BADGE_EMAIL_COLORS.default
-  const urgencyBadge = BADGE_EMAIL_COLORS.accent
   const urgencyLabel = urgency >= 8 ? 'TEĎ' : urgency >= 4 ? 'Zítra' : 'Později'
+
+  // Urgency dot color
+  const urgencyDotColor = urgency >= 9 ? '#dc2626' : urgency >= 7 ? theme.colors.warning : null
+
+  // Urgency text label (below action area)
+  const urgencyText = urgency >= 9 ? 'Musíš to udělat TEĎKA'
+    : urgency >= 7 ? 'Měl bys to udělat dnes'
+    : urgency >= 5 ? 'Měl bys to udělat brzy'
+    : null
 
   // UDĚLAT button: grayed out when user needs to fill in info first.
   // Conflicts show warning style but stay clickable — user decides.
@@ -268,29 +285,51 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
       ? `<a href="${executeUrl}" style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.primary}; color: white; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none; margin-right: 8px; border: 2px solid #dc2626;">⚠ UDĚLAT</a>`
       : `<a href="${executeUrl}" style="display: inline-block; padding: 8px 16px; background-color: ${theme.colors.primary}; color: white; border-radius: 6px; font-weight: 500; font-size: 14px; text-decoration: none; margin-right: 8px;">UDĚLAT</a>`
 
+  // Use headline if available, otherwise fall back to cpName + topic
+  const displayHeadline = headline || `${cpName} — ${topic}`
+
   return `
     <div style="background-color: ${theme.colors.surface}; border: 1px solid ${theme.colors.border}; border-radius: 8px; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1); margin-bottom: 24px; font-family: 'Inter', system-ui, sans-serif;">
-      <!-- HEADER -->
-      <div style="padding: 20px 24px 12px 24px;">
+      <!-- HEADER: urgency dot + headline + type badge -->
+      <div style="padding: 20px 24px 8px 24px;">
         <table width="100%" cellpadding="0" cellspacing="0" border="0">
           <tr>
             <td style="vertical-align: top;">
               <div style="font-size: 18px; font-weight: 600; color: ${theme.colors.text}; line-height: 1.4;">
-                ${cpName}${cpRole ? `<span style="font-size: 14px; font-weight: 400; color: ${theme.colors.textMuted}; margin-left: 8px;">&middot; ${cpRole}</span>` : ''}
+                ${urgencyDotColor ? `<span style="display: inline-block; width: 10px; height: 10px; border-radius: 50%; background-color: ${urgencyDotColor}; margin-right: 8px; vertical-align: middle;"></span>` : ''}${displayHeadline}
               </div>
-              <div style="font-size: 14px; color: ${theme.colors.textMuted}; margin-top: 2px;">${topic}</div>
             </td>
             <td style="vertical-align: top; text-align: right; white-space: nowrap; padding-left: 16px;">
               <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; background-color: ${typeBadge.bg}; color: ${typeBadge.text};">${typeLabel}</span>
-              <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; background-color: ${urgencyBadge.bg}; color: ${urgencyBadge.text}; margin-left: 8px;">${urgencyLabel}</span>
             </td>
           </tr>
         </table>
       </div>
 
-      <!-- INTENT -->
-      <div style="padding: 0 24px 16px 24px; font-size: 16px; color: ${theme.colors.text}; line-height: 1.625;">
-        ${formatIntentHtml(intent)}
+      <!-- STORY: 1-3 high-value sentences -->
+      ${story ? `
+      <div style="padding: 0 24px 12px 24px; font-size: 14px; color: ${theme.colors.textMuted}; line-height: 1.55;">
+        ${story}
+      </div>
+      ` : ''}
+
+      <!-- CONTEXT: historical deal context, collapsible (default closed in Gmail) -->
+      ${context ? `
+      <div style="padding: 0 24px 12px 24px;">
+        <details>
+          <summary style="font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: ${theme.colors.textMuted}; cursor: pointer; user-select: none;">KONTEXT</summary>
+          <div style="font-size: 14px; color: ${theme.colors.text}; line-height: 1.6; border-left: 2px solid ${theme.colors.border}; padding-left: 16px; margin-top: 6px;">
+            ${context}
+          </div>
+        </details>
+      </div>
+      ` : ''}
+
+      <!-- ACTION CONTENT: type-specific main area with left bracket -->
+      <div style="padding: 0 24px 16px 24px;">
+        <div style="border-left: 3px solid ${theme.colors.primary}; padding-left: 16px; font-size: 15px; color: ${theme.colors.text}; line-height: 1.625;">
+          ${formatIntentHtml(intent)}
+        </div>
       </div>
 
       ${actionType === 'SCHEDULE' ? `
@@ -360,10 +399,12 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
       }).join('')}
       ` : ''}
 
-      <!-- DETAILS LINK -->
-      <div style="padding: 0 24px 16px 24px;">
-        <a href="${actionUrl}" style="font-size: 14px; color: ${theme.colors.textMuted}; text-decoration: none;">&#9656; Detaily</a>
+      <!-- URGENCY LABEL -->
+      ${urgencyText ? `
+      <div style="padding: 0 24px 12px 24px; font-size: 13px; color: ${urgency >= 9 ? '#dc2626' : urgency >= 7 ? theme.colors.warning : theme.colors.textMuted}; font-weight: 500; font-style: italic;">
+        ${urgencyText}
       </div>
+      ` : ''}
 
       <!-- ACTION CONTROLS — hidden when unresolved conflicts exist (conflict card has its own CTA) -->
       ${conflicts && conflicts.filter(c => !(c as Record<string, unknown>).resolved).length > 0 ? '' : `
