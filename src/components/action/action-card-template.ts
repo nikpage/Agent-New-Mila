@@ -270,12 +270,6 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
   // Urgency dot color
   const urgencyDotColor = urgency >= 9 ? '#dc2626' : urgency >= 7 ? theme.colors.warning : null
 
-  // Urgency text label (below action area)
-  const urgencyText = urgency >= 9 ? 'Musíš to udělat TEĎKA'
-    : urgency >= 7 ? 'Měl bys to udělat dnes'
-    : urgency >= 5 ? 'Měl bys to udělat brzy'
-    : null
-
   // UDĚLAT button: grayed out when user needs to fill in info first.
   // Conflicts show warning style but stay clickable — user decides.
   const hasActiveConflicts = conflicts && conflicts.length > 0 && !needsInput
@@ -399,12 +393,6 @@ export function getActionCardEmailHtml(params: ActionCardEmailParams): string {
       }).join('')}
       ` : ''}
 
-      <!-- URGENCY LABEL -->
-      ${urgencyText ? `
-      <div style="padding: 0 24px 12px 24px; font-size: 13px; color: ${urgency >= 9 ? '#dc2626' : urgency >= 7 ? theme.colors.warning : theme.colors.textMuted}; font-weight: 500; font-style: italic;">
-        ${urgencyText}
-      </div>
-      ` : ''}
 
       <!-- ACTION CONTROLS — hidden when unresolved conflicts exist (conflict card has its own CTA) -->
       ${conflicts && conflicts.filter(c => !(c as Record<string, unknown>).resolved).length > 0 ? '' : `

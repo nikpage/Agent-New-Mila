@@ -407,7 +407,12 @@ export function BriefCard({
 
               {/* Shared context block — all card types, collapsible, default closed */}
               {action.summaryJson?.currentState && (
-                <details style={{ marginBottom: '12px' }}>
+                <details style={{
+                  marginBottom: '12px',
+                  border: '1px solid var(--brd)',
+                  borderRadius: '8px',
+                  overflow: 'hidden',
+                }}>
                   <summary style={{
                     fontSize: '11px',
                     fontWeight: 600,
@@ -420,6 +425,8 @@ export function BriefCard({
                     display: 'flex',
                     alignItems: 'center',
                     gap: '4px',
+                    padding: '8px 12px',
+                    backgroundColor: 'var(--bg)',
                   }}>
                     <span style={{ fontSize: '9px', transition: 'transform .2s' }}>▸</span>
                     Kontext
@@ -428,9 +435,8 @@ export function BriefCard({
                     fontSize: '13.5px',
                     color: 'var(--txt)',
                     lineHeight: 1.6,
-                    borderLeft: '2px solid var(--brd)',
-                    paddingLeft: '16px',
-                    marginTop: '6px',
+                    padding: '10px 14px',
+                    backgroundColor: 'var(--bg)',
                   }}>
                     {action.summaryJson.currentState}
                   </div>

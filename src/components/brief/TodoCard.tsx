@@ -53,7 +53,7 @@ export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardPro
               <ol style={{ margin: 0, paddingLeft: '20px' }}>
                 {lines.map((line, i) => {
                   const cleaned = line.replace(/^\d+\.\s*/, '')
-                  return <li key={i} style={{ marginBottom: '4px' }}>{cleaned}</li>
+                  return <li key={i} style={{ marginBottom: '6px' }}>{cleaned}</li>
                 })}
               </ol>
             )
@@ -63,17 +63,29 @@ export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardPro
               <ul style={{ margin: 0, paddingLeft: '20px', listStyleType: 'disc' }}>
                 {lines.map((line, i) => {
                   const cleaned = line.replace(/^-\s*/, '')
-                  return <li key={i} style={{ marginBottom: '4px' }}>{cleaned}</li>
+                  return <li key={i} style={{ marginBottom: '6px' }}>{cleaned}</li>
                 })}
               </ul>
             )
           }
-          // Fallback: split into bullets if multiple sentences, otherwise plain text
+          // Multiple lines → bullets
           if (lines.length > 1) {
             return (
               <ul style={{ margin: 0, paddingLeft: '20px', listStyleType: 'disc' }}>
                 {lines.map((line, i) => (
-                  <li key={i} style={{ marginBottom: '4px' }}>{line}</li>
+                  <li key={i} style={{ marginBottom: '6px' }}>{line}</li>
+                ))}
+              </ul>
+            )
+          }
+          // Single paragraph — split by sentence separators (. — ;) into bullet list
+          const text = lines[0]
+          const sentences = text.split(/(?<=\.)\s+|(?<=—)\s+|(?<=;)\s+/).map(s => s.trim()).filter(Boolean)
+          if (sentences.length > 1) {
+            return (
+              <ul style={{ margin: 0, paddingLeft: '20px', listStyleType: 'disc' }}>
+                {sentences.map((s, i) => (
+                  <li key={i} style={{ marginBottom: '6px' }}>{s}</li>
                 ))}
               </ul>
             )
@@ -82,7 +94,7 @@ export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardPro
         })()}
       </div>
 
-      {/* Due date + Item 26: urgency context */}
+      {/* Due date */}
       {dueDate && (
         <div style={{ fontSize: theme.typography.sizes.sm }}>
           <span style={{ color: theme.colors.textMuted }}>Termín: </span>
@@ -92,18 +104,6 @@ export function TodoCard({ action, onPostpone, showPostponePicker }: TodoCardPro
           }}>
             {new Date(dueDate).toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long' })}
           </span>
-        </div>
-      )}
-      {action.urgency >= 5 && (
-        <div style={{
-          fontSize: theme.typography.sizes.xs,
-          color: action.urgency >= 9 ? theme.colors.error : action.urgency >= 7 ? theme.colors.warning : theme.colors.textMuted,
-          fontWeight: theme.typography.weights.medium,
-          fontStyle: 'italic',
-        }}>
-          {action.urgency >= 9 ? 'Musíš to udělat TEĎKA'
-            : action.urgency >= 7 ? 'Měl bys to udělat dnes'
-            : 'Měl bys to udělat brzy'}
         </div>
       )}
 
