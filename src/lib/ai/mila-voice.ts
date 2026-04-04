@@ -313,9 +313,11 @@ ${JSON.stringify(missingInfo)}` : ''}
 RECIPIENT: ${cpName || 'The Counterparty'}
 
 ${toneInstruction}
+- Read the counterparty's message carefully. If they stated specific information (documents needed, times, prices, conditions), reference it directly in your reply. NEVER ask for information the CP already provided — that makes the boss look like they didn't read the email.
 - Use the specific data provided in the missingInfo section to answer the counterparty's questions.
 - If the plan implies scheduling, propose the specific times mentioned.
 - Addresses in email signatures are the SENDER's company address, not the property or meeting location. Do not treat them as conflicting with addresses mentioned in the message body.
+- No filler. No "Těším se na naši spolupráci" or "V případě jakýchkoliv dotazů jsem Vám k dispozici" unless it genuinely adds value. Every sentence must say something the recipient needs to know.
 
 Respond with ONLY valid JSON:
 {
