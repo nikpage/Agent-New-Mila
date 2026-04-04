@@ -326,7 +326,7 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "cpPhone": "Counterparty's phone number if found in the conversation (from signature, message text, or WhatsApp). Format: international with + prefix (e.g. '+420123456789'). null if not found. Important for phone meetings.",
   "suggestedLocation": "Physical address WHERE PEOPLE WILL MEET — the meeting venue, NOT the property or deal subject. Only relevant when meetingType is 'address'. Priority: (1) explicit venue ('meet at Dykova 17', 'come to our office'), (2) CP's office address from signature IF meeting is at their place, (3) user's office address (see system context) if CP says 'at your office' or 'come to you', (4) the property address ONLY if the meeting is literally at the property (e.g. a viewing/inspection). Addresses in email signatures are the SENDER's company address — do not confuse with meeting venue. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. null if no meeting venue clues exist or meetingType is not 'address'.",
   "locationConfidence": "'high' if venue is explicitly stated or clearly implied ('meet at your office', 'come to Dykova 17'). 'low' if inferring from weak signals (signature address without meeting-place context). null if suggestedLocation is null.",
-  "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific time (e.g. '2025-02-12T09:30:00'). If the enriched messages contain 'Navrhovaný čas' with a specific day+time, you MUST convert it to ISO 8601 and put it here. Do NOT leave null when a specific time is stated. null ONLY if no specific time mentioned. CRITICAL: If the CP explicitly stated a time (even outside working hours or on weekends), extract it exactly as stated. But if YOU are generating a suggested time and the CP did NOT state one, you MUST respect the user's working hours and working days from the system context. Do NOT suggest weekends or evenings unless the CP explicitly requested them.",
+  "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific or approximate time (e.g. '2025-02-12T09:30:00'). If the enriched messages contain 'Navrhovaný čas' with a specific day+time, you MUST convert it to ISO 8601 and put it here. Do NOT leave null when a specific time is stated. Approximate times are NOT null — interpret them: 'kolem 9 nebo 10' → 09:00, 'ráno' → 09:00, 'odpoledne' → 14:00. An approximate time is always better than null. null ONLY if no time reference exists at all. CRITICAL: If the CP explicitly stated a time (even outside working hours or on weekends), extract it exactly as stated. But if YOU are generating a suggested time and the CP did NOT state one, you MUST respect the user's working hours and working days from the system context. Do NOT suggest weekends or evenings unless the CP explicitly requested them.",
   "cpAvailability": "Free-text string describing when the CP said they're available (e.g. 'Tuesday afternoon', 'next week except Wednesday'). null if not mentioned."
 }]
 
@@ -358,7 +358,14 @@ HARD RULES:
 - If there is NO deadline language at all → urgency MUST be 2. Not 3, not 5, not 7. Exactly 2.
 - urgency 7+ requires a HARD DEADLINE with a specific date/day or stated consequence.
 - "do dubna" when today is late March = urgency 3-4 (weeks away), NOT 9-10.
-- A large deal value does NOT increase urgency. A 45M deal with no deadline is urgency 2.`
+- A large deal value does NOT increase urgency. A 45M deal with no deadline is urgency 2.
+
+BEFORE YOU OUTPUT JSON — scan the conversation one more time for these exact words:
+- "dnes", "today", "do 17:00", "do konce dne" → urgency 10
+- "zítra", "tomorrow", "zítřejší" → urgency 9
+- "do pátku", "ve středu", or any specific weekday THIS WEEK → urgency 7-8
+- "žádný spěch", "no rush" → urgency 1
+If you find any of these and your urgency doesn't match, FIX IT before outputting.`
 
   const text = await runAITask('planning', prompt)
 
