@@ -268,7 +268,13 @@ CRITICAL: You must generate ALL text field values in ${analysisLang}. Do not out
 
 /**
  * Determine what action should be proposed (Intent Only - NO DRAFTS)
- * Stage: planning (gemini-2.5-flash → claude-sonnet)
+ *
+ * Two-stage architecture:
+ *   Stage 1 (triage): Lightweight prompt decides action type(s), urgency, deal value.
+ *   Stage 2 (detail): One focused prompt PER action type fills in type-specific fields.
+ *   This prevents SCHEDULE rules from competing with TODO rules for attention.
+ *
+ * Both stages use the 'planning' AI stage (claude-haiku with thinking).
  */
 export type ProposedAction = {
   actionType: ActionType
@@ -287,18 +293,31 @@ export type ProposedAction = {
   cpPhone?: string | null
 }
 
-export async function proposeAction(
+// --- Shared helpers for the two-stage planning prompts ---
+
+interface PlanningContext {
+  systemContext: string
+  channelNote: string
+  highValueNote: string
+  todayStr: string
+  isoDate: string
+  timeStr: string
+  tz: string
+  tomorrowDate: string
+  nextWeekDate: string
+  recentText: string
+  cpName: string | null
+  planningLang: string
+  conversationSummary: ConversationSummary
+}
+
+function buildPlanningContext(
   conversationSummary: ConversationSummary,
   recentMessages: { direction: string; text: string }[],
   cpName: string | null,
   settings: UserSettings,
-  channel: 'email' | 'whatsapp' = 'email'
-): Promise<ProposedAction[]> {
-  const planningLang = settings.ai_language || 'Czech'
-  console.log(`[AI:proposeAction] Running stage 'planning' for ${cpName || 'unknown CP'}`)
-  // Planning.ts already caps messages at ~2000 chars of enriched text.
-  // Do NOT truncate further — enriched text contains structured extractions
-  // (Adresa:, Navrhovaný čas:, etc.) that get destroyed by slicing.
+  channel: 'email' | 'whatsapp'
+): PlanningContext {
   const recentText = recentMessages
     .map(m => `[${m.direction}]: ${m.text}`)
     .join('\n\n')
@@ -308,11 +327,10 @@ export async function proposeAction(
     ? 'CHANNEL: WhatsApp — keep messages short, informal, no subject line needed.'
     : 'CHANNEL: Email — standard professional format.'
 
-  // Check if conversation contains high-value signals
   const conversationText = recentMessages.map(m => m.text).join(' ')
   const isHighValue = containsHighValueSignals(conversationText, settings)
   const highValueNote = isHighValue
-    ? 'HIGH-VALUE DEAL DETECTED — this conversation matches high-value signals. Prioritize accordingly and estimate dollar value carefully.'
+    ? 'HIGH-VALUE DEAL DETECTED — this conversation matches high-value signals. Estimate dollar value carefully.'
     : ''
 
   const now = new Date()
@@ -321,172 +339,301 @@ export async function proposeAction(
   const timeStr = now.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: tz })
   const isoDate = now.toISOString().split('T')[0]
 
-  const prompt = `${systemContext}
+  return {
+    systemContext,
+    channelNote,
+    highValueNote,
+    todayStr,
+    isoDate,
+    timeStr,
+    tz,
+    tomorrowDate: new Date(now.getTime() + 86400000).toISOString().split('T')[0],
+    nextWeekDate: new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0],
+    recentText,
+    cpName,
+    planningLang: settings.ai_language || 'Czech',
+    conversationSummary,
+  }
+}
 
-${channelNote}
-${highValueNote}
+function buildPreamble(ctx: PlanningContext): string {
+  return `${ctx.systemContext}
 
-TODAY'S DATE: ${todayStr} (${isoDate}), current time: ${timeStr}, timezone: ${tz}
-Use this to resolve relative dates: "tomorrow" = ${new Date(now.getTime() + 86400000).toISOString().split('T')[0]}, "next week" = week of ${new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0]}.
+${ctx.channelNote}
+${ctx.highValueNote}
 
-You are Mila, a proactive executive assistant. Based on this conversation, determine what action to take.
+TODAY'S DATE: ${ctx.todayStr} (${ctx.isoDate}), current time: ${ctx.timeStr}, timezone: ${ctx.tz}
+Resolve relative dates: "tomorrow" = ${ctx.tomorrowDate}, "next week" = week of ${ctx.nextWeekDate}.
 
 CRITICAL — ROLE IDENTIFICATION:
-- Messages marked [outbound] are sent BY YOUR BOSS (the email account owner, the user you work for). Your boss is ALWAYS the principal — the client, the buyer, the decision-maker on our side.
-- Messages marked [inbound] are FROM THE COUNTERPARTY (${cpName || 'the other party'}). They are the service provider, seller, agent, or external party.
-- NEVER confuse who is who. Your boss wrote the [outbound] messages. The counterparty wrote the [inbound] messages.
-- When describing actions, refer to your boss's actions as "you" and the counterparty by name.
+- [outbound] = sent BY YOUR BOSS (the user). [inbound] = FROM THE COUNTERPARTY (${ctx.cpName || 'the other party'}).
+- NEVER confuse who is who.
 
 CONVERSATION STATE:
-${JSON.stringify(conversationSummary, null, 2)}
+${JSON.stringify(ctx.conversationSummary, null, 2)}
 
 RECENT MESSAGES:
-${recentText}
+${ctx.recentText}
 
-COUNTERPARTY: ${cpName || 'Unknown'}
+COUNTERPARTY: ${ctx.cpName || 'Unknown'}`
+}
 
-CONVERSATION-FIRST REASONING:
-A conversation may span multiple CPs, email threads, and channels (email + WhatsApp) — but it represents ONE deal or relationship. The recent messages below are raw inputs that update the conversation state. Do NOT treat them as separate items needing separate actions.
-Your job: (1) Understand HOW we got here — the arc of the conversation so far (use CONVERSATION STATE above). (2) Assess WHERE things stand RIGHT NOW. (3) Decide WHAT the user needs to do next. Focus your rationale_cs on the current situation and why action is needed now, not on summarizing individual messages.
-
-ACTION TYPE RULES — return one OR multiple actions only when genuinely independent tasks exist:
-1. REPLY — the user needs to send a message that is NOT related to any meeting or scheduling. Only use REPLY when there is NO meeting/viewing/appointment being discussed.
-2. SCHEDULE — use this whenever a meeting, viewing, appointment, or in-person event is involved. This includes:
-   - CP confirmed a specific time → SCHEDULE (create event + send invite)
-   - CP proposed a specific time → SCHEDULE (create event + send invite)
-   - CP wants to meet but no time yet → SCHEDULE (find slot + send invite)
-   - CP asks to sign a contract in person → SCHEDULE (that's a meeting)
-   suggestedTime: This MUST be the time of the ACTUAL MEETING with the CP. If CP says "meeting at 9:00" → suggestedTime = 9:00. If CP says "let's meet tomorrow afternoon" → suggestedTime = tomorrow 14:00 (your best interpretation). NEVER schedule a separate time slot to "send the invitation" or "confirm the meeting" — clicking UDĚLAT sends the invite automatically. If user needs prep time before the meeting, that is a separate TODO, not a second SCHEDULE.
-   Invite is the reply: The calendar invite body IS the reply to the counterparty. When user clicks UDĚLAT, Mila sends the calendar invite which serves as the confirmation email. So intent_cs must describe BOTH what the reply will say AND what meeting is being booked. Example: "Potvrdím účast na podpisu zítra v 9:00 u notáře, zodpovím dotaz ohledně dokumentů a zablokuji čas ve vašem kalendáři." There is NEVER a separate REPLY when a SCHEDULE exists. The invite handles ALL communication about the meeting.
-3. TODO — something the user needs to do themselves that is NOT a message and NOT a meeting. NEVER use TODO when the CP proposed a meeting — that is SCHEDULE. NEVER use TODO when the next step is responding to the CP — that is REPLY or SCHEDULE.
-   DEFAULT IS REPLY, NOT TODO: When a CP sends a message, the default action is REPLY. TODO is the EXCEPTION, not the rule. The user is a professional who knows their own business. Do NOT create TODOs that tell them how to do their job.
-   TODO is ONLY for work that:
-   (a) requires a THIRD PARTY (call the bank, contact a lawyer, hire a photographer), OR
-   (b) requires PHYSICAL ACTION (visit a location, print documents, pick up keys), OR
-   (c) requires SIGNIFICANT TIME to complete (days, not minutes)
-   If none of (a), (b), (c) apply → it is a REPLY. Period.
-   When a CP asks a question, assume the user knows the answer unless the answer obviously requires contacting a third party or physically going somewhere. When in doubt, choose REPLY. The user can always decide to do internal work before sending — Mila doesn't need to tell them that.
-   TODO BREVITY: A TODO is ONE sentence describing WHAT to do. NEVER decompose into numbered sub-tasks, checklists, or step-by-step instructions. The user is a professional — they know HOW to do their job.
-   Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up", "send later", or "call if no reply". Mila proposes actions — the user decides and acts. If something is time-sensitive, set urgency accordingly so instant notifications alert the user.
-4. SCHEDULE ABSORBS REPLY: When a SCHEDULE action exists, do NOT return a REPLY action for the same conversation. The calendar invite is the reply. Any CP questions get answered in the invite body. This is absolute — no exceptions.
-5. You MUST always return at least one action based on the current conversation state.
-6. DEDUP RULE: Never return two actions that accomplish the same thing. Each action must address a genuinely INDEPENDENT task.
-
-MULTI-ACTION TRIAGE:
-When a conversation requires multiple steps, think through the critical path the way a human assistant would:
-- What must happen FIRST or the deal is lost? (confirm, reply, lock in the appointment)
-- What meeting needs to be booked — at what ACTUAL time, at what ACTUAL location?
-- What does the user need to prepare BEFORE the meeting? (documents, approvals, external confirmations)
-Return a separate action for each genuinely independent step. Each gets its own urgency based on ITS OWN deadline — the confirmation email is urgency 10 if the deadline is today, while the document prep might be urgency 7 if the meeting is tomorrow.
-
-TODO + REPLY BOUNDARY:
-A TODO alongside a REPLY is ONLY valid when the user literally CANNOT write the reply without completing real offline work first. Examples of valid TODO + REPLY:
-- CP asks "when can we do a viewing?" and user needs to book a photographer first → TODO (book photographer) + REPLY (confirm viewing date after photographer is booked)
-- CP asks "can you confirm financing?" and user needs to call their bank → TODO (call bank) + REPLY (confirm financing after bank responds)
-Examples of INVALID TODO + REPLY — these are just a REPLY:
-- CP asks "is the flat available?" → REPLY (user knows the answer)
-- CP asks "what's your price?" → REPLY (user knows the answer)
-- CP asks "can you send the documents?" → REPLY (user has the documents)
-The test: can the user answer by writing a message right now? If yes → REPLY only. If no, because they need to DO something first that takes real time or involves a third party → TODO + REPLY.
-When TODO + REPLY coexist, the REPLY must NOT assume the TODO's outcome. If the TODO is "call bank to verify financing," the REPLY cannot say "confirm financing is ready." The REPLY should be deferred or its intent_cs must say it depends on the TODO result.
-
-CRITICAL - VOICE AND PERSPECTIVE:
-- You are Mila, the user's assistant. Address the user directly as "vy" (you).
-- NEVER refer to the user in 3rd person. NEVER write "uživatel" (the user). Write "vy" (you).
-- Example GOOD: "Zkontrolovala jsem váš kalendář" (I checked your calendar)
-- Example BAD: "Uživatel nahrál pas" (The user uploaded a passport)
-
-FORMATTING:
-- Output PLAIN TEXT only. No markdown. No ** bold **. No * italic *. No # headers.
-
-PROACTIVE INTENT RULES:
-intent_cs must describe what Mila HAS ALREADY DONE and what she WILL DO when user clicks UDĚLAT. Be maximally specific and concrete.
-
-GOOD examples:
-- "Zkontrolovala jsem kalendář a připravím odpověď ${cpName || 'protistraně'}: zodpovím otázku o parkování a nabídnu 3 termíny prohlídky."
-- "Připravím potvrzení schůzky s ${cpName || 'protistranou'} na středu v 9:30 a zablokuji čas ve vašem kalendáři."
-- "Připravím odpověď: zodpovím dotazy ohledně plochy bytu a stavu rekonstrukce, nabídnu termíny prohlídky příští týden."
-
-BAD examples (NEVER write like this):
-- "Navrhuji odpovědět a buď potvrdit, nebo navrhnout jiný termín" (too vague)
-- "Navrhuji se zeptat na více podrobností" (vague, no concrete action)
-- "Navrhuji odpovědět na dotazy" (no specifics)
-
-Respond with ONLY valid JSON — an array of one or more action objects:
-[{
-  "actionType": "REPLY" | "SCHEDULE" | "TODO",
-  "rationale_cs": "One sentence in ${planningLang}: the BUSINESS REASON this action is needed NOW. Focus on consequences, deadlines, or relationship risk. NEVER repeat what intent_cs says.",
-  "intent_cs": "PROACTIVE description in ${planningLang}: what Mila HAS ALREADY DONE + what she WILL DO when user clicks UDĚLAT. Must contain SPECIFIC data from the conversation (names, dates, amounts, locations). For TODO: describe the concrete task the user must do themselves. NEVER repeat what rationale_cs says.",
-  "missingInfo": [{"label": "FULL question in ${planningLang}", "value": null}],
-  "urgency": 1-10 (see URGENCY RULES below),
-  "urgencyJustification": "Quote the EXACT words from the conversation that justify this urgency level. If urgency <= 2, write 'No deadline language found.'",
-  "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
-  "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = very hard to move),
-  "immovable": true | false (true ONLY for absolutely fixed commitments: court dates, flights, school events, legal deadlines. Default false.),
-  "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
-  "meetingType": "'address' for in-person meetings (viewings, office meetings, notary). 'online' for video calls (Google Meet). 'phone' for phone calls — when the conversation suggests a quick call, phone discussion, or someone says 'zavolám vám' / 'můžeme si zavolat' / 'call me'. Default to 'address' for SCHEDULE actions unless the conversation clearly indicates a call or video meeting.",
-  "cpPhone": "Counterparty's phone number if found in the conversation (from signature, message text, or WhatsApp). Format: international with + prefix (e.g. '+420123456789'). null if not found. Important for phone meetings.",
-  "suggestedLocation": "Physical address WHERE PEOPLE WILL MEET — the meeting venue, NOT the property or deal subject. Only relevant when meetingType is 'address'. Priority: (1) explicit venue ('meet at Dykova 17', 'come to our office'), (2) CP's office address from signature IF meeting is at their place, (3) user's office address (see system context) if CP says 'at your office' or 'come to you', (4) the property address ONLY if the meeting is literally at the property (e.g. a viewing/inspection). Addresses in email signatures are the SENDER's company address — do not confuse with meeting venue. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. null if no meeting venue clues exist or meetingType is not 'address'.",
-  "locationConfidence": "'high' if venue is explicitly stated or clearly implied ('meet at your office', 'come to Dykova 17'). 'low' if inferring from weak signals (signature address without meeting-place context). null if suggestedLocation is null.",
-  "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific or approximate time (e.g. '2025-02-12T09:30:00'). If the enriched messages contain proposedTimes entries (or legacy 'Navrhovaný čas' lines) with a specific day+time, you MUST convert it to ISO 8601 and put it here. Do NOT leave null when a specific time is stated. Approximate times are NOT null — interpret them: 'kolem 9 nebo 10' → 09:00, 'ráno' → 09:00, 'odpoledne' → 14:00. An approximate time is always better than null. null ONLY if no time reference exists at all. Use TODAY'S DATE at the top of this prompt to resolve weekday names to specific calendar dates when converting Navrhovaný čas entries. If the CP explicitly stated a time (even outside working hours or on weekends), extract it exactly as stated. But if YOU are generating a suggested time and the CP did NOT state one, you MUST respect the user's working hours and working days from the system context. Do NOT suggest weekends or evenings unless the CP explicitly requested them.",
-  "cpAvailability": "Free-text string describing when the CP said they're available (e.g. 'Tuesday afternoon', 'next week except Wednesday'). null if not mentioned."
-}]
-
-Rules:
-- DO NOT write the email draft.
-- For SCHEDULE: intent_cs describes what Mila will schedule. missingInfo should contain any questions the CP asked that need answering in the calendar invite (e.g. parking, documents, who's coming). Only LEAVE OUT time/slot logistics — scheduling handles those automatically.
-- For REPLY: intent_cs describes the email content Mila will prepare. missingInfo should contain questions CP asked.
-- For TODO: intent_cs describes what the user needs to do. No draft needed.
-- missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in ${planningLang}. Do NOT shorten to keywords.
-
-CRITICAL: You must generate ALL user-facing text (rationale_cs, intent_cs, missingInfo labels) in ${planningLang}. Do not output English.
-
-CRITICAL — URGENCY RULES (MUST FOLLOW EXACTLY):
-Urgency is based ONLY on deadline language explicitly stated in the conversation. Do NOT infer urgency from deal size, importance, or your own judgment about what "should" be urgent.
+const URGENCY_RULES = `URGENCY RULES (MUST FOLLOW EXACTLY):
+Urgency is based ONLY on deadline language explicitly stated in the conversation.
 
 Scale:
-  10 = HARD deadline TODAY (explicit: "dnes", "today", "do 17:00")
-  9 = HARD deadline TOMORROW (explicit: "zítra", "tomorrow")
-  7-8 = HARD deadline THIS WEEK with a SPECIFIC DAY named ("do pátku", "ve středu") or stated consequence ("jinak odstoupím")
-  5 = SOFT time reference ("tento týden", "brzy", "v nejbližších dnech") — NO specific day, NO consequence
-  3-4 = Within 2-4 weeks ("příští měsíc", "do konce dubna", "v průběhu příštích týdnů")
-  2 = DEFAULT. Use this when NO deadline language exists in the conversation AT ALL.
-  1 = Explicitly stated no rush ("žádný spěch", "není kam spěchat", "no rush")
+  10 = HARD deadline TODAY ("dnes", "today", "do 17:00")
+  9 = HARD deadline TOMORROW ("zítra", "tomorrow")
+  7-8 = HARD deadline THIS WEEK with SPECIFIC DAY or stated consequence
+  5 = SOFT time reference ("tento týden", "brzy") — no specific day
+  3-4 = Within 2-4 weeks
+  2 = DEFAULT when NO deadline language exists
+  1 = Explicitly stated no rush
 
 HARD RULES:
-- If the conversation contains "žádný spěch", "no rush", or equivalent → urgency MUST be 1. No exceptions.
-- If there is NO deadline language at all → urgency MUST be 2. Not 3, not 5, not 7. Exactly 2.
-- urgency 7+ requires a HARD DEADLINE with a specific date/day or stated consequence.
-- "do dubna" when today is late March = urgency 3-4 (weeks away), NOT 9-10.
-- A large deal value does NOT increase urgency. A 45M deal with no deadline is urgency 2.
+- "žádný spěch" / "no rush" → urgency 1.
+- NO deadline language at all → urgency 2. Not 3, not 5, not 7.
+- urgency 7+ requires HARD DEADLINE with specific date/day or stated consequence.
+- Deal value does NOT increase urgency. A 45M deal with no deadline is urgency 2.`
 
-BEFORE YOU OUTPUT JSON — scan the conversation one more time for these exact words:
-- "dnes", "today", "do 17:00", "do konce dne" → urgency 10
-- "zítra", "tomorrow", "zítřejší" → urgency 9
-- "do pátku", "ve středu", or any specific weekday THIS WEEK → urgency 7-8
-- "žádný spěch", "no rush" → urgency 1
-If you find any of these and your urgency doesn't match, FIX IT before outputting.`
+// --- Stage 1: Triage — decide WHAT action types are needed ---
+
+interface TriageResult {
+  actionType: ActionType
+  reasoning: string
+  urgency: number
+  urgencyJustification: string
+  dollarValue: number
+  weight: number
+  immovable: boolean
+  dealType: DealType
+}
+
+async function triageActions(ctx: PlanningContext, settings: UserSettings): Promise<TriageResult[]> {
+  const prompt = `${buildPreamble(ctx)}
+
+You are Mila, a proactive executive assistant. Decide what action(s) this conversation needs.
+
+ACTION TYPES:
+1. REPLY — user needs to send a message. Use when NO meeting/viewing/appointment is being discussed.
+2. SCHEDULE — any meeting, viewing, appointment, or in-person event. If a meeting exists, SCHEDULE absorbs REPLY (the calendar invite IS the reply — never return both).
+3. TODO — user needs to do something themselves (NOT a message, NOT a meeting). TODO is the EXCEPTION:
+   ONLY for work requiring (a) a THIRD PARTY, (b) PHYSICAL ACTION, or (c) SIGNIFICANT TIME.
+   When a CP asks a question, default is REPLY. TODO + REPLY is only valid when the user literally CANNOT write the reply without completing offline work first.
+
+RULES:
+- Return at least one action.
+- Never return two actions that accomplish the same thing.
+- SCHEDULE absorbs REPLY — never return both.
+- For each action, provide a brief reasoning (1-2 sentences) explaining WHY this type.
+
+${URGENCY_RULES}
+
+Respond with ONLY valid JSON array:
+[{
+  "actionType": "REPLY" | "SCHEDULE" | "TODO",
+  "reasoning": "1-2 sentences: why this action type",
+  "urgency": 1-10,
+  "urgencyJustification": "Quote exact deadline words from conversation, or 'No deadline language found.'",
+  "dollarValue": estimated value in ${settings.typical_deal_size_currency} (0 if unknown, range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
+  "weight": 1-10 (immovability, 1=easy to reschedule, 10=very hard to move),
+  "immovable": true only for absolutely fixed commitments (court, flights, school). Default false,
+  "dealType": "sale"|"purchase"|"rental"|"lease"|"consultation"|"other"|null
+}]
+
+CRITICAL: Generate reasoning in ${ctx.planningLang}. Do not output English.`
 
   const text = await runAITask('planning', prompt)
-
-  // Parse array or single object (backward safe)
-  let actions: ProposedAction[]
   const arrayMatch = text.match(/\[[\s\S]*\]/)
   if (arrayMatch) {
     const parsed = JSON.parse(arrayMatch[0])
-    actions = Array.isArray(parsed) ? parsed : [parsed]
-  } else {
-    const jsonMatch = text.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) throw new Error('Failed to parse action proposal')
-    actions = [JSON.parse(jsonMatch[0])]
+    return Array.isArray(parsed) ? parsed : [parsed]
   }
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('Failed to parse triage result')
+  return [JSON.parse(jsonMatch[0])]
+}
 
-  // Two-pass urgency review: a second AI checks urgency claims against conversation text
-  // Only review actions with urgency >= 5 (lower urgency is unlikely to cause false positives)
+// --- Stage 2: Detail fill — one focused prompt per action type ---
+
+async function fillReplyDetails(
+  ctx: PlanningContext,
+  triage: TriageResult
+): Promise<ProposedAction> {
+  const prompt = `${buildPreamble(ctx)}
+
+You are Mila. Fill in the details for a REPLY action.
+
+TRIAGE DECISION: ${triage.reasoning}
+
+VOICE: Address user as "vy". Never "uživatel". Plain text only, no markdown.
+
+Respond with ONLY valid JSON:
+{
+  "rationale_cs": "One sentence in ${ctx.planningLang}: the BUSINESS REASON this reply is needed NOW. Focus on consequences, deadlines, or relationship risk.",
+  "intent_cs": "What Mila HAS DONE and WILL DO: specific data from the conversation (names, dates, amounts). Describe the email content Mila will prepare.",
+  "missingInfo": [{"label": "FULL question the CP asked, in ${ctx.planningLang}", "value": null}]
+}
+
+INTENT RULES:
+- Be maximally specific. Reference actual data from the conversation.
+- BAD: "Navrhuji odpovědět na dotazy" (no specifics). GOOD: "Připravím odpověď: zodpovím dotazy ohledně plochy bytu a stavu rekonstrukce."
+- rationale_cs and intent_cs must NOT repeat each other.
+- missingInfo: extract ALL specific questions the CP asked. Full question text, not keywords.
+
+CRITICAL: All text in ${ctx.planningLang}. Do not output English.`
+
+  const text = await runAITask('planning', prompt)
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('Failed to parse REPLY details')
+  const detail = JSON.parse(jsonMatch[0])
+
+  return {
+    actionType: 'REPLY',
+    rationale_cs: detail.rationale_cs || triage.reasoning,
+    intent_cs: detail.intent_cs || '',
+    missingInfo: Array.isArray(detail.missingInfo) ? detail.missingInfo : [],
+    urgency: triage.urgency,
+    dollarValue: triage.dollarValue,
+    weight: triage.weight,
+    immovable: triage.immovable,
+    dealType: triage.dealType,
+  }
+}
+
+async function fillScheduleDetails(
+  ctx: PlanningContext,
+  triage: TriageResult
+): Promise<ProposedAction> {
+  const prompt = `${buildPreamble(ctx)}
+
+You are Mila. Fill in the details for a SCHEDULE action (meeting/viewing/appointment).
+
+TRIAGE DECISION: ${triage.reasoning}
+
+VOICE: Address user as "vy". Never "uživatel". Plain text only, no markdown.
+
+The calendar invite IS the reply to the counterparty. intent_cs must describe BOTH what the reply will say AND what meeting is being booked.
+
+Respond with ONLY valid JSON:
+{
+  "rationale_cs": "One sentence in ${ctx.planningLang}: why this meeting matters NOW.",
+  "intent_cs": "What Mila HAS DONE and WILL DO: describe both the meeting booking AND any CP questions to answer in the invite.",
+  "missingInfo": [{"label": "FULL question in ${ctx.planningLang}", "value": null}],
+  "meetingType": "address | online | phone",
+  "cpPhone": "+420... or null",
+  "suggestedLocation": "Physical address WHERE PEOPLE WILL MEET — the MEETING VENUE, NOT the property or deal subject. ADDRESS INFERENCE for SCHEDULE — Priority: (1) explicit venue stated in conversation, (2) CP's office address from signature IF meeting is at their place, (3) user's office address if CP says 'at your office', (4) the property address ONLY if the meeting is literally at the property (e.g. a viewing/inspection). Addresses in email signatures are the SENDER's company address — do not confuse with meeting venue. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. null if unknown.",
+  "locationConfidence": "high | low | null",
+  "suggestedTime": "ISO 8601 datetime. Convert proposedTimes/Navrhovaný čas to ISO 8601 using TODAY'S DATE above. Approximate times: 'ráno'→09:00, 'odpoledne'→14:00. CP-stated times always extracted exactly (even weekends). Self-generated times must respect working hours. null only if no time reference exists.",
+  "cpAvailability": "Free-text CP availability or null"
+}
+
+RULES:
+- suggestedTime = time of the ACTUAL MEETING, not a slot to "send the invitation".
+- meetingType: 'phone' when conversation suggests a call ('zavolám', 'můžeme si zavolat'). 'online' for video. Default 'address'.
+- rationale_cs and intent_cs must NOT repeat each other.
+
+CRITICAL: All text in ${ctx.planningLang}. Do not output English.`
+
+  const text = await runAITask('planning', prompt)
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('Failed to parse SCHEDULE details')
+  const detail = JSON.parse(jsonMatch[0])
+
+  return {
+    actionType: 'SCHEDULE',
+    rationale_cs: detail.rationale_cs || triage.reasoning,
+    intent_cs: detail.intent_cs || '',
+    missingInfo: Array.isArray(detail.missingInfo) ? detail.missingInfo : [],
+    urgency: triage.urgency,
+    dollarValue: triage.dollarValue,
+    weight: triage.weight,
+    immovable: triage.immovable,
+    dealType: triage.dealType,
+    meetingType: detail.meetingType || 'address',
+    cpPhone: detail.cpPhone || null,
+    suggestedLocation: detail.suggestedLocation || null,
+    locationConfidence: detail.locationConfidence || null,
+    suggestedTime: detail.suggestedTime || null,
+  }
+}
+
+async function fillTodoDetails(
+  ctx: PlanningContext,
+  triage: TriageResult
+): Promise<ProposedAction> {
+  const prompt = `${buildPreamble(ctx)}
+
+You are Mila. Fill in the details for a TODO action — something the user must do themselves.
+
+TRIAGE DECISION: ${triage.reasoning}
+
+VOICE: Address user as "vy". Never "uživatel". Plain text only, no markdown.
+
+Respond with ONLY valid JSON:
+{
+  "rationale_cs": "One sentence in ${ctx.planningLang}: why this task matters NOW.",
+  "intent_cs": "ONE sentence: the concrete task the user must do. No sub-tasks, no checklists, no step-by-step."
+}
+
+RULES:
+- Mila CANNOT act autonomously. Never promise to "track", "monitor", "follow up", or "call if no reply".
+- rationale_cs and intent_cs must NOT repeat each other.
+
+CRITICAL: All text in ${ctx.planningLang}. Do not output English.`
+
+  const text = await runAITask('planning', prompt)
+  const jsonMatch = text.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('Failed to parse TODO details')
+  const detail = JSON.parse(jsonMatch[0])
+
+  return {
+    actionType: 'TODO',
+    rationale_cs: detail.rationale_cs || triage.reasoning,
+    intent_cs: detail.intent_cs || '',
+    missingInfo: [],
+    urgency: triage.urgency,
+    dollarValue: triage.dollarValue,
+    weight: triage.weight,
+    immovable: triage.immovable,
+    dealType: triage.dealType,
+  }
+}
+
+// --- Orchestrator ---
+
+export async function proposeAction(
+  conversationSummary: ConversationSummary,
+  recentMessages: { direction: string; text: string }[],
+  cpName: string | null,
+  settings: UserSettings,
+  channel: 'email' | 'whatsapp' = 'email'
+): Promise<ProposedAction[]> {
+  console.log(`[AI:proposeAction] Running 2-stage planning for ${cpName || 'unknown CP'}`)
+
+  const ctx = buildPlanningContext(conversationSummary, recentMessages, cpName, settings, channel)
+
+  // Stage 1: Triage — decide action types
+  const triageResults = await triageActions(ctx, settings)
+  console.log(`[AI:proposeAction] Triage: ${triageResults.map(t => `${t.actionType}(u${t.urgency})`).join(', ')}`)
+
+  // Stage 2: Fill details in parallel — each type gets only its own rules
+  const detailPromises = triageResults.map(triage => {
+    switch (triage.actionType) {
+      case 'REPLY': return fillReplyDetails(ctx, triage)
+      case 'SCHEDULE': return fillScheduleDetails(ctx, triage)
+      case 'TODO': return fillTodoDetails(ctx, triage)
+      default: return fillReplyDetails(ctx, triage) // safe fallback
+    }
+  })
+
+  let actions = await Promise.all(detailPromises)
+
+  // Two-pass urgency review (same as before)
   const needsReview = actions.some(a => (a.urgency || 0) >= 5)
   if (needsReview) {
     try {
-      actions = await reviewUrgency(actions, recentText)
+      actions = await reviewUrgency(actions, ctx.recentText)
     } catch (e) {
       console.error('[Planning] Urgency review failed, using original values:', e)
     }
