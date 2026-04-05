@@ -436,7 +436,7 @@ NEXT MOVE OPTIONS:
 HOW TO CHOOSE:
 Look at the deal state and the latest timeline entry. Ask: "What moves this deal forward?"
 - If the CP asked questions, made an offer, or proposed something → REPLY (the user knows their own business and can answer)
-- If a meeting is being discussed → SCHEDULE
+- If a meeting, viewing, appointment, or deal closing date is being discussed → SCHEDULE (closing dates are calendar events — notary, signing, handover)
 - If the deal literally cannot advance until the user does offline work → TODO
 
 Do NOT invent preparation work. The user is a professional. If the CP asked "is the flat available?" or "what's the price?" — that's a REPLY, not a TODO to "research availability." The user knows.
@@ -491,13 +491,15 @@ Respond with ONLY valid JSON:
 {
   "rationale_cs": "One sentence in ${ctx.planningLang}: why sending this reply advances the deal. Focus on what's at stake or what the CP is waiting for.",
   "intent_cs": "What Mila will prepare: reference SPECIFIC data from the deal (names, property, amounts, questions asked). Describe the message content.",
-  "missingInfo": [{"label": "Question the CP asked that needs answering, in ${ctx.planningLang}", "value": null}]
+  "missingInfo": [{"label": "Short, warm question from Mila to the user, in ${ctx.planningLang}", "value": null}]
 }
 
 RULES:
 - intent_cs must reference specific facts from the timeline — not generic "answer questions."
 - rationale_cs and intent_cs must NOT repeat each other.
-- missingInfo: extract ALL open questions from the CP. Full question text, not keywords.
+- missingInfo is what MILA needs from the user to write the reply. Look at the WHOLE DEAL STATE — not just the latest message. Ask yourself: "What facts does Mila not know that the user does?" Phrase each as a short, warm question from Mila to the user. NEVER copy or paraphrase the CP's words. Example: deal involves financing → "Už máte potvrzení z banky?" (NOT "Potvrzujete financování na 12.4M?")
+- Date/deadline agreements (e.g. "closing date", "termín uzavření", "termín předání") are calendar events → use SCHEDULE, NOT missingInfo.
+- Empty array [] is fine if Mila has enough context to draft without asking.
 
 CRITICAL: All text in ${ctx.planningLang}. Do not output English.`
 
@@ -537,7 +539,7 @@ Respond with ONLY valid JSON:
 {
   "rationale_cs": "One sentence in ${ctx.planningLang}: why this meeting matters NOW.",
   "intent_cs": "What Mila HAS DONE and WILL DO: describe both the meeting booking AND any CP questions to answer in the invite.",
-  "missingInfo": [{"label": "FULL question in ${ctx.planningLang}", "value": null}],
+  "missingInfo": [{"label": "Short warm question from Mila to user about what she needs to know, in ${ctx.planningLang}", "value": null}],
   "meetingType": "address | online | phone",
   "cpPhone": "+420... or null",
   "suggestedLocation": "Physical address WHERE PEOPLE WILL MEET — the MEETING VENUE, NOT the property or deal subject. ADDRESS INFERENCE for SCHEDULE — Priority: (1) explicit venue stated in conversation, (2) CP's office address from signature IF meeting is at their place, (3) user's office address if CP says 'at your office', (4) the property address ONLY if the meeting is literally at the property (e.g. a viewing/inspection). Addresses in email signatures are the SENDER's company address — do not confuse with meeting venue. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. null if unknown.",
