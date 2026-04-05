@@ -163,6 +163,7 @@ export async function generateActionProposal(
     // the TODO is almost always the AI decomposing a simple reply into sub-tasks.
     // Drop the TODO — if the user genuinely needs to do offline work, planning
     // will create a standalone TODO (without a REPLY) on the next run.
+    // Note: SCHEDULE+TODO is valid (e.g. meeting + document prep) — only REPLY+TODO is suspect.
     const hasReply = dedupedProposals.some(p => p.actionType === 'REPLY')
     const todoIndex = dedupedProposals.findIndex(p => p.actionType === 'TODO')
     if (hasReply && todoIndex !== -1) {
