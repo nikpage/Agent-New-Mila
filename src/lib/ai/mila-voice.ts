@@ -287,6 +287,21 @@ export async function generateFinalDraft(
   channel: 'email' | 'whatsapp' = 'email'
 ): Promise<{ subject: string; body: string }> {
   console.log(`[AI:generateFinalDraft] Running stage 'drafting' for ${cpName || 'unknown CP'}`)
+
+  // Strip internal scoring/planning fields that the model should never see
+  // to prevent accidental leakage into CP-facing drafts
+  const safeContext = conversationContext != null && typeof conversationContext === 'object' && !Array.isArray(conversationContext)
+    ? {
+      ...(conversationContext as Record<string, unknown>),
+      urgency: undefined,
+      dollarValue: undefined,
+      weight: undefined,
+      immovable: undefined,
+      rationale_cs: undefined,
+      urgencyJustification: undefined,
+    }
+    : conversationContext
+
   const systemContext = getAISystemPrompt(settings)
   const isWhatsApp = channel === 'whatsapp'
   const toneInstruction = isWhatsApp
@@ -304,7 +319,7 @@ Language: ${settings.ai_language || 'Czech'}.
 TODAY'S DATE: ${todayStr}. Use this to resolve any relative dates ("zítra", "příští týden") when writing the message.
 
 CONTEXT:
-${JSON.stringify(conversationContext, null, 2)}
+${JSON.stringify(safeContext, null, 2)}
 
 THE PLAN (INTENT):
 ${intent}

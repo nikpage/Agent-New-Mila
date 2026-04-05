@@ -3,6 +3,67 @@ import { runAITask } from './runner'
 import { getAISystemPrompt, containsHighValueSignals } from '@/config/client'
 
 /**
+ * Enriched text JSON schema (output of enrichMessage).
+ */
+export interface EnrichedMessageData {
+  parties?: string[]
+  subject?: string | null
+  messageType?: string | null
+  coreIntent?: string | null
+  addresses?: string[]
+  proposedTimes?: { original: string; interpreted: string }[]
+  meetingType?: string | null
+  urgency?: { quote: string; classification: string } | null
+  dealStage?: string | null
+  keyNumbers?: { price?: string | null; area?: string | null; dates?: string[] }
+}
+
+/**
+ * Parse enriched text (JSON or legacy plain text).
+ * Returns structured data if JSON, or null if plain text / parse failure.
+ */
+export function parseEnrichedText(text: string): EnrichedMessageData | null {
+  try {
+    const parsed = JSON.parse(text)
+    if (typeof parsed === 'object' && parsed !== null) return parsed
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Convert enriched text to a readable string for contexts that need plain text.
+ * If JSON, formats it as structured lines. If already plain text, returns as-is.
+ */
+export function enrichedTextToString(text: string): string {
+  const parsed = parseEnrichedText(text)
+  if (!parsed) return text // legacy plain text, return as-is
+
+  const lines: string[] = []
+  if (parsed.parties?.length) lines.push(`Strany: ${parsed.parties.join(', ')}`)
+  if (parsed.subject) lines.push(`Předmět: ${parsed.subject}`)
+  if (parsed.messageType) lines.push(`Typ: ${parsed.messageType}`)
+  if (parsed.coreIntent) lines.push(`Záměr: ${parsed.coreIntent}`)
+  if (parsed.addresses?.length) {
+    for (const addr of parsed.addresses) lines.push(`Adresa: ${addr}`)
+  }
+  if (parsed.proposedTimes?.length) {
+    for (const t of parsed.proposedTimes) lines.push(`Navrhovaný čas: '${t.original}' = ${t.interpreted}`)
+  }
+  if (parsed.meetingType) lines.push(`Typ schůzky: ${parsed.meetingType}`)
+  if (parsed.urgency) lines.push(`Naléhavost: "${parsed.urgency.quote}" — ${parsed.urgency.classification}`)
+  if (parsed.dealStage) lines.push(`Fáze obchodu: ${parsed.dealStage}`)
+  if (parsed.keyNumbers) {
+    const kn = parsed.keyNumbers
+    if (kn.price) lines.push(`Cena: ${kn.price}`)
+    if (kn.area) lines.push(`Plocha: ${kn.area}`)
+    if (kn.dates?.length) lines.push(`Termíny: ${kn.dates.join(', ')}`)
+  }
+  return lines.join('\n')
+}
+
+/**
  * Filter: Quick spam/junk detection using cheapest model.
  * Returns { relevant: true/false }. Gate before full classification.
  * Stage: filter (gemini-2.5-flash-lite → claude-haiku)
@@ -85,7 +146,7 @@ Extract ALL of the following that are present:
 - ADDRESSES: Extract EVERY physical address, location, or place name mentioned ANYWHERE in the message — including the body, footer, and email signature. Examples: office address, meeting venue, property address, notary office, company HQ. Write each as a separate line prefixed with "Adresa:" (e.g. "Adresa: Dykova 17, Praha 2"). Include partial addresses too (e.g. "Adresa: u notáře, Praha 2").
 - PROPOSED TIMES: Extract EVERY specific time, day, or date the sender proposes or mentions for a meeting, viewing, appointment, deadline, or delivery. Write each as a separate line prefixed with "Navrhovaný čas:" and include the EXACT original phrasing plus your interpretation (e.g. "Navrhovaný čas: 'tomorrow at 2pm' = úterý 17. března 14:00" or "Navrhovaný čas: 'Can we meet at 9 or 10?' = 9:00 nebo 10:00"). Do NOT drop times. Do NOT convert 2pm to 20:00.
 - MEETING TYPE: If a meeting, viewing, signing, or appointment is discussed, note what kind (e.g. "Typ schůzky: prohlídka bytu", "Typ schůzky: podpis u notáře", "Typ schůzky: jednání o nájmu").
-- Urgency signals: QUOTE the exact original phrase from the message that indicates time pressure (e.g. verbatim: "this week", "do pátku", "ASAP", "jinak odstoupím"). Then classify: HARD DEADLINE (explicit date/day, contractual, or consequence stated) or SOFT REFERENCE (vague, conversational, no consequence). Omit this section entirely if no time pressure language is present
+- Urgency signals: Find ONE phrase (10 words max) that indicates time pressure. Write it once. Classify as HARD DEADLINE (explicit date/day or stated consequence) or SOFT REFERENCE (vague, no consequence). Omit entirely if none present.
 
 Channel: ${channel}
 Direction: ${direction} (${directionLabel})
@@ -93,24 +154,39 @@ ${contextBlock}
 MESSAGE:
 ${cleanedText.slice(0, 3000)}
 
-Respond with ONLY the extracted information as concise structured text. No JSON. No markdown headers. Just the facts.
+Respond with ONLY valid JSON matching this exact schema. No markdown. No backticks. No prose outside the JSON.
 
-CRITICAL: You must generate ALL output text in ${outputLanguage}. Do not output English.`
+{
+  "parties": ["string"],
+  "subject": "string | null",
+  "messageType": "string | null",
+  "coreIntent": "string | null",
+  "addresses": ["string"],
+  "proposedTimes": [{"original": "string", "interpreted": "string"}],
+  "meetingType": "string | null",
+  "urgency": {"quote": "string", "classification": "HARD DEADLINE | SOFT REFERENCE"} | null,
+  "dealStage": "string | null",
+  "keyNumbers": {"price": "string | null", "area": "string | null", "dates": ["string"]}
+}
+
+Omit any key where nothing is present. Do not invent values.
+
+CRITICAL: You must generate ALL text values in ${outputLanguage}. Do not output English.`
 
   const raw = (await runAITask('enrichment', prompt)).trim()
 
-  // Guard against hallucination loops: if any line is repeated more than 3 times, keep only 3
-  const lines = raw.split('\n')
-  const counts = new Map<string, number>()
-  const deduped: string[] = []
-  for (const line of lines) {
-    const key = line.trim()
-    if (!key) { deduped.push(line); continue }
-    const count = (counts.get(key) || 0) + 1
-    counts.set(key, count)
-    if (count <= 3) deduped.push(line)
+  // Validate JSON output; if the model returned valid JSON, extract and re-serialize
+  // to strip any extra text. If parsing fails, return the raw text (backward compat).
+  const jsonMatch = raw.match(/\{[\s\S]*\}/)
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0])
+      return JSON.stringify(parsed)
+    } catch {
+      // JSON parse failed — fall through to return raw
+    }
   }
-  return deduped.join('\n')
+  return raw
 }
 
 /**
@@ -202,6 +278,7 @@ export type ProposedAction = {
   urgency: number
   dollarValue: number
   weight: number
+  immovable?: boolean
   dealType: DealType
   suggestedLocation?: string | null
   locationConfidence?: 'high' | 'low' | null
@@ -279,10 +356,10 @@ ACTION TYPE RULES — return one OR multiple actions only when genuinely indepen
    - CP proposed a specific time → SCHEDULE (create event + send invite)
    - CP wants to meet but no time yet → SCHEDULE (find slot + send invite)
    - CP asks to sign a contract in person → SCHEDULE (that's a meeting)
-   CRITICAL — suggestedTime: This MUST be the time of the ACTUAL MEETING with the CP. If CP says "meeting at 9:00" → suggestedTime = 9:00. If CP says "let's meet tomorrow afternoon" → suggestedTime = tomorrow 14:00 (your best interpretation). NEVER schedule a separate time slot to "send the invitation" or "confirm the meeting" — clicking UDĚLAT sends the invite automatically. If user needs prep time before the meeting, that is a separate TODO, not a second SCHEDULE.
-   CRITICAL — invite is the reply: The calendar invite body IS the reply to the counterparty. When user clicks UDĚLAT, Mila sends the calendar invite which serves as the confirmation email. So intent_cs must describe BOTH what the reply will say AND what meeting is being booked. Example: "Potvrdím účast na podpisu zítra v 9:00 u notáře, zodpovím dotaz ohledně dokumentů a zablokuji čas ve vašem kalendáři. Klikněte UDĚLAT." There is NEVER a separate REPLY when a SCHEDULE exists. The invite handles ALL communication about the meeting.
+   suggestedTime: This MUST be the time of the ACTUAL MEETING with the CP. If CP says "meeting at 9:00" → suggestedTime = 9:00. If CP says "let's meet tomorrow afternoon" → suggestedTime = tomorrow 14:00 (your best interpretation). NEVER schedule a separate time slot to "send the invitation" or "confirm the meeting" — clicking UDĚLAT sends the invite automatically. If user needs prep time before the meeting, that is a separate TODO, not a second SCHEDULE.
+   Invite is the reply: The calendar invite body IS the reply to the counterparty. When user clicks UDĚLAT, Mila sends the calendar invite which serves as the confirmation email. So intent_cs must describe BOTH what the reply will say AND what meeting is being booked. Example: "Potvrdím účast na podpisu zítra v 9:00 u notáře, zodpovím dotaz ohledně dokumentů a zablokuji čas ve vašem kalendáři." There is NEVER a separate REPLY when a SCHEDULE exists. The invite handles ALL communication about the meeting.
 3. TODO — something the user needs to do themselves that is NOT a message and NOT a meeting. NEVER use TODO when the CP proposed a meeting — that is SCHEDULE. NEVER use TODO when the next step is responding to the CP — that is REPLY or SCHEDULE.
-   CRITICAL — DEFAULT IS REPLY, NOT TODO: When a CP sends a message, the default action is REPLY. TODO is the EXCEPTION, not the rule. The user is a professional who knows their own business. Do NOT create TODOs that tell them how to do their job.
+   DEFAULT IS REPLY, NOT TODO: When a CP sends a message, the default action is REPLY. TODO is the EXCEPTION, not the rule. The user is a professional who knows their own business. Do NOT create TODOs that tell them how to do their job.
    TODO is ONLY for work that:
    (a) requires a THIRD PARTY (call the bank, contact a lawyer, hire a photographer), OR
    (b) requires PHYSICAL ACTION (visit a location, print documents, pick up keys), OR
@@ -290,7 +367,7 @@ ACTION TYPE RULES — return one OR multiple actions only when genuinely indepen
    If none of (a), (b), (c) apply → it is a REPLY. Period.
    When a CP asks a question, assume the user knows the answer unless the answer obviously requires contacting a third party or physically going somewhere. When in doubt, choose REPLY. The user can always decide to do internal work before sending — Mila doesn't need to tell them that.
    TODO BREVITY: A TODO is ONE sentence describing WHAT to do. NEVER decompose into numbered sub-tasks, checklists, or step-by-step instructions. The user is a professional — they know HOW to do their job.
-   CRITICAL: Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up", "send later", or "call if no reply". Mila proposes actions — the user decides and acts. If something is time-sensitive, set urgency accordingly so instant notifications alert the user.
+   Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up", "send later", or "call if no reply". Mila proposes actions — the user decides and acts. If something is time-sensitive, set urgency accordingly so instant notifications alert the user.
 4. SCHEDULE ABSORBS REPLY: When a SCHEDULE action exists, do NOT return a REPLY action for the same conversation. The calendar invite is the reply. Any CP questions get answered in the invite body. This is absolute — no exceptions.
 5. You MUST always return at least one action based on the current conversation state.
 6. DEDUP RULE: Never return two actions that accomplish the same thing. Each action must address a genuinely INDEPENDENT task.
@@ -311,7 +388,7 @@ Examples of INVALID TODO + REPLY — these are just a REPLY:
 - CP asks "what's your price?" → REPLY (user knows the answer)
 - CP asks "can you send the documents?" → REPLY (user has the documents)
 The test: can the user answer by writing a message right now? If yes → REPLY only. If no, because they need to DO something first that takes real time or involves a third party → TODO + REPLY.
-CRITICAL: When TODO + REPLY coexist, the REPLY must NOT assume the TODO's outcome. If the TODO is "call bank to verify financing," the REPLY cannot say "confirm financing is ready." The REPLY should be deferred or its intent_cs must say it depends on the TODO result.
+When TODO + REPLY coexist, the REPLY must NOT assume the TODO's outcome. If the TODO is "call bank to verify financing," the REPLY cannot say "confirm financing is ready." The REPLY should be deferred or its intent_cs must say it depends on the TODO result.
 
 CRITICAL - VOICE AND PERSPECTIVE:
 - You are Mila, the user's assistant. Address the user directly as "vy" (you).
@@ -319,16 +396,16 @@ CRITICAL - VOICE AND PERSPECTIVE:
 - Example GOOD: "Zkontrolovala jsem váš kalendář" (I checked your calendar)
 - Example BAD: "Uživatel nahrál pas" (The user uploaded a passport)
 
-CRITICAL - FORMATTING:
+FORMATTING:
 - Output PLAIN TEXT only. No markdown. No ** bold **. No * italic *. No # headers.
 
-CRITICAL - PROACTIVE INTENT RULES:
+PROACTIVE INTENT RULES:
 intent_cs must describe what Mila HAS ALREADY DONE and what she WILL DO when user clicks UDĚLAT. Be maximally specific and concrete.
 
 GOOD examples:
-- "Zkontrolovala jsem kalendář a připravím odpověď ${cpName || 'protistraně'}: zodpovím otázku o parkování a nabídnu 3 termíny prohlídky. Klikněte UDĚLAT a odešlu email."
-- "Připravím potvrzení schůzky s ${cpName || 'protistranou'} na středu v 9:30 a zablokuji čas ve vašem kalendáři. Klikněte UDĚLAT."
-- "Připravím odpověď: zodpovím dotazy ohledně plochy bytu a stavu rekonstrukce, nabídnu termíny prohlídky příští týden. Klikněte UDĚLAT a odešlu email."
+- "Zkontrolovala jsem kalendář a připravím odpověď ${cpName || 'protistraně'}: zodpovím otázku o parkování a nabídnu 3 termíny prohlídky."
+- "Připravím potvrzení schůzky s ${cpName || 'protistranou'} na středu v 9:30 a zablokuji čas ve vašem kalendáři."
+- "Připravím odpověď: zodpovím dotazy ohledně plochy bytu a stavu rekonstrukce, nabídnu termíny prohlídky příští týden."
 
 BAD examples (NEVER write like this):
 - "Navrhuji odpovědět a buď potvrdit, nebo navrhnout jiný termín" (too vague)
@@ -344,13 +421,14 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "urgency": 1-10 (see URGENCY RULES below),
   "urgencyJustification": "Quote the EXACT words from the conversation that justify this urgency level. If urgency <= 2, write 'No deadline language found.'",
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
-  "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
+  "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = very hard to move),
+  "immovable": true | false (true ONLY for absolutely fixed commitments: court dates, flights, school events, legal deadlines. Default false.),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
   "meetingType": "'address' for in-person meetings (viewings, office meetings, notary). 'online' for video calls (Google Meet). 'phone' for phone calls — when the conversation suggests a quick call, phone discussion, or someone says 'zavolám vám' / 'můžeme si zavolat' / 'call me'. Default to 'address' for SCHEDULE actions unless the conversation clearly indicates a call or video meeting.",
   "cpPhone": "Counterparty's phone number if found in the conversation (from signature, message text, or WhatsApp). Format: international with + prefix (e.g. '+420123456789'). null if not found. Important for phone meetings.",
   "suggestedLocation": "Physical address WHERE PEOPLE WILL MEET — the meeting venue, NOT the property or deal subject. Only relevant when meetingType is 'address'. Priority: (1) explicit venue ('meet at Dykova 17', 'come to our office'), (2) CP's office address from signature IF meeting is at their place, (3) user's office address (see system context) if CP says 'at your office' or 'come to you', (4) the property address ONLY if the meeting is literally at the property (e.g. a viewing/inspection). Addresses in email signatures are the SENDER's company address — do not confuse with meeting venue. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. null if no meeting venue clues exist or meetingType is not 'address'.",
   "locationConfidence": "'high' if venue is explicitly stated or clearly implied ('meet at your office', 'come to Dykova 17'). 'low' if inferring from weak signals (signature address without meeting-place context). null if suggestedLocation is null.",
-  "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific or approximate time (e.g. '2025-02-12T09:30:00'). If the enriched messages contain 'Navrhovaný čas' with a specific day+time, you MUST convert it to ISO 8601 and put it here. Do NOT leave null when a specific time is stated. Approximate times are NOT null — interpret them: 'kolem 9 nebo 10' → 09:00, 'ráno' → 09:00, 'odpoledne' → 14:00. An approximate time is always better than null. null ONLY if no time reference exists at all. CRITICAL: If the CP explicitly stated a time (even outside working hours or on weekends), extract it exactly as stated. But if YOU are generating a suggested time and the CP did NOT state one, you MUST respect the user's working hours and working days from the system context. Do NOT suggest weekends or evenings unless the CP explicitly requested them.",
+  "suggestedTime": "ISO 8601 datetime if counterparty or user proposed a specific or approximate time (e.g. '2025-02-12T09:30:00'). If the enriched messages contain proposedTimes entries (or legacy 'Navrhovaný čas' lines) with a specific day+time, you MUST convert it to ISO 8601 and put it here. Do NOT leave null when a specific time is stated. Approximate times are NOT null — interpret them: 'kolem 9 nebo 10' → 09:00, 'ráno' → 09:00, 'odpoledne' → 14:00. An approximate time is always better than null. null ONLY if no time reference exists at all. Use TODAY'S DATE at the top of this prompt to resolve weekday names to specific calendar dates when converting Navrhovaný čas entries. If the CP explicitly stated a time (even outside working hours or on weekends), extract it exactly as stated. But if YOU are generating a suggested time and the CP did NOT state one, you MUST respect the user's working hours and working days from the system context. Do NOT suggest weekends or evenings unless the CP explicitly requested them.",
   "cpAvailability": "Free-text string describing when the CP said they're available (e.g. 'Tuesday afternoon', 'next week except Wednesday'). null if not mentioned."
 }]
 

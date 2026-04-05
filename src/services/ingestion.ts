@@ -11,7 +11,7 @@ import {
   getUserEmail,
   type EmailMessage,
 } from '@/lib/google/gmail'
-import { filterEmail, classifyEmail, enrichMessage } from '@/lib/ai/gemini'
+import { filterEmail, classifyEmail, enrichMessage, enrichedTextToString } from '@/lib/ai/gemini'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
@@ -362,7 +362,7 @@ async function processOneInboundEmail(
     event_type: 'email',
     direction: 'in',
     occurred_at: email.date.toISOString(),
-    content: (enrichedText || cleanMessageText(email.body, 'email')).slice(0, 5000),
+    content: (enrichedText ? enrichedTextToString(enrichedText) : cleanMessageText(email.body, 'email')).slice(0, 5000),
     message_id: messageId,
   })
 
@@ -513,7 +513,7 @@ async function processOneOutboundEmail(
     event_type: 'email',
     direction: 'out',
     occurred_at: email.date.toISOString(),
-    content: (enrichedText || cleanMessageText(email.body, 'email')).slice(0, 5000),
+    content: (enrichedText ? enrichedTextToString(enrichedText) : cleanMessageText(email.body, 'email')).slice(0, 5000),
     message_id: messageId,
   })
 

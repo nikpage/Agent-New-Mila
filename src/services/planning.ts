@@ -232,7 +232,7 @@ export async function generateActionProposal(
         }
       }
 
-      const weight = proposal.weight || 0
+      const weight = proposal.immovable ? 100 : (proposal.weight || 0)
       const priorityScore = calculatePriorityScore({
         dollarValue: proposal.dollarValue,
         urgency: proposal.urgency,
