@@ -365,14 +365,16 @@ ${ctx.highValueNote}
 TODAY'S DATE: ${ctx.todayStr} (${ctx.isoDate}), current time: ${ctx.timeStr}, timezone: ${ctx.tz}
 Resolve relative dates: "tomorrow" = ${ctx.tomorrowDate}, "next week" = week of ${ctx.nextWeekDate}.
 
-CRITICAL — ROLE IDENTIFICATION:
-- [outbound] = sent BY YOUR BOSS (the user). [inbound] = FROM THE COUNTERPARTY (${ctx.cpName || 'the other party'}).
-- NEVER confuse who is who.
+You are Mila, reviewing a DEAL IN PROGRESS. Your input is a conversation — an ongoing relationship between your boss and a counterparty. The recent timeline entries below show what just happened. Your job is to decide the NEXT MOVE to advance this deal.
 
-CONVERSATION STATE:
+Think about: (1) Where does this deal stand? (2) What just changed? (3) What should happen next?
+
+ROLE KEY: [outbound] = your boss (the user). [inbound] = the counterparty (${ctx.cpName || 'the other party'}).
+
+DEAL STATE:
 ${JSON.stringify(ctx.conversationSummary, null, 2)}
 
-RECENT MESSAGES:
+RECENT TIMELINE:
 ${ctx.recentText}
 
 COUNTERPARTY: ${ctx.cpName || 'Unknown'}`
@@ -412,39 +414,34 @@ interface TriageResult {
 async function triageActions(ctx: PlanningContext, settings: UserSettings): Promise<TriageResult[]> {
   const prompt = `${buildPreamble(ctx)}
 
-You are Mila, a proactive executive assistant. Decide what action(s) this conversation needs.
+Based on where this deal stands and what just happened in the timeline, decide the next move.
 
-ACTION TYPES:
-1. REPLY — user needs to send a message. Use when NO meeting/viewing/appointment is being discussed. THIS IS THE DEFAULT when a CP sends a message.
-2. SCHEDULE — any meeting, viewing, appointment, or in-person event. If a meeting exists, SCHEDULE absorbs REPLY (the calendar invite IS the reply — never return both).
-3. TODO — user needs to do something themselves (NOT a message, NOT a meeting). TODO is the RARE EXCEPTION:
-   ONLY for work requiring (a) a THIRD PARTY the user must contact (call the bank, hire a photographer), (b) PHYSICAL ACTION (visit a location, pick up keys), or (c) work taking DAYS, not minutes.
-   The user is a professional who knows their own business. Do NOT create TODOs that tell them how to do their job. Do NOT invent research tasks, market analysis, or preparation work that the AI thinks would be helpful — if the CP asked a question, the user knows the answer.
+NEXT MOVE OPTIONS:
+1. REPLY — the conversation needs a response to the counterparty. This is the natural next step for most deals: someone wrote, now your boss writes back.
+2. SCHEDULE — a meeting, viewing, or appointment needs to be booked. The calendar invite IS the reply — never return SCHEDULE + REPLY together.
+3. TODO — your boss needs to complete an offline task BEFORE the deal can move forward. This is rare. Only use when the deal is genuinely BLOCKED until the user does something that takes days or involves a third party (e.g. call the bank, hire a photographer, visit a site).
 
-THE TEST: Can the user answer by writing a message right now? If yes → REPLY. Period.
-Examples that are REPLY, never TODO:
-- "Is the flat available?" → REPLY (user knows)
-- "What's your price?" → REPLY (user knows)
-- "Is there room for negotiation?" → REPLY (user knows)
-- "Can you send the documents?" → REPLY (user has them)
-Examples that are genuinely TODO:
-- CP says "confirm financing is ready" and user needs to call their bank → TODO
-- CP says "send photos" and user needs to hire a photographer → TODO
+HOW TO CHOOSE:
+Look at the deal state and the latest timeline entry. Ask: "What moves this deal forward?"
+- If the CP asked questions, made an offer, or proposed something → REPLY (the user knows their own business and can answer)
+- If a meeting is being discussed → SCHEDULE
+- If the deal literally cannot advance until the user does offline work → TODO
+
+Do NOT invent preparation work. The user is a professional. If the CP asked "is the flat available?" or "what's the price?" — that's a REPLY, not a TODO to "research availability." The user knows.
 
 RULES:
 - Return at least one action.
 - Never return two actions that accomplish the same thing.
 - SCHEDULE absorbs REPLY — never return both.
-- For each action, provide a brief reasoning (1-2 sentences) explaining WHY this type.
 
 ${URGENCY_RULES}
 
 Respond with ONLY valid JSON array:
 [{
   "actionType": "REPLY" | "SCHEDULE" | "TODO",
-  "reasoning": "1-2 sentences: why this action type",
+  "reasoning": "1-2 sentences: why this is the next move for this deal",
   "urgency": 1-10,
-  "urgencyJustification": "Quote exact deadline words from conversation, or 'No deadline language found.'",
+  "urgencyJustification": "Quote exact deadline words from the timeline, or 'No deadline language found.'",
   "dollarValue": estimated value in ${settings.typical_deal_size_currency} (0 if unknown, range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "weight": 1-10 (immovability, 1=easy to reschedule, 10=very hard to move),
   "immovable": true only for absolutely fixed commitments (court, flights, school). Default false,
@@ -472,24 +469,23 @@ async function fillReplyDetails(
 ): Promise<ProposedAction> {
   const prompt = `${buildPreamble(ctx)}
 
-You are Mila. Fill in the details for a REPLY action.
+The next move for this deal is REPLY — your boss needs to respond to the counterparty.
 
-TRIAGE DECISION: ${triage.reasoning}
+WHY: ${triage.reasoning}
 
 VOICE: Address user as "vy". Never "uživatel". Plain text only, no markdown.
 
 Respond with ONLY valid JSON:
 {
-  "rationale_cs": "One sentence in ${ctx.planningLang}: the BUSINESS REASON this reply is needed NOW. Focus on consequences, deadlines, or relationship risk.",
-  "intent_cs": "What Mila HAS DONE and WILL DO: specific data from the conversation (names, dates, amounts). Describe the email content Mila will prepare.",
-  "missingInfo": [{"label": "FULL question the CP asked, in ${ctx.planningLang}", "value": null}]
+  "rationale_cs": "One sentence in ${ctx.planningLang}: why sending this reply advances the deal. Focus on what's at stake or what the CP is waiting for.",
+  "intent_cs": "What Mila will prepare: reference SPECIFIC data from the deal (names, property, amounts, questions asked). Describe the message content.",
+  "missingInfo": [{"label": "Question the CP asked that needs answering, in ${ctx.planningLang}", "value": null}]
 }
 
-INTENT RULES:
-- Be maximally specific. Reference actual data from the conversation.
-- BAD: "Navrhuji odpovědět na dotazy" (no specifics). GOOD: "Připravím odpověď: zodpovím dotazy ohledně plochy bytu a stavu rekonstrukce."
+RULES:
+- intent_cs must reference specific facts from the timeline — not generic "answer questions."
 - rationale_cs and intent_cs must NOT repeat each other.
-- missingInfo: extract ALL specific questions the CP asked. Full question text, not keywords.
+- missingInfo: extract ALL open questions from the CP. Full question text, not keywords.
 
 CRITICAL: All text in ${ctx.planningLang}. Do not output English.`
 
@@ -517,9 +513,9 @@ async function fillScheduleDetails(
 ): Promise<ProposedAction> {
   const prompt = `${buildPreamble(ctx)}
 
-You are Mila. Fill in the details for a SCHEDULE action (meeting/viewing/appointment).
+The next move for this deal is SCHEDULE — a meeting needs to be booked.
 
-TRIAGE DECISION: ${triage.reasoning}
+WHY: ${triage.reasoning}
 
 VOICE: Address user as "vy". Never "uživatel". Plain text only, no markdown.
 
@@ -574,16 +570,16 @@ async function fillTodoDetails(
 ): Promise<ProposedAction> {
   const prompt = `${buildPreamble(ctx)}
 
-You are Mila. Fill in the details for a TODO action — something the user must do themselves.
+The next move for this deal is TODO — the deal is blocked until your boss completes an offline task.
 
-TRIAGE DECISION: ${triage.reasoning}
+WHY: ${triage.reasoning}
 
 VOICE: Address user as "vy". Never "uživatel". Plain text only, no markdown.
 
 Respond with ONLY valid JSON:
 {
-  "rationale_cs": "One sentence in ${ctx.planningLang}: why this task matters NOW.",
-  "intent_cs": "ONE sentence: the concrete task the user must do. No sub-tasks, no checklists, no step-by-step."
+  "rationale_cs": "One sentence in ${ctx.planningLang}: what is blocking the deal and why this task unblocks it.",
+  "intent_cs": "ONE sentence: the specific offline task. Name the third party or physical action required."
 }
 
 RULES:
