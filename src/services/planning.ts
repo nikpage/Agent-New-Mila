@@ -159,6 +159,17 @@ export async function generateActionProposal(
       console.log(`[Planning] Merged REPLY into SCHEDULE — calendar invite is the reply`)
     }
 
+    // REPLY absorbs TODO: when the conversation has both a REPLY and a TODO,
+    // the TODO is almost always the AI decomposing a simple reply into sub-tasks.
+    // Drop the TODO — if the user genuinely needs to do offline work, planning
+    // will create a standalone TODO (without a REPLY) on the next run.
+    const hasReply = dedupedProposals.some(p => p.actionType === 'REPLY')
+    const todoIndex = dedupedProposals.findIndex(p => p.actionType === 'TODO')
+    if (hasReply && todoIndex !== -1) {
+      console.log(`[Planning] Dropping TODO — REPLY exists for same conversation. TODO was: ${dedupedProposals[todoIndex].intent_cs?.slice(0, 80)}`)
+      dedupedProposals.splice(todoIndex, 1)
+    }
+
     for (const proposal of dedupedProposals) {
       // Validate and write deal_type onto conversation thread if AI classified it
       const dealType = validateDealType(proposal.dealType)
