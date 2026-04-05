@@ -489,17 +489,24 @@ VOICE: Address user as "vy". Never "uživatel". Plain text only, no markdown.
 
 Respond with ONLY valid JSON:
 {
-  "rationale_cs": "One sentence in ${ctx.planningLang}: why sending this reply advances the deal. Focus on what's at stake or what the CP is waiting for.",
-  "intent_cs": "What Mila will prepare: reference SPECIFIC data from the deal (names, property, amounts, questions asked). Describe the message content.",
-  "missingInfo": [{"label": "Short, warm question from Mila to the user, in ${ctx.planningLang}", "value": null}]
+  "rationale_cs": "One sentence in ${ctx.planningLang}: why sending this reply advances the deal. If there's a DEADLINE, state it here clearly (e.g. 'CP čeká odpověď do 17:00 dnes').",
+  "intent_cs": "What Mila will prepare: reference SPECIFIC data from the deal (names, property, amounts). Describe the message Mila will draft. If the CP set a deadline, intent must address it.",
+  "missingInfo": [{"label": "Short question in ${ctx.planningLang}", "value": null}]
 }
 
 RULES:
 - intent_cs must reference specific facts from the timeline — not generic "answer questions."
 - rationale_cs and intent_cs must NOT repeat each other.
-- missingInfo is what MILA needs from the user to write the reply. Look at the WHOLE DEAL STATE — not just the latest message. Ask yourself: "What facts does Mila not know that the user does?" Phrase each as a short, warm question from Mila to the user. NEVER copy or paraphrase the CP's words. Example: deal involves financing → "Už máte potvrzení z banky?" (NOT "Potvrzujete financování na 12.4M?")
-- Date/deadline agreements (e.g. "closing date", "termín uzavření", "termín předání") are calendar events → use SCHEDULE, NOT missingInfo.
-- Empty array [] is fine if Mila has enough context to draft without asking.
+
+missingInfo rules — READ CAREFULLY:
+- missingInfo is ONLY for information the user KNOWS but Mila DOESN'T. Things like: a price decision, a yes/no business decision, a preference between options.
+- NEVER ask the user to confirm whether they did something ("Odeslali jste dokumenty?", "Byly odeslány?"). Mila is not a school teacher checking homework. If the CP asked for documents, Mila's job is to help send them or remind the user — that goes in intent_cs or becomes a TODO.
+- NEVER extract CP deadlines as questions. A CP saying "send by 5pm" is URGENCY, not a question. Put it in rationale_cs and set urgency accordingly.
+- NEVER paraphrase or copy CP's words into a question. Mila asks in her own warm voice.
+- Good missingInfo: "Za kolik chcete nemovitost nabídnout?" (price decision), "Chcete nabídnout prohlídku?" (yes/no decision)
+- Bad missingInfo: "Odeslali jste dokumenty do 17:00?" (verification), "Potvrzujete financování?" (interrogation)
+- Empty array [] is the right answer when Mila has enough context to draft without asking.
+- Date/deadline agreements → SCHEDULE action, not missingInfo.
 
 CRITICAL: All text in ${ctx.planningLang}. Do not output English.`
 
