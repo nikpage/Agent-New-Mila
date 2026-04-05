@@ -103,6 +103,7 @@ interface HistoryEmail {
 // Realistic back-and-forth about office space at Sokolovská, Karlín.
 // This gives Mila context: the address is Sokolovská 46/51, Praha 8 — NOT
 // Eva's signature address (Ďáblická). The negotiation settled at 450 CZK/m2, 3yr.
+// Outbound emails can't be ingested directly — CP replies reference what user said.
 
 const EVA_EMAIL = 'ainikpage+dvorakova.eva@gmail.com'
 const EVA_FROM = 'Eva Dvorakova <ainikpage+dvorakova.eva@gmail.com>'
@@ -111,12 +112,13 @@ const EVA_FROM = 'Eva Dvorakova <ainikpage+dvorakova.eva@gmail.com>'
 const EVA_NEGOTIATION_SUBJECT = `[${RUN_ID}] Karlin office space — Sokolovská`
 
 const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
+  // 1. Eva's initial inquiry — found the listing, wants details
   {
     cpKey: 'eva',
     direction: 'inbound',
     from: EVA_FROM,
     subject: EVA_NEGOTIATION_SUBJECT,
-    daysAgo: 12,
+    daysAgo: 28,
     body: [
       'Dobrý den,',
       '',
@@ -131,6 +133,75 @@ const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Ďáblická, 182 00 Ďáblice, Czechia',
     ].join('\n'),
   },
+  // 2. Eva responds after receiving floor plan + pricing (465 CZK/m2) — counteroffers
+  {
+    cpKey: 'eva',
+    direction: 'inbound',
+    from: EVA_FROM,
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 24,
+    body: [
+      'Děkuji za podklady — půdorys třetího patra vypadá skvěle.',
+      'Sokolovská 46/51, Praha 8, 200m2 open plan se 2 zasedačkami,',
+      'to je přesně co hledáme.',
+      '',
+      'Nicméně 465 CZK/m2 je nad náš rozpočet.',
+      'Nabízíme 420 CZK/m2/měsíc s desetiletým závazkem.',
+      'Delší nájem by měl ospravedlnit výrazně nižší sazbu.',
+      '',
+      'Můžeme si prostory prohlédnout tento týden?',
+      '',
+      'Eva Dvořáková',
+      'Dvorak & Partners s.r.o.',
+      'Ďáblická, 182 00 Ďáblice, Czechia',
+    ].join('\n'),
+  },
+  // 3. Eva after the viewing — liked the space, holds her 420 offer
+  {
+    cpKey: 'eva',
+    direction: 'inbound',
+    from: EVA_FROM,
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 20,
+    body: [
+      'Dobrý den,',
+      '',
+      'Díky za prohlídku včera — prostory na Sokolovské se nám líbí.',
+      'Přesně odpovídají našim požadavkům na velikost i polohu.',
+      '',
+      'Chápu vaši pozici ohledně 465 CZK/m2 a přemýšlím o tom.',
+      'Nicméně naše nabídka 420 CZK/m2 na 10 let zůstává —',
+      'celkem je to 10,08M Kč garantovaného příjmu přes celou dobu.',
+      '',
+      'Dejte nám vědět do konce týdne, ať můžeme plánovat.',
+      '',
+      'Eva Dvořáková',
+    ].join('\n'),
+  },
+  // 4. Eva responds to user's counter (450/m2 for 3 years) — negotiates middle ground
+  {
+    cpKey: 'eva',
+    direction: 'inbound',
+    from: EVA_FROM,
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 14,
+    body: [
+      'Dobrý den,',
+      '',
+      'Souhlasím, že vaše protinapídka je férová — 450 CZK/m2, ale',
+      'na pouhé 3 roky je pro nás příliš krátký závazek na takovou sazbu.',
+      '',
+      'Co takhle kompromis: 440 CZK/m2 na 5 let?',
+      'To dává obou stranám jistotu a je to blíž vaší představě než 420 na 10.',
+      '',
+      'Potřebujeme se rozhodnout brzy — máme ještě jednu nemovitost',
+      'na Bubenské, ale Sokolovská se nám líbí víc.',
+      '',
+      'Eva Dvořáková',
+      'Dvorak & Partners s.r.o.',
+    ].join('\n'),
+  },
+  // 5. Eva accepts final terms — 450 CZK/m2 for 3 years
   {
     cpKey: 'eva',
     direction: 'inbound',
@@ -138,20 +209,23 @@ const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
     subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
     daysAgo: 9,
     body: [
-      'Děkuji za informace o prostorech na Sokolovské 46/51, Praha 8.',
-      'Třetí patro, 200m2 open plan se 2 zasedačkami zní dobře.',
+      'Dobrý den,',
       '',
-      'Nicméně 465 CZK/m2 je nad náš rozpočet.',
-      'Nabízíme 440 CZK/m2/měsíc s desetiletým závazkem.',
-      'Delší nájem by měl ospravedlnit nižší sazbu.',
+      'Projednali jsme vaši finální nabídku s vedením:',
+      '450 CZK/m2/měsíc na 3 roky s opcí na prodloužení za tržní cenu.',
       '',
-      'Prostory jsme si prohlédli a vyhovují nám.',
+      'Souhlasíme. Opce na prodloužení nám dává dostatečnou jistotu.',
+      '',
+      'Kdy bychom mohli domluvit podpis smlouvy?',
+      'Potřebujeme se nastěhovat do poloviny dubna.',
+      '',
+      'Děkuji za trpělivost při vyjednávání.',
       '',
       'Eva Dvořáková',
       'Dvorak & Partners s.r.o.',
-      'Ďáblická, 182 00 Ďáblice, Czechia',
     ].join('\n'),
   },
+  // 6. Eva confirms lawyer review is done — ready to sign
   {
     cpKey: 'eva',
     direction: 'inbound',
@@ -161,16 +235,201 @@ const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
     body: [
       'Dobrý den,',
       '',
-      'Děkuji za protinávrh. Projednali jsme s vedením vaši nabídku',
-      '450 CZK/m2/měsíc na 3 roky (místo našich původních 440 na 10 let).',
+      'Náš právník zkontroloval návrh smlouvy, který jste nám poslal.',
+      'Máme jen dvě drobné připomínky:',
+      '1) Výpovědní lhůta — chceme 6 měsíců místo 3',
+      '2) Parkování — potřebujeme potvrdit 3 místa v garážích',
       '',
-      'Souhlasíme — 450 CZK/m2/měsíc na 3 roky nám vyhovuje.',
+      'Jinak je vše v pořádku a jsme připraveni podepsat.',
+      'Dejte nám vědět, kdy to můžeme uzavřít.',
       '',
-      'Kdy bychom mohli domluvit podpis smlouvy? Potřebujeme se nastěhovat do poloviny dubna.',
-      '',
-      'Děkuji,',
       'Eva Dvořáková',
       'Dvorak & Partners s.r.o.',
+      'Ďáblická, 182 00 Ďáblice, Czechia',
+    ].join('\n'),
+  },
+]
+
+// ─── Novotný Negotiation History (Thread 2: Difficult commercial sale) ───────
+// Hard negotiation over 45M commercial building in Vinohrady.
+// Novotný is aggressive — pushes back on price, changes terms, creates pressure.
+// The history arc: inquiry → lowball → pushback → terms change → deadline pressure → final urgent email.
+
+const NOVOTNY_EMAIL = 'ainikpage+novotny.jan@gmail.com'
+const NOVOTNY_FROM = 'Jan Novotny <ainikpage+novotny.jan@gmail.com>'
+
+const NOVOTNY_NEGOTIATION_SUBJECT = `[${RUN_ID}] Komerční budova Vinohrady — nabídka`
+
+const NOVOTNY_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
+  // 1. Novotný's initial inquiry — representing a buyer for the commercial building
+  {
+    cpKey: 'urgent',
+    direction: 'inbound',
+    from: NOVOTNY_FROM,
+    subject: NOVOTNY_NEGOTIATION_SUBJECT,
+    daysAgo: 35,
+    body: [
+      'Dobrý den,',
+      '',
+      'Jan Novotný z Prague Commercial. Mám klienta, který hledá',
+      'komerční nemovitost v Praze 2 — viděli jsme vaši budovu na Vinohradech.',
+      '',
+      'Můžete nám poslat podrobnosti? Zajímá nás celková užitná plocha,',
+      'stav budovy, aktuální obsazenost a požadovaná cena.',
+      '',
+      'Klient má rozpočet kolem 40M Kč a může uzavřít rychle.',
+      '',
+      'Jan Novotný',
+      'Senior Broker, Prague Commercial',
+      'Třinecká 672, Praha',
+    ].join('\n'),
+  },
+  // 2. Novotný responds to pricing (listed at 48M) — lowballs at 38M
+  {
+    cpKey: 'urgent',
+    direction: 'inbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 30,
+    body: [
+      'Díky za podklady. 1200m2, 85% obsazenost, to vypadá dobře.',
+      '',
+      'Ale 48M je příliš. Budova potřebuje novou fasádu a výtah neprošel',
+      'poslední revizí — to jsou náklady kolem 3-4M pro kupujícího.',
+      '',
+      'Nabízíme 38M Kč s uzavřením do 60 dnů.',
+      'Klient má připravené financování od Komerční banky.',
+      '',
+      'Dejte mi vědět do pátku — klient se dívá ještě na Žižkov.',
+      '',
+      'Jan Novotný',
+      'Prague Commercial',
+    ].join('\n'),
+  },
+  // 3. Novotný pushes back on user's counter (45M) — tries 41M + conditions
+  {
+    cpKey: 'urgent',
+    direction: 'inbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 24,
+    body: [
+      'Chápu vaše argumenty ohledně lokality a výnosu z nájmů,',
+      'ale 45M je stále nad tržní cenou pro budovy v tomto stavu.',
+      '',
+      'Můj klient je ochoten nabídnout 41M Kč, ale pod podmínkou:',
+      '- Prodávající opraví výtah před uzavřením (odhad 800k Kč)',
+      '- Uzavření do 45 dnů od podpisu kupní smlouvy',
+      '- Přístup k budově pro due diligence tento týden',
+      '',
+      'Na Žižkově máme srovnatelnou budovu za 39M v lepším stavu.',
+      'Dejte nám odpověď do středy.',
+      '',
+      'Novotný',
+    ].join('\n'),
+  },
+  // 4. Novotný after due diligence — found issues, uses them as leverage
+  {
+    cpKey: 'urgent',
+    direction: 'inbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 18,
+    body: [
+      'Provedli jsme due diligence na Vinohradech. Pár zjištění:',
+      '',
+      '- Elektroinstalace v přízemí neodpovídá normám — bude potřeba',
+      '  revize před jakýmkoli pronájmem nových prostor',
+      '- Dva nájemci mají smlouvu končící za 4 měsíce a nechtějí prodloužit',
+      '- Parkoviště nemá kolaudaci pro komerční využití',
+      '',
+      'S ohledem na tyto skutečnosti navrhuji upravit naši nabídku:',
+      '42M Kč s tím, že prodávající vyřeší elektroinstalaci.',
+      'Pokud ne — 40M as-is.',
+      '',
+      'Souhlasím s vaší podmínkou ohledně opravy výtahu — je to',
+      'rozumný kompromis. Ale ta elektřina je zásadní.',
+      '',
+      'Jan Novotný',
+      'Prague Commercial',
+    ].join('\n'),
+  },
+  // 5. Novotný responds to user holding firm at 45M — escalates, creates urgency
+  {
+    cpKey: 'urgent',
+    direction: 'inbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 12,
+    body: [
+      'Tak dobře. Mluvil jsem s klientem a je ochoten jít na 43,5M.',
+      'To je naše absolutní maximum.',
+      '',
+      'Nicméně mám podmínku — musíme uzavřít rychle.',
+      'Klient zvažuje budovu na Žižkově za 39M a potřebuje',
+      'se rozhodnout do konce příštího týdne.',
+      '',
+      'Pokud přistoupíte na 43,5M, můžeme mít podepsanou smlouvu',
+      'u notáře do 10 dnů. Financování je schváleno, banka čeká',
+      'jen na finální kupní smlouvu.',
+      '',
+      'Jinak se obávám, že klient půjde jinam. Nechci vás tlačit,',
+      'ale tohle je realita trhu.',
+      '',
+      'Jan Novotný',
+      'Senior Broker, Prague Commercial',
+      'Třinecká 672, Praha',
+    ].join('\n'),
+  },
+  // 6. Novotný responds to user accepting 45M (user held firm, buyer relented) — sets up notary
+  {
+    cpKey: 'urgent',
+    direction: 'inbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 7,
+    body: [
+      'Dobrý den,',
+      '',
+      'Klient souhlasí s 45M Kč — vaše argumenty ohledně lokality',
+      'a stabilních nájemců ho přesvědčily. Žižkov nakonec odpadl.',
+      '',
+      'Můj právník připraví návrh kupní smlouvy do pondělí.',
+      'Potřebuji od vás:',
+      '1) Aktuální list vlastnictví (ne starší než 3 dny)',
+      '2) Potvrzení o bezdlužnosti SVJ',
+      '3) Energetický průkaz budovy',
+      '',
+      'Navrhuji notáře JUDr. Procházku na Třinecké 672 —',
+      'spolupracuji s ním pravidelně a je k dispozici příští týden.',
+      '',
+      'Domluvíme přesný termín, jakmile budeme mít smlouvu.',
+      '',
+      'Jan Novotný',
+      'Prague Commercial',
+      'Třinecká 672, Praha',
+    ].join('\n'),
+  },
+  // 7. Novotný increases pressure — buyer getting impatient, deadline approaching
+  {
+    cpKey: 'urgent',
+    direction: 'inbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 3,
+    body: [
+      'Potřebuji ty dokumenty co nejdřív — kupující tlačí.',
+      '',
+      'List vlastnictví a bezdlužnost SVJ jste slíbil poslat včera.',
+      'Právník má smlouvu hotovou a čeká jen na to.',
+      '',
+      'Klient má další nemovitost v záloze a začíná být nervózní',
+      'z prodlení. Pokud nepodepíšeme do konce týdne,',
+      'nemůžu garantovat, že nabídka 45M bude stále na stole.',
+      '',
+      'Prosím, pošlete dokumenty DNES.',
+      '',
+      'Novotný',
     ].join('\n'),
   },
 ]
@@ -206,12 +465,13 @@ const TEST_EMAILS: TestEmail[] = [
     body: [
       'Dobrý den,',
       '',
-      'Navazuji na naši dohodu ohledně kanceláře v Karlíně za 450 CZK/m2, 3 roky.',
-      'Náš právník zkontroloval návrh smlouvy a jsme připraveni podepsat.',
+      'Navazuji na naši korespondenci — máme dohodnutých 450 CZK/m2, 3 roky',
+      's opcí na prodloužení. Náš právník měl dvě připomínky k návrhu smlouvy',
+      '(výpovědní lhůta a parkování) — máte k tomu zpětnou vazbu?',
       '',
+      'Každopádně bychom rádi co nejdřív finalizovali.',
       'Můžeme zítra ráno kolem 9 nebo 10 hodin doladit poslední detaily?',
-      'Stačil by rychlý telefonát — potřebujeme jen potvrdit finální podmínky',
-      'před samotným podpisem.',
+      'Stačil by rychlý telefonát — projdeme ty dva body a domluvíme podpis.',
       '',
       'Potřebujeme se nastěhovat do dubna, takže čas tlačí.',
       '',
@@ -241,21 +501,26 @@ const TEST_EMAILS: TestEmail[] = [
 
 const HIGH_PRIORITY_EMAIL: TestEmail = {
   cpKey: 'urgent',
-  from: 'Jan Novotny <ainikpage+novotny.jan@gmail.com>',
+  from: NOVOTNY_FROM,
   subject: `[${RUN_ID}] URGENTNÍ: 45M obchod — podpis u notáře zítra ráno`,
   body: [
     'URGENTNÍ — NUTNÁ OKAMŽITÁ ODPOVĚĎ',
     '',
-    'Kupující komerční budovy na Vinohradech potvrdil 45 000 000 Kč.',
-    'Schůzka u notáře je ZÍTRA v 9:00 na adrese Třinecká 672, Praha.',
+    'Navazuji na naši korespondenci ohledně budovy na Vinohradech.',
+    'Kupující potvrdil 45 000 000 Kč — finální cena dle naší dohody.',
     '',
-    'Potřebujeme vaše potvrzení DNES do 17:00, jinak obchod padne.',
+    'Smlouva je hotová, JUDr. Procházka má volný termín ZÍTRA v 9:00.',
+    'Schůzka u notáře: Třinecká 672, Praha.',
+    '',
+    'Potřebuji vaše potvrzení DNES do 17:00, jinak obchod padne.',
+    'Stále nemám list vlastnictví a bezdlužnost SVJ, které jste slíbil.',
     'Kupující má další nemovitost v záloze a odejde.',
     '',
-    'Potřebné dokumenty:',
-    '- Podepsaná kupní smlouva',
+    'Potřebné dokumenty na zítřek:',
+    '- Podepsaná kupní smlouva (máte od mého právníka)',
+    '- List vlastnictví (ne starší 3 dny)',
+    '- Potvrzení bezdlužnosti SVJ',
     '- Plná moc (originál)',
-    '- Doklad o financování z banky',
     '',
     'Toto je největší obchod tohoto čtvrtletí. Prosím, odpovězte IHNED.',
     '',
@@ -278,8 +543,8 @@ const CP_RESPONSE_PROFILES: Record<string, { persona: string; context: string; g
   },
   eva: {
     persona: 'Eva Dvorakova, representing Dvorak & Partners s.r.o.',
-    context: 'Lease deal is done: 450 CZK/m2, 3yr, Sokolovská 46/51 Karlín. Need to sign contract and move in by April. You asked for a call "around 9 or 10" to finalize details before signing.',
-    guidance: 'If Mila proposed a call time, confirm it. Ask about 3 dedicated parking spots for COO, CFO, and company car. Ask when the actual signing appointment at the office will be.',
+    context: 'Long negotiation over Sokolovská 46/51 Karlín (started at 465 vs 420, settled at 450 CZK/m2, 3yr with renewal option). Lawyer reviewed contract — 2 minor issues: 6-month notice period and 3 parking spots. Need to sign and move in by April. You asked for a call "around 9 or 10" to finalize details before signing.',
+    guidance: 'If Mila proposed a call time, confirm it. Push on the 6-month notice period issue — your lawyer insists. Ask about the 3 parking spots again. Ask when the actual signing appointment will be.',
   },
   martin: {
     persona: 'Martin Kral, handling the Smichov property purchase',
@@ -288,8 +553,8 @@ const CP_RESPONSE_PROFILES: Record<string, { persona: string; context: string; g
   },
   urgent: {
     persona: 'Jan Novotny, senior broker at Prague Commercial',
-    context: '45M CZK Vinohrady commercial building deal, notary appointment tomorrow 9 AM.',
-    guidance: 'Acknowledge whatever Mila confirmed. Press for exact document delivery timing. Remind the buyer has another property lined up. Keep urgency high.',
+    context: 'Months-long negotiation over Vinohrady commercial building. Started at 48M listed, buyer offered 38M, went through due diligence (found electrical + parking issues), settled at 45M. Notary JUDr. Procházka at Třinecká 672, appointment tomorrow 9 AM. Still waiting on list vlastnictví and bezdlužnost SVJ.',
+    guidance: 'Acknowledge whatever Mila confirmed. Press HARD for exact document delivery timing — you still need the LV and SVJ docs. Remind the buyer has the Žižkov property as backup. If documents not confirmed, threaten to postpone notary. Keep urgency extremely high.',
   },
 }
 
@@ -975,8 +1240,9 @@ async function main() {
 
     if (!flags.has('--skip-inject')) {
       // ── Phase 0: Inject conversation history (backfill) ──────────────
-      // Eva's negotiation thread gives Mila context about the Sokolovská
-      // address and the agreed 450 CZK/m2 terms — before the "current" email arrives.
+      // Eva: negotiation about Sokolovská office (settled at 450 CZK/m2, 3yr).
+      // Novotný: difficult commercial building sale in Vinohrady (45M, months of pushback).
+      // Both histories give Mila realistic deal context before "current" emails arrive.
       console.log()
       console.log('─── Phase 0: Injecting Conversation History ────────────')
 
@@ -987,11 +1253,18 @@ async function main() {
       )
       allGmailIds.push(...evaHistoryIds)
 
+      const novotnyHistoryIds = await injectHistoryThread(
+        USER_ID,
+        NOVOTNY_NEGOTIATION_HISTORY,
+        'novotny-negotiation'
+      )
+      allGmailIds.push(...novotnyHistoryIds)
+
       // Run bulk ingestion to process history — ingest, enrich, thread, summarize.
       // NO action generation — history is context only, not new work.
       log('history', 'Running bulk ingestion to process history emails...')
       const sinceDate = new Date()
-      sinceDate.setDate(sinceDate.getDate() - 14) // cover all history emails
+      sinceDate.setDate(sinceDate.getDate() - 40) // cover all history emails (Novotný goes back 35d)
       const bulkRes = await fetch(`${BASE_URL}/api/ingest/bulk`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': API_KEY },
