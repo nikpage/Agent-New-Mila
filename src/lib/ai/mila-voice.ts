@@ -293,10 +293,15 @@ export async function generateFinalDraft(
     ? 'Write a short WhatsApp message. No subject line needed — set subject to empty string. Keep it conversational but professional.'
     : `Write a professional email in ${settings.ai_language || 'Czech'}.\nSign off with:\n${settings.ai_email_signature}`
 
+  const tz = settings.timezone || 'Europe/Prague'
+  const now = new Date()
+  const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz })
+
   const prompt = `${systemContext}
 
 You are an executive assistant writing a ${isWhatsApp ? 'WhatsApp message' : 'email'} on behalf of your boss.
 Language: ${settings.ai_language || 'Czech'}.
+TODAY'S DATE: ${todayStr}. Use this to resolve any relative dates ("zítra", "příští týden") when writing the message.
 
 CONTEXT:
 ${JSON.stringify(conversationContext, null, 2)}

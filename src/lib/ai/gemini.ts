@@ -62,7 +62,14 @@ export async function enrichMessage(
     : 'received FROM a counterparty'
 
   const outputLanguage = settings?.ai_language || 'Czech'
-  const prompt = `${businessContext}Extract key information from this message the way a human assistant would read it. Only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text. Interpret terms in context of the business domain above — do NOT translate domain-specific words literally.
+  const tz = settings?.timezone || 'Europe/Prague'
+  const now = new Date()
+  const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz })
+  const isoDate = now.toISOString().split('T')[0]
+
+  const prompt = `${businessContext}TODAY'S DATE: ${todayStr} (${isoDate}). Use this to convert relative dates ("zítra", "příští týden", "v pátek") to absolute dates in the Navrhovaný čas extraction.
+
+Extract key information from this message the way a human assistant would read it. Only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text. Interpret terms in context of the business domain above — do NOT translate domain-specific words literally.
 
 VOICE: Refer to the email account owner as "vy" (you), never as "uživatel" (the user). The counterparty is referred to by name or as "protistrana".
 FORMATTING: Plain text only. No markdown, no ** bold **, no # headers.
@@ -274,13 +281,18 @@ ACTION TYPE RULES — return one OR multiple actions only when genuinely indepen
    - CP asks to sign a contract in person → SCHEDULE (that's a meeting)
    CRITICAL — suggestedTime: This MUST be the time of the ACTUAL MEETING with the CP. If CP says "meeting at 9:00" → suggestedTime = 9:00. If CP says "let's meet tomorrow afternoon" → suggestedTime = tomorrow 14:00 (your best interpretation). NEVER schedule a separate time slot to "send the invitation" or "confirm the meeting" — clicking UDĚLAT sends the invite automatically. If user needs prep time before the meeting, that is a separate TODO, not a second SCHEDULE.
    CRITICAL — invite is the reply: The calendar invite body IS the reply to the counterparty. When user clicks UDĚLAT, Mila sends the calendar invite which serves as the confirmation email. So intent_cs must describe BOTH what the reply will say AND what meeting is being booked. Example: "Potvrdím účast na podpisu zítra v 9:00 u notáře, zodpovím dotaz ohledně dokumentů a zablokuji čas ve vašem kalendáři. Klikněte UDĚLAT." There is NEVER a separate REPLY when a SCHEDULE exists. The invite handles ALL communication about the meeting.
-3. TODO — something the user needs to do themselves that is NOT a message and NOT a meeting. Examples: gather documents, review a contract internally, get banker approval, verify an address, prepare specific paperwork. Be CONCRETE — list each specific task (e.g. "Získejte souhlas od banky" not "Připravte dokumenty"). NEVER use TODO when the CP proposed a meeting — that is SCHEDULE. NEVER use TODO when the next step is responding to the CP — that is REPLY or SCHEDULE.
-   CRITICAL: When a CP asks a question or requests confirmation ("Can you confirm financing?", "Is the flat available?", "What's your price?"), that is ALWAYS a REPLY. The user replies with an answer. Do NOT decompose a simple answer into internal sub-tasks. TODO is for real offline work: gathering documents, visiting a location, getting third-party approval, preparing materials for a meeting. If the user can handle it by writing a message, it's a REPLY.
+3. TODO — something the user needs to do themselves that is NOT a message and NOT a meeting. NEVER use TODO when the CP proposed a meeting — that is SCHEDULE. NEVER use TODO when the next step is responding to the CP — that is REPLY or SCHEDULE.
+   CRITICAL — DEFAULT IS REPLY, NOT TODO: When a CP sends a message, the default action is REPLY. TODO is the EXCEPTION, not the rule. TODO is ONLY for work that:
+   (a) requires a THIRD PARTY (call the bank, contact a lawyer, hire a photographer), OR
+   (b) requires PHYSICAL ACTION (visit a location, print documents, pick up keys), OR
+   (c) requires SIGNIFICANT TIME to complete (days, not minutes)
+   If none of (a), (b), (c) apply → it is a REPLY. Period.
+   "Check availability" → REPLY (user knows this). "Check the price" → REPLY (user knows this). "Verify financing with the bank" → TODO (requires calling a third party). "Book a photographer" → TODO (requires contacting a third party).
+   When in doubt, choose REPLY. The user can always decide to do internal work before sending — Mila doesn't need to tell them that.
    CRITICAL: Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up", "send later", or "call if no reply". Mila proposes actions — the user decides and acts. If something is time-sensitive, set urgency accordingly so instant notifications alert the user.
 4. SCHEDULE ABSORBS REPLY: When a SCHEDULE action exists, do NOT return a REPLY action for the same conversation. The calendar invite is the reply. Any CP questions get answered in the invite body. This is absolute — no exceptions.
 5. You MUST always return at least one action based on the current conversation state.
-6. Each action is independent — different urgency, weight, and intent for each.
-7. DEDUP RULE: Never return two actions that accomplish the same thing. If a SCHEDULE already confirms a meeting with the CP, do NOT add a REPLY. If a REPLY already covers everything, do NOT add a TODO that just says "follow up on the reply." Each action must address a genuinely INDEPENDENT task.
+6. DEDUP RULE: Never return two actions that accomplish the same thing. Each action must address a genuinely INDEPENDENT task.
 
 MULTI-ACTION TRIAGE:
 When a conversation requires multiple steps, think through the critical path the way a human assistant would:
@@ -288,6 +300,17 @@ When a conversation requires multiple steps, think through the critical path the
 - What meeting needs to be booked — at what ACTUAL time, at what ACTUAL location?
 - What does the user need to prepare BEFORE the meeting? (documents, approvals, external confirmations)
 Return a separate action for each genuinely independent step. Each gets its own urgency based on ITS OWN deadline — the confirmation email is urgency 10 if the deadline is today, while the document prep might be urgency 7 if the meeting is tomorrow.
+
+TODO + REPLY BOUNDARY:
+A TODO alongside a REPLY is ONLY valid when the user literally CANNOT write the reply without completing real offline work first. Examples of valid TODO + REPLY:
+- CP asks "when can we do a viewing?" and user needs to book a photographer first → TODO (book photographer) + REPLY (confirm viewing date after photographer is booked)
+- CP asks "can you confirm financing?" and user needs to call their bank → TODO (call bank) + REPLY (confirm financing after bank responds)
+Examples of INVALID TODO + REPLY — these are just a REPLY:
+- CP asks "is the flat available?" → REPLY (user knows the answer)
+- CP asks "what's your price?" → REPLY (user knows the answer)
+- CP asks "can you send the documents?" → REPLY (user has the documents)
+The test: can the user answer by writing a message right now? If yes → REPLY only. If no, because they need to DO something first that takes real time or involves a third party → TODO + REPLY.
+CRITICAL: When TODO + REPLY coexist, the REPLY must NOT assume the TODO's outcome. If the TODO is "call bank to verify financing," the REPLY cannot say "confirm financing is ready." The REPLY should be deferred or its intent_cs must say it depends on the TODO result.
 
 CRITICAL - VOICE AND PERSPECTIVE:
 - You are Mila, the user's assistant. Address the user directly as "vy" (you).
@@ -333,11 +356,9 @@ Respond with ONLY valid JSON — an array of one or more action objects:
 Rules:
 - DO NOT write the email draft.
 - For SCHEDULE: intent_cs describes what Mila will schedule. missingInfo should contain any questions the CP asked that need answering in the calendar invite (e.g. parking, documents, who's coming). Only LEAVE OUT time/slot logistics — scheduling handles those automatically.
-- ADDRESS INFERENCE for SCHEDULE: suggestedLocation is the MEETING VENUE — where people will physically meet. It is NOT the property/deal subject unless the meeting is at the property (e.g. a viewing). Priority: (1) explicit venue stated in conversation, (2) CP's office from their signature if meeting is at their place, (3) user's office (from system context) if CP says 'at your office', (4) property address only for viewings/inspections. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. If you only have a partial address, output it — Google Maps can often resolve it. Set locationConfidence to 'low' when the source is ambiguous.
 - For REPLY: intent_cs describes the email content Mila will prepare. missingInfo should contain questions CP asked.
 - For TODO: intent_cs describes what the user needs to do. No draft needed.
 - missingInfo: Extract ALL specific questions the counterparty asked. The label MUST be the COMPLETE question in ${planningLang}. Do NOT shorten to keywords.
-- Each action in the array is independent — urgency, weight, dollarValue can differ per action.
 
 CRITICAL: You must generate ALL user-facing text (rationale_cs, intent_cs, missingInfo labels) in ${planningLang}. Do not output English.
 
