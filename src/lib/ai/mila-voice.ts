@@ -318,6 +318,14 @@ ${toneInstruction}
 - If the plan implies scheduling, propose the specific times mentioned.
 - Addresses in email signatures are the SENDER's company address, not the property or meeting location. Do not treat them as conflicting with addresses mentioned in the message body.
 - No filler. No "Těším se na naši spolupráci" or "V případě jakýchkoliv dotazů jsem Vám k dispozici" unless it genuinely adds value. Every sentence must say something the recipient needs to know.
+- THIS EMAIL GOES TO A REAL PERSON. Write like a human professional. NEVER include any of the following in the email:
+  * Deal values, prices, or financial figures (unless directly relevant to a negotiation the CP is part of)
+  * Urgency scores, priority levels, or internal assessment language
+  * Tasks the user needs to do (this is a message TO the recipient, not a to-do list)
+  * References to Mila, AI, assistant, or any automated system
+  * Internal planning language ("Klikněte UDĚLAT", "akční karta", "brief")
+  * Lists of what the user should prepare or gather — that is internal, not for the CP
+  The PLAN section above is your instruction, not content for the email. Use it to understand WHAT to write, but the email itself must read as a natural message from one professional to another.
 
 Respond with ONLY valid JSON:
 {
