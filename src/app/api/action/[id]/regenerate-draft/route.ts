@@ -51,13 +51,16 @@ export async function POST(
       body: action.draft_body_text || action.intent_cs || action.rationale || '',
     }
 
+    const missingInfo = (action.missing_info as { label: string; placeholder?: string; value: string | null }[] | null) || undefined
+
     const newDraft = await regenerateDraftWithInstruction(
       currentDraft,
       instruction.trim(),
       conversation?.summary_json,
       cp?.name || cp?.primary_identifier || 'Counterparty',
       channel,
-      settings
+      settings,
+      missingInfo
     )
 
     // Save the regenerated draft

@@ -85,7 +85,14 @@ export async function getPendingActionsForBrief(userId: string): Promise<ActionP
     throw new Error(`Failed to get pending actions: ${error.message}`)
   }
 
-  return data || []
+  // Filter out postponed actions whose snooze hasn't expired yet
+  const now = new Date()
+  return (data || []).filter(action => {
+    const payload = action.payload as Record<string, unknown> | null
+    const postponedUntil = payload?.postponed_until as string | undefined
+    if (!postponedUntil) return true
+    return new Date(postponedUntil) <= now
+  })
 }
 
 /**
@@ -306,7 +313,14 @@ export async function getHighPriorityUnnotifiedActions(
     throw new Error(`Failed to get high-priority unnotified actions: ${error.message}`)
   }
 
-  return data || []
+  // Filter out postponed actions whose snooze hasn't expired yet
+  const now = new Date()
+  return (data || []).filter(action => {
+    const payload = action.payload as Record<string, unknown> | null
+    const postponedUntil = payload?.postponed_until as string | undefined
+    if (!postponedUntil) return true
+    return new Date(postponedUntil) <= now
+  })
 }
 
 /**

@@ -171,14 +171,22 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
 
   async function handlePostpone(actionId: string, postponeTo: string) {
     const action = sortedActions.find(a => a.id === actionId)
-    const res = await fetch(`/api/action/${actionId}/postpone`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: action ? getActionToken(action) : token, postponeTo }),
-    })
-    if (res.ok) {
+    try {
+      const res = await fetch(`/api/action/${actionId}/postpone`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: action ? getActionToken(action) : token, postponeTo }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `Chyba (${res.status})` }))
+        throw new Error(err.error || 'Nepodařilo se odložit')
+      }
       setData(prev => ({ ...prev, actions: prev.actions.filter(a => a.id !== actionId) }))
       setExpandedId(prev => prev === actionId ? null : prev)
+      const labels: Record<string, string> = { today: 'na později', tomorrow: 'na zítra', next_week: 'na příští týden' }
+      showToast(`Odloženo ${labels[postponeTo] || ''}`.trim())
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Nepodařilo se odložit')
     }
   }
 
@@ -231,16 +239,24 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
 
   async function handleConvertQuestionTodo(actionId: string, question: string) {
     const action = sortedActions.find(a => a.id === actionId)
-    const res = await fetch(`/api/action/${actionId}/convert-todo`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token: action ? getActionToken(action) : token,
-        description: `Zjistit: ${question}`,
-      }),
-    })
-    if (res.ok) {
+    try {
+      const res = await fetch(`/api/action/${actionId}/convert-todo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: action ? getActionToken(action) : token,
+          description: `Zjistit: ${question}`,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `Chyba (${res.status})` }))
+        throw new Error(err.error || 'Nepodařilo se vytvořit úkol')
+      }
+      showToast('✓ Úkol vytvořen')
       await refreshData()
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Nepodařilo se vytvořit úkol')
+      throw e // Re-throw so ReplyCard's catch can handle it
     }
   }
 

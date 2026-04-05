@@ -542,8 +542,8 @@ Respond with ONLY valid JSON:
   "cpPhone": "+420... or null",
   "suggestedLocation": "Physical address WHERE PEOPLE WILL MEET — the MEETING VENUE, NOT the property or deal subject. ADDRESS INFERENCE for SCHEDULE — Priority: (1) explicit venue stated in conversation, (2) CP's office address from signature IF meeting is at their place, (3) user's office address if CP says 'at your office', (4) the property address ONLY if the meeting is literally at the property (e.g. a viewing/inspection). Addresses in email signatures are the SENDER's company address — do not confuse with meeting venue. A conversation about 'office space in Karlin' does NOT mean the meeting is in Karlin. null if unknown.",
   "locationConfidence": "high | low | null",
-  "suggestedTime": "ISO 8601 datetime. Convert proposedTimes/Navrhovaný čas to ISO 8601 using TODAY'S DATE above. Approximate times: 'ráno'→09:00, 'odpoledne'→14:00. CP-stated times always extracted exactly (even weekends). Self-generated times must respect working hours. null only if no time reference exists.",
-  "cpAvailability": "Free-text CP availability or null"
+  "suggestedTime": "ISO 8601 datetime. Convert proposedTimes/Navrhovaný čas to ISO 8601 using TODAY'S DATE above. Approximate times: 'ráno'→09:00, 'odpoledne'→14:00. CP-stated times always extracted exactly (even weekends). Self-generated times must respect working hours. MULTIPLE/AMBIGUOUS TIMES: if CP says 'v 9 nebo 10' or 'kolem 9-10', pick the EARLIER time (09:00). Never return null when ANY time hint exists. null only if genuinely no time reference exists.",
+  "cpAvailability": "Free-text CP availability or null. Include ALL stated options (e.g. '9:00-10:00' if CP said 'kolem 9 nebo 10')"
 }
 
 RULES:

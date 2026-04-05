@@ -57,6 +57,8 @@ export async function POST(
       let draftSubject = action.draft_subject
       let draftBody = action.draft_body_text
 
+      const missingInfo = (action.missing_info as { label: string; placeholder: string; value: string | null }[] | null) || undefined
+
       if (!draftBody) {
         const conversation = await getConversationById(action.conversation_id)
         if (!conversation) {
@@ -64,7 +66,6 @@ export async function POST(
         }
 
         const userNotes = (actionPayload.userNotes as string) || undefined
-        const missingInfo = (action.missing_info as { label: string; placeholder: string; value: string | null }[] | null) || undefined
 
         const draft = await generateFinalDraft(
           conversation.summary_json,

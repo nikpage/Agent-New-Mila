@@ -48,6 +48,8 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft, re
   const [regenerating, setRegenerating] = useState(false)
   const [draftBody, setDraftBody] = useState(action.draft_body_text || '')
   const [draftLoaded, setDraftLoaded] = useState(!!action.draft_body_text)
+  const [manualTime, setManualTime] = useState('')
+  const [bookingSlot, setBookingSlot] = useState(false)
 
   // Debounced auto-save for draft text edits
   const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -180,9 +182,56 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft, re
         <div style={{
           padding: theme.spacing.md, backgroundColor: theme.colors.warningBg,
           borderRadius: theme.borderRadius.md, fontSize: theme.typography.sizes.sm,
-          color: theme.colors.warning, fontWeight: theme.typography.weights.medium,
         }}>
-          Termín zatím nebyl stanoven — zvolte čas přes Upravit nebo klikněte Potvrdit pro návrh.
+          <div style={{ color: theme.colors.warning, fontWeight: theme.typography.weights.medium, marginBottom: theme.spacing.sm }}>
+            Termín zatím nebyl stanoven
+          </div>
+          <div style={{ display: 'flex', gap: theme.spacing.sm, alignItems: 'center' }}>
+            <input
+              type="datetime-local"
+              value={manualTime}
+              onChange={e => setManualTime(e.target.value)}
+              style={{
+                flex: 1, padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
+                fontSize: theme.typography.sizes.sm, color: theme.colors.text,
+                backgroundColor: theme.colors.surface, outline: 'none',
+              }}
+            />
+            <button
+              onClick={async () => {
+                if (!manualTime) return
+                setBookingSlot(true)
+                try {
+                  const start = new Date(manualTime).toISOString()
+                  const end = new Date(new Date(manualTime).getTime() + duration * 60000).toISOString()
+                  const res = await fetch(`/api/action/${action.id}/book-slot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token, start, end, location: location || undefined }),
+                  })
+                  if (res.ok) {
+                    // Reload to pick up the new hold
+                    window.location.reload()
+                  }
+                } finally {
+                  setBookingSlot(false)
+                }
+              }}
+              disabled={!manualTime || bookingSlot}
+              style={{
+                padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+                backgroundColor: manualTime ? theme.colors.primary : theme.colors.secondary,
+                color: manualTime ? 'white' : theme.colors.textMuted,
+                border: 'none', borderRadius: theme.borderRadius.md,
+                cursor: manualTime ? 'pointer' : 'default',
+                fontWeight: theme.typography.weights.semibold, fontSize: theme.typography.sizes.sm,
+                whiteSpace: 'nowrap', opacity: bookingSlot ? 0.6 : 1,
+              }}
+            >
+              {bookingSlot ? '...' : 'Nastavit'}
+            </button>
+          </div>
         </div>
       )}
 

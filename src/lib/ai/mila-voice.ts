@@ -568,10 +568,17 @@ export async function regenerateDraftWithInstruction(
   conversationContext: unknown,
   cpName: string,
   channel: 'email' | 'whatsapp',
-  settings: UserSettings
+  settings: UserSettings,
+  missingInfo?: { label: string; placeholder?: string; value: string | null }[] | null
 ): Promise<{ subject: string; body: string }> {
   const systemContext = getAISystemPrompt(settings)
   const isWhatsApp = channel === 'whatsapp'
+
+  // Format filled missing_info answers for the prompt
+  const filledAnswers = missingInfo?.filter(f => f.value?.trim())
+  const answersBlock = filledAnswers && filledAnswers.length > 0
+    ? `\nFILLED-IN ANSWERS (incorporate these into the draft):\n${filledAnswers.map(f => `- ${f.label}: ${f.value}`).join('\n')}\n`
+    : ''
 
   const prompt = `${systemContext}
 
@@ -581,7 +588,7 @@ Language: ${settings.ai_language || 'Czech'}.
 CURRENT DRAFT:
 Subject: ${currentDraft.subject}
 Body: ${currentDraft.body}
-
+${answersBlock}
 USER'S INSTRUCTION:
 ${instruction}
 

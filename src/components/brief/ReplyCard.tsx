@@ -115,17 +115,17 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(async () => {
       await onSaveDraft({ dynamicFields: updated })
-      // All answers filled? Regenerate draft with the new info
-      const allFilled = missingInfo.every(f => updated[f.label]?.trim())
-      if (allFilled) {
+      // Any answer filled? Regenerate draft to incorporate the info
+      const anyFilled = missingInfo.some(f => updated[f.label]?.trim())
+      if (anyFilled && draftLoaded) {
         try {
           const result = await onRegenerateDraft('Doplň odpovědi do konceptu')
           setDraftSubject(result.subject)
           setDraftBody(result.body)
-        } catch { /* ignore regen failure */ }
+        } catch { /* regen failure — draft stays as-is, user can retry via Přepsat */ }
       }
     }, 800)
-  }, [onSaveDraft, onRegenerateDraft, missingInfo])
+  }, [onSaveDraft, onRegenerateDraft, missingInfo, draftLoaded])
 
   // Auto-load draft on mount
   useEffect(() => {
@@ -156,6 +156,8 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
       setDraftSubject(result.subject)
       setDraftBody(result.body)
       setInstruction('')
+    } catch {
+      // Regeneration failed — keep current draft, instruction stays for retry
     } finally {
       setRegenerating(false)
     }
@@ -170,6 +172,10 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
       // Show success feedback
       setTodoConverted(prev => new Set(prev).add(label))
       setTimeout(() => setTodoConverted(prev => { const next = new Set(prev); next.delete(label); return next }), 2500)
+    } catch {
+      // Error already handled by parent (BriefFeed shows toast)
+      // Show inline failure state
+      setTodoConverted(prev => { const next = new Set(prev); next.delete(label); return next })
     } finally {
       setTodoLoading(null)
     }
