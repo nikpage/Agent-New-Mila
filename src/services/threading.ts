@@ -19,6 +19,8 @@ import {
 import { updateMessage, getMessageById } from '@/lib/db/messages'
 import { getCPById } from '@/lib/db/counterparties'
 import { analyzeConversation, extractTopic, shouldJoinConversation } from '@/lib/ai/gemini'
+import { getJournalEntriesForContext } from '@/lib/db/journal'
+import { formatJournalForPrompt } from '@/lib/ai/context'
 import { runAITask } from '@/lib/ai/runner'
 import { generateConversationEmbedding, generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { saveConversationEmbedding } from '@/lib/db/embeddings'
@@ -387,10 +389,17 @@ export async function rebuildConversationSummary(
   // Fetch user settings for business context + language in AI summary
   const settings = await getUserSettings(conversation.user_id)
 
+  // Fetch journal beliefs for this conversation — enriches summary with accumulated knowledge
+  let journalNotes: string | undefined
+  try {
+    const journal = await getJournalEntriesForContext(conversation.user_id, [conversation.id], [])
+    journalNotes = formatJournalForPrompt(journal) || undefined
+  } catch { /* journal fetch failed — proceed without */ }
+
   // Step 1: Generate AI summary
   let summaryText: string | null = null
   try {
-    const summary = await analyzeConversation(selectedMessages, settings ?? undefined)
+    const summary = await analyzeConversation(selectedMessages, settings ?? undefined, journalNotes)
 
     summaryText = `${summary.currentState}. ${summary.nextSteps.length > 0 ? 'Next: ' + summary.nextSteps[0] : ''}`
 

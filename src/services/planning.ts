@@ -1,5 +1,6 @@
 import { proposeAction } from '@/lib/ai/gemini'
 import { generateFinalDraft } from '@/lib/ai/mila-voice'
+import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt, formatEnrichedForPrompt } from '@/lib/ai/context'
 import {
   createAction,
   calculatePriorityScore,
@@ -103,8 +104,19 @@ export async function generateActionProposal(
     // Get user settings for AI context
     const settings = await getUserSettings(conversation.user_id)
 
+    // Build Mila's full context — journal beliefs + enriched fields from latest inbound
+    const milaCtx = await buildMilaContext(
+      conversation.id, conversation.user_id, cp.id, summary, 'full'
+    )
+    const journalText = formatJournalForPrompt(milaCtx.journal)
+    const enrichedText = formatEnrichedForPrompt(milaCtx.enriched)
+
+    if (journalText) {
+      console.log(`[Planning:DEBUG] Journal entries: ${milaCtx.journal.length} (${milaCtx.journal.filter(j => j.type === 'belief').length} beliefs)`)
+    }
+
     // Get AI recommendations — one or more actions per conversation
-    const proposals = await proposeAction(summary, formattedMessages, cp.name, settings, channel)
+    const proposals = await proposeAction(summary, formattedMessages, cp.name, settings, channel, journalText, enrichedText)
 
     const latestInbound = await getLatestInboundFromCP(conversation.user_id, cp.id)
     const daysIgnored = computeDaysIgnored(latestInbound?.occurred_at, conversation.created_at)
@@ -343,6 +355,13 @@ export async function regenerateDraft(
 
   const channel = ((action.payload as Record<string, unknown>)?.channel as 'email' | 'whatsapp') || 'email'
 
+  // Build full context for the draft — timeline + journal give Mila conversation-level awareness
+  const draftCtx = await buildMilaContext(
+    conversation.id, action.user_id, action.cp_id,
+    conversation.summary_json as ConversationSummary | null,
+    'full'
+  )
+
   return generateFinalDraft(
     conversation.summary_json,
     userIntent || action.intent_cs || action.rationale_cs || action.rationale,
@@ -350,6 +369,8 @@ export async function regenerateDraft(
     undefined,
     (action.missing_info as { label: string; value: string | null }[] | null) || undefined,
     cp?.name || cp?.primary_identifier || undefined,
-    channel
+    channel,
+    formatTimelineForPrompt(draftCtx.timeline),
+    formatJournalForPrompt(draftCtx.journal) || undefined
   )
 }

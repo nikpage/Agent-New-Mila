@@ -11,6 +11,8 @@ import { getEventsForToday, getUpcomingEvents } from '@/lib/db/events'
 import { getTodosDueToday, getOverdueTodos } from '@/lib/db/todos'
 import { sendEmail, getUserEmail } from '@/lib/google/gmail'
 import { generateBriefIntro, generateQuietBriefIntro, generateUrgentIntro, generateBriefHeadline } from '@/lib/ai/mila-voice'
+import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt } from '@/lib/ai/context'
+import { getActiveJournalEntries } from '@/lib/db/journal'
 import { optimizeScheduleActions, scheduleSingleAction } from '@/services/scheduling'
 import { runAgentForUser } from '@/services/agent'
 import { ensureBriefSchedules } from '@/lib/qstash/client'
@@ -276,12 +278,31 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       title: e.title || 'Event',
     }))
 
+    // Fetch Mila context (timeline + journal) for each action's conversation — light depth for headlines
+    const contextMap = new Map<string, { timeline: string; journal: string }>()
+    await Promise.allSettled(
+      briefActions.map(async ba => {
+        const convId = ba.action.conversation_id
+        if (contextMap.has(convId)) return
+        try {
+          const ctx = await buildMilaContext(convId, userId, ba.action.cp_id, ba.summary, 'light')
+          contextMap.set(convId, {
+            timeline: formatTimelineForPrompt(ctx.timeline),
+            journal: formatJournalForPrompt(ctx.journal),
+          })
+        } catch {
+          // Context fetch failed — headline will work without it
+        }
+      })
+    )
+
     const allHeadlineResults = await Promise.allSettled(
       briefActions.map(ba => {
         const p = ba.action.payload as Record<string, unknown> | null
         const holdSlotText = (ba.action.action_type === 'SCHEDULE' && p?.start && p?.end)
           ? formatSlotText(p.start as string, p.end as string) : null
         const daysIgnored = Math.max(0, Math.floor((Date.now() - new Date(ba.action.created_at).getTime()) / 86_400_000))
+        const ctx = contextMap.get(ba.action.conversation_id)
         return generateBriefHeadline(
           {
             actionType: ba.action.action_type,
@@ -294,7 +315,9 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
           },
           ba.summary ? { currentState: ba.summary.currentState, risks: ba.summary.risks, dealType: ba.summary.dealType } : null,
           calendarForHeadlines,
-          briefSettings
+          briefSettings,
+          ctx?.timeline,
+          ctx?.journal
         )
       })
     )
@@ -389,6 +412,10 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     let headline: string
     let briefSubject: string
     try {
+      // Fetch global journal observations for brief intro context
+      const globalJournal = await getActiveJournalEntries(userId, { scope: 'global', limit: 10 })
+      const globalJournalText = formatJournalForPrompt(globalJournal)
+
       const intro = await generateBriefIntro(
         briefType,
         briefActions.length,
@@ -407,7 +434,8 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
           intent: b.action.intent_cs || b.action.rationale_cs || b.action.rationale || '',
           dollarValue: b.action.dollar_value || 0,
         })),
-        await getUserSettings(userId)
+        await getUserSettings(userId),
+        globalJournalText || undefined
       )
       greeting = intro.greeting
       headline = intro.headline
@@ -844,6 +872,18 @@ async function sendInstantNotificationForConversation(
 
     const topAction = briefActions[0]
     const settings = await getUserSettings(userId)
+
+    // Fetch timeline + journal for the urgent conversation
+    let urgentTimeline: string | undefined
+    let urgentJournal: string | undefined
+    try {
+      const urgentCtx = await buildMilaContext(
+        topAction.action.conversation_id, userId, topAction.action.cp_id, topAction.summary, 'light'
+      )
+      urgentTimeline = formatTimelineForPrompt(urgentCtx.timeline)
+      urgentJournal = formatJournalForPrompt(urgentCtx.journal) || undefined
+    } catch { /* context fetch failed — continue without */ }
+
     let urgentSubject: string
     let urgentHeader: string
     let urgentBody: string
@@ -857,7 +897,9 @@ async function sendInstantNotificationForConversation(
           intent: topAction.action.intent_cs || topAction.action.rationale_cs || '',
           dollarValue: topAction.action.dollar_value || 0,
         },
-        settings
+        settings,
+        urgentTimeline,
+        urgentJournal
       )
       urgentSubject = intro.subject
       urgentHeader = intro.header

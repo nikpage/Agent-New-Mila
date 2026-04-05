@@ -20,6 +20,7 @@ import { getUserSettings } from '@/lib/db/users'
 import { containsHighValueSignals } from '@/config/client'
 import { selectOfferMultiplier, computeDaysIgnored } from '@/shared/scoring'
 import { generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
+import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt } from '@/lib/ai/context'
 import { getChannelType } from '@/lib/db/channels'
 import type { ActionProposal, ConversationThread, UserSettings } from '@/lib/supabase/types'
 import { SERVICE_ROLES } from '@/lib/supabase/types'
@@ -198,6 +199,17 @@ async function processConversationForLeadTracking(
   const channel = channelType === 'whatsapp' ? 'WhatsApp' : 'email'
   const cpName = cp.name || cp.primary_identifier
 
+  // Build Mila context for this lead — journal may know CP went cold before
+  let journalNotes: string | undefined
+  let lastTimelineText: string | undefined
+  try {
+    const leadCtx = await buildMilaContext(conversation.id, userId, cp.id, null, 'light')
+    journalNotes = formatJournalForPrompt(leadCtx.journal) || undefined
+    if (leadCtx.timeline.length > 0) {
+      lastTimelineText = formatTimelineForPrompt(leadCtx.timeline.slice(-1))
+    }
+  } catch { /* context fetch failed — proceed without */ }
+
   // Build the follow-up intent
   const intent = await generateLeadFollowUpIntent(
     status,
@@ -206,7 +218,9 @@ async function processConversationForLeadTracking(
     topic,
     channel,
     followUpCount,
-    settings
+    settings,
+    journalNotes,
+    lastTimelineText
   )
 
   // Create the follow-up action

@@ -198,7 +198,9 @@ CRITICAL: You must generate ALL text values in ${outputLanguage}. Do not output 
  */
 export async function analyzeConversation(
   messages: { direction: string; text: string; date: Date }[],
-  settings?: UserSettings
+  settings?: UserSettings,
+  /** Mila's journal beliefs about this CP/conversation — enriches summary with accumulated knowledge */
+  journalNotes?: string
 ): Promise<ConversationSummary> {
   console.log(`[AI:analyzeConversation] Running stage 'analysis'`)
   const messageText = messages
@@ -229,6 +231,7 @@ CRITICAL — FORMATTING:
 
 CONVERSATION:
 ${messageText}
+${journalNotes ? `\nMILA'S ACCUMULATED KNOWLEDGE (beliefs and observations about this CP/deal — incorporate into your summary):\n${journalNotes}` : ''}
 
 Respond with ONLY valid JSON in this exact format:
 {
@@ -309,6 +312,10 @@ interface PlanningContext {
   cpName: string | null
   planningLang: string
   conversationSummary: ConversationSummary
+  /** Mila's journal — beliefs and observations about this CP/conversation/global */
+  journalText: string
+  /** Structured fields extracted from the latest inbound message */
+  enrichedText: string
 }
 
 function buildPlanningContext(
@@ -316,7 +323,9 @@ function buildPlanningContext(
   recentMessages: { direction: string; text: string }[],
   cpName: string | null,
   settings: UserSettings,
-  channel: 'email' | 'whatsapp'
+  channel: 'email' | 'whatsapp',
+  journalText: string = '',
+  enrichedText: string = ''
 ): PlanningContext {
   const recentText = recentMessages
     .map(m => `[${m.direction}]: ${m.text}`)
@@ -353,6 +362,8 @@ function buildPlanningContext(
     cpName,
     planningLang: settings.ai_language || 'Czech',
     conversationSummary,
+    journalText,
+    enrichedText,
   }
 }
 
@@ -377,7 +388,8 @@ ${JSON.stringify(ctx.conversationSummary, null, 2)}
 RECENT TIMELINE:
 ${ctx.recentText}
 
-COUNTERPARTY: ${ctx.cpName || 'Unknown'}`
+COUNTERPARTY: ${ctx.cpName || 'Unknown'}
+${ctx.journalText ? `\n${ctx.journalText}` : ''}${ctx.enrichedText ? `\n${ctx.enrichedText}` : ''}`
 }
 
 const URGENCY_RULES = `URGENCY RULES (MUST FOLLOW EXACTLY):
@@ -613,11 +625,13 @@ export async function proposeAction(
   recentMessages: { direction: string; text: string }[],
   cpName: string | null,
   settings: UserSettings,
-  channel: 'email' | 'whatsapp' = 'email'
+  channel: 'email' | 'whatsapp' = 'email',
+  journalText: string = '',
+  enrichedText: string = ''
 ): Promise<ProposedAction[]> {
   console.log(`[AI:proposeAction] Running 2-stage planning for ${cpName || 'unknown CP'}`)
 
-  const ctx = buildPlanningContext(conversationSummary, recentMessages, cpName, settings, channel)
+  const ctx = buildPlanningContext(conversationSummary, recentMessages, cpName, settings, channel, journalText, enrichedText)
 
   // Stage 1: Triage — decide action types
   const triageResults = await triageActions(ctx, settings)

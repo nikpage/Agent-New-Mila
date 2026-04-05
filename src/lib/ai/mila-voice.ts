@@ -91,7 +91,11 @@ export async function generateLeadFollowUpIntent(
   topic: string,
   channel: string,
   followUpNumber: number,
-  settings: UserSettings
+  settings: UserSettings,
+  /** Mila's journal notes about this CP — past behavior, patterns */
+  journalNotes?: string,
+  /** Last timeline entry — what the last interaction was */
+  lastTimelineEntry?: string
 ): Promise<{ intentCs: string; rationaleCs: string }> {
   const prompt = `You are Mila, a proactive executive assistant. A lead has gone ${status}. Write intent_cs (what you'll do) and rationale_cs (why it matters now).
 
@@ -104,6 +108,8 @@ DETAILS:
 - Conversation topic: ${topic}
 - Channel: ${channel}
 - Follow-up number: ${followUpNumber + 1}
+${lastTimelineEntry ? `- Last activity: ${lastTimelineEntry}` : ''}
+${journalNotes ? `\nMILA'S NOTES ABOUT THIS CP:\n${journalNotes}` : ''}
 
 RULES:
 - Output in ${settings.ai_language || 'Czech'}. Plain text only. No markdown.
@@ -137,7 +143,9 @@ export async function generateBriefIntro(
   actionCount: number,
   events: { title: string; time: string }[],
   pendingActions: { type: string; cpName: string; urgency: number; intent: string; dollarValue: number }[],
-  settings: UserSettings
+  settings: UserSettings,
+  /** Mila's recent global journal observations — patterns across deals */
+  journalNotes?: string
 ): Promise<{ greeting: string; subject: string; headline: string }> {
   const eventsText = events.length > 0
     ? events.map(e => `${e.time}: ${e.title}`).join('\n')
@@ -157,13 +165,14 @@ ${eventsText}
 
 PENDING ACTIONS (${actionCount} total):
 ${actionsText}
+${journalNotes ? `\nMILA'S OBSERVATIONS (your accumulated knowledge — use to add insight):\n${journalNotes}` : ''}
 
 RULES:
 - Output in ${settings.ai_language || 'Czech'}. Plain text only. No markdown.
 - Address user as "vy" (you). Never "uživatel".
 - greeting: a natural ${briefType === 'morning' ? 'morning' : 'afternoon'} greeting. Do NOT hardcode — let it be natural.
 - subject: concise email subject. Include action count naturally.
-- headline: 2-3 sentences. Lead with the MOST URGENT item — if there's an urgency 9-10 action, that dominates the headline, not the calendar. A human assistant wouldn't mention swimming when the house is on fire.
+- headline: 2-3 sentences. Lead with the MOST URGENT item — if there's an urgency 9-10 action, that dominates the headline, not the calendar. A human assistant wouldn't mention swimming when the house is on fire. If you have observations about patterns (e.g. a CP who always pushes deadlines), weave them in naturally.
 
 Respond with ONLY valid JSON:
 {
@@ -234,7 +243,11 @@ Respond with ONLY valid JSON:
 export async function generateUrgentIntro(
   actionCount: number,
   topAction: { cpName: string; urgency: number; actionType: string; intent: string; dollarValue: number },
-  settings: UserSettings
+  settings: UserSettings,
+  /** Recent timeline for the urgent conversation — what triggered this */
+  recentTimeline?: string,
+  /** Mila's journal notes about this CP */
+  journalNotes?: string
 ): Promise<{ subject: string; header: string; body: string }> {
   const lang = settings.ai_language || 'Czech'
   const prompt = `You are Mila sending an urgent notification email. Generate an email subject, header text, and a one-sentence body.
@@ -247,6 +260,8 @@ DETAILS:
 - Top action: ${topAction.actionType} for ${topAction.cpName} (urgency: ${topAction.urgency}/10)
 - What needs attention: ${topAction.intent}
 - Deal value: ${topAction.dollarValue > 0 ? `${topAction.dollarValue.toLocaleString()}` : 'unknown'}
+${recentTimeline ? `\nRECENT TIMELINE:\n${recentTimeline}` : ''}
+${journalNotes ? `\nMILA'S NOTES:\n${journalNotes}` : ''}
 
 RULES:
 - Address user as "vy" (you). Never "uživatel".
@@ -284,7 +299,11 @@ export async function generateFinalDraft(
   userNotes?: string,
   missingInfo?: any[],
   cpName?: string,
-  channel: 'email' | 'whatsapp' = 'email'
+  channel: 'email' | 'whatsapp' = 'email',
+  /** Recent timeline entries — what was actually said in the conversation */
+  recentTimeline?: string,
+  /** Mila's journal beliefs about this CP's communication style */
+  journalNotes?: string
 ): Promise<{ subject: string; body: string }> {
   console.log(`[AI:generateFinalDraft] Running stage 'drafting' for ${cpName || 'unknown CP'}`)
 
@@ -320,6 +339,8 @@ TODAY'S DATE: ${todayStr}. Use this to resolve any relative dates ("zítra", "p�
 
 CONTEXT:
 ${JSON.stringify(safeContext, null, 2)}
+${recentTimeline ? `\nRECENT CONVERSATION (what was actually said — reference specific points):\n${recentTimeline}` : ''}
+${journalNotes ? `\nMILA'S NOTES ABOUT THIS CP (tone/style insights):\n${journalNotes}` : ''}
 
 THE PLAN (INTENT):
 ${intent}
@@ -471,7 +492,11 @@ export async function generateBriefHeadline(
     dealType?: string | null
   } | null,
   calendar: { time: string; title: string }[],
-  settings: UserSettings
+  settings: UserSettings,
+  /** Recent timeline entries formatted for prompt — what actually happened */
+  recentTimeline?: string,
+  /** Mila's journal beliefs/observations for this CP/conversation */
+  journalNotes?: string
 ): Promise<{ headline: string; story: string }> {
   const calendarText = calendar.length > 0
     ? calendar.map(e => `${e.time}: ${e.title}`).join('\n')
@@ -494,6 +519,8 @@ DEAL CONTEXT:
 ${dealContext?.currentState ? `- Current state: ${dealContext.currentState}` : '- No deal context available'}
 ${dealContext?.risks?.length ? `- Risks: ${dealContext.risks.join(', ')}` : ''}
 ${dealContext?.dealType ? `- Deal type: ${dealContext.dealType}` : ''}
+${recentTimeline ? `\nRECENT TIMELINE (what actually happened — reference specific events in the story):\n${recentTimeline}` : ''}
+${journalNotes ? `\nMILA'S NOTES (your accumulated knowledge about this CP/deal):\n${journalNotes}` : ''}
 
 USER'S SCHEDULE TODAY:
 ${calendarText}
