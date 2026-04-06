@@ -148,11 +148,13 @@ export function formatEnrichedForPrompt(data: EnrichedMessageData | null): strin
   if (!data) return ''
 
   const lines: string[] = []
-  if (data.addresses?.length) lines.push(`Addresses mentioned: ${data.addresses.join(', ')}`)
-  if (data.proposedTimes?.length) {
-    lines.push(`Proposed times: ${data.proposedTimes.map(t => `"${t.original}" → ${t.interpreted}`).join('; ')}`)
+  if (data.addresses?.length) {
+    for (const addr of data.addresses) lines.push(`Adresa: ${addr}`)
   }
-  if (data.meetingType) lines.push(`Meeting type: ${data.meetingType}`)
+  if (data.proposedTimes?.length) {
+    for (const t of data.proposedTimes) lines.push(`Navrhovaný čas: "${t.original}" → ${t.interpreted}`)
+  }
+  if (data.meetingType) lines.push(`Typ schůzky: ${data.meetingType}`)
   if (data.urgency) lines.push(`Urgency signal: "${data.urgency.quote}" (${data.urgency.classification})`)
   if (data.dealStage) lines.push(`Deal stage: ${data.dealStage}`)
   if (data.keyNumbers) {

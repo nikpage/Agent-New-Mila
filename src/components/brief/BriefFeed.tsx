@@ -6,7 +6,7 @@ import { BriefCard } from './BriefCard'
 import { ItineraryView } from './ItineraryView'
 import { CompletedSection } from './CompletedSection'
 import { StickyBar } from './StickyBar'
-import type { BriefData, BriefAction, BriefEvent, CoolingContact } from './types'
+import type { BriefData, BriefAction, BriefEvent, BriefTodo, CoolingContact } from './types'
 
 interface BriefFeedProps {
   initialData: BriefData
@@ -260,6 +260,29 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
     }
   }
 
+  // ── Todo handlers ──────────────────────────────────────────────────
+  const [completedTodoIds, setCompletedTodoIds] = useState<Set<string>>(new Set())
+
+  async function handleCompleteTodo(todoId: string) {
+    try {
+      const res = await fetch(`/api/todo/${todoId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, userId }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `Chyba (${res.status})` }))
+        throw new Error(err.error || 'Nepodařilo se splnit úkol')
+      }
+      setCompletedTodoIds(prev => new Set(prev).add(todoId))
+      showToast('Úkol splněn')
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Nepodařilo se splnit úkol')
+    }
+  }
+
+  const pendingTodos = (data.todos || []).filter(t => !completedTodoIds.has(t.id))
+
   const pendingCount = sortedActions.filter(a => !doneIds.has(a.id)).length
   const dateStr = formatDateCzech()
   const greeting = data.greeting || `${getGreeting()}${data.userName ? `, ${data.userName.split(' ')[0]}` : ''}.`
@@ -437,8 +460,30 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
           )}
         </div>
 
-        {/* ── Sidebar: cooling contacts + agenda ─────────────── */}
+        {/* ── Sidebar: todos + cooling contacts + agenda ──────── */}
         <div>
+          {/* Todos */}
+          {pendingTodos.length > 0 && (
+            <>
+              <div style={{
+                fontSize: '11px',
+                fontWeight: 600,
+                letterSpacing: '0.09em',
+                textTransform: 'uppercase',
+                color: 'var(--sub)',
+                margin: '0 0 10px 2px',
+              }}>
+                Úkoly
+              </div>
+
+              {pendingTodos.map(todo => (
+                <TodoItem key={todo.id} todo={todo} onComplete={() => handleCompleteTodo(todo.id)} />
+              ))}
+
+              <div style={{ marginBottom: '20px' }} />
+            </>
+          )}
+
           {/* Cooling contacts */}
           {(data.coolingContacts || []).length > 0 && (
             <>
@@ -494,6 +539,78 @@ export function BriefFeed({ initialData, userId, token, focusActionId }: BriefFe
 
       {/* ── Sticky bottom bar ───────────────────────────────────── */}
       <StickyBar onCommand={handleCommand} />
+    </div>
+  )
+}
+
+/** Todo item with complete button */
+function TodoItem({ todo, onComplete }: { todo: BriefTodo; onComplete: () => void }) {
+  const [completing, setCompleting] = useState(false)
+
+  const dueDateText = todo.due_date
+    ? new Date(todo.due_date).toLocaleDateString('cs-CZ', { day: 'numeric', month: 'short' })
+    : null
+
+  const isOverdue = todo.due_date ? new Date(todo.due_date) < new Date() : false
+
+  return (
+    <div style={{
+      marginBottom: '8px',
+      borderRadius: '14px',
+      border: '1px solid var(--brd)',
+      background: 'var(--surf)',
+      padding: '11px 13px',
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: '10px',
+      boxShadow: 'var(--sdw)',
+      transition: 'opacity .3s',
+      opacity: completing ? 0.4 : 1,
+    }}>
+      <button
+        onClick={async () => {
+          setCompleting(true)
+          await onComplete()
+        }}
+        disabled={completing}
+        style={{
+          width: '20px',
+          height: '20px',
+          borderRadius: '50%',
+          border: '2px solid var(--brd)',
+          background: 'transparent',
+          cursor: 'pointer',
+          flexShrink: 0,
+          marginTop: '1px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transition: 'border-color .2s',
+          outline: 'none',
+          WebkitTapHighlightColor: 'transparent',
+        }}
+        aria-label="Splnit úkol"
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontSize: '13.5px',
+          color: 'var(--txt)',
+          lineHeight: 1.35,
+          wordBreak: 'break-word',
+        }}>
+          {todo.description}
+        </div>
+        {dueDateText && (
+          <div style={{
+            fontSize: '11px',
+            fontWeight: 600,
+            color: isOverdue ? 'var(--err)' : 'var(--sub)',
+            marginTop: '3px',
+          }}>
+            {isOverdue ? 'Po termínu: ' : ''}{dueDateText}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

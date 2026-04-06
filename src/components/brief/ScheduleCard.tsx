@@ -170,7 +170,7 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft, re
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
       {/* Slot */}
-      {slotText ? (
+      {slotText && (
         <div style={{
           padding: theme.spacing.md, backgroundColor: theme.colors.background,
           borderRadius: theme.borderRadius.md, fontSize: theme.typography.sizes.sm,
@@ -178,62 +178,72 @@ export function ScheduleCard({ action, token, onRegenerateDraft, onSaveDraft, re
         }}>
           {slotText}
         </div>
-      ) : (
-        <div style={{
-          padding: theme.spacing.md, backgroundColor: theme.colors.warningBg,
-          borderRadius: theme.borderRadius.md, fontSize: theme.typography.sizes.sm,
-        }}>
+      )}
+
+      {/* Datetime picker — always visible (override or initial set) */}
+      <div style={{
+        padding: theme.spacing.md,
+        backgroundColor: hasHold ? theme.colors.background : theme.colors.warningBg,
+        borderRadius: theme.borderRadius.md, fontSize: theme.typography.sizes.sm,
+      }}>
+        {!hasHold && (
           <div style={{ color: theme.colors.warning, fontWeight: theme.typography.weights.medium, marginBottom: theme.spacing.sm }}>
             Termín zatím nebyl stanoven
           </div>
-          <div style={{ display: 'flex', gap: theme.spacing.sm, alignItems: 'center' }}>
-            <input
-              type="datetime-local"
-              value={manualTime}
-              onChange={e => setManualTime(e.target.value)}
-              style={{
-                flex: 1, padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
-                fontSize: theme.typography.sizes.sm, color: theme.colors.text,
-                backgroundColor: theme.colors.surface, outline: 'none',
-              }}
-            />
-            <button
-              onClick={async () => {
-                if (!manualTime) return
-                setBookingSlot(true)
-                try {
-                  const start = new Date(manualTime).toISOString()
-                  const end = new Date(new Date(manualTime).getTime() + duration * 60000).toISOString()
-                  const res = await fetch(`/api/action/${action.id}/book-slot`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ token, start, end, location: location || undefined }),
-                  })
-                  if (res.ok) {
-                    // Reload to pick up the new hold
-                    window.location.reload()
-                  }
-                } finally {
-                  setBookingSlot(false)
-                }
-              }}
-              disabled={!manualTime || bookingSlot}
-              style={{
-                padding: `${theme.spacing.sm} ${theme.spacing.md}`,
-                backgroundColor: manualTime ? theme.colors.primary : theme.colors.secondary,
-                color: manualTime ? 'white' : theme.colors.textMuted,
-                border: 'none', borderRadius: theme.borderRadius.md,
-                cursor: manualTime ? 'pointer' : 'default',
-                fontWeight: theme.typography.weights.semibold, fontSize: theme.typography.sizes.sm,
-                whiteSpace: 'nowrap', opacity: bookingSlot ? 0.6 : 1,
-              }}
-            >
-              {bookingSlot ? '...' : 'Nastavit'}
-            </button>
-          </div>
+        )}
+        <div style={{
+          fontSize: theme.typography.sizes.xs, fontWeight: theme.typography.weights.semibold,
+          color: theme.colors.textMuted, textTransform: 'uppercase', letterSpacing: '0.05em',
+          marginBottom: theme.spacing.xs,
+        }}>
+          {hasHold ? 'Změnit termín' : 'Nastavit termín'}
         </div>
-      )}
+        <div style={{ display: 'flex', gap: theme.spacing.sm, alignItems: 'center' }}>
+          <input
+            type="datetime-local"
+            value={manualTime}
+            onChange={e => setManualTime(e.target.value)}
+            style={{
+              flex: 1, padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+              border: `1px solid ${theme.colors.border}`, borderRadius: theme.borderRadius.md,
+              fontSize: theme.typography.sizes.sm, color: theme.colors.text,
+              backgroundColor: theme.colors.surface, outline: 'none',
+            }}
+          />
+          <button
+            onClick={async () => {
+              if (!manualTime) return
+              setBookingSlot(true)
+              try {
+                const start = new Date(manualTime).toISOString()
+                const end = new Date(new Date(manualTime).getTime() + duration * 60000).toISOString()
+                const res = await fetch(`/api/action/${action.id}/book-slot`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ token, start, end, location: location || undefined }),
+                })
+                if (res.ok) {
+                  window.location.reload()
+                }
+              } finally {
+                setBookingSlot(false)
+              }
+            }}
+            disabled={!manualTime || bookingSlot}
+            style={{
+              padding: `${theme.spacing.sm} ${theme.spacing.md}`,
+              backgroundColor: manualTime ? theme.colors.primary : theme.colors.secondary,
+              color: manualTime ? 'white' : theme.colors.textMuted,
+              border: 'none', borderRadius: theme.borderRadius.md,
+              cursor: manualTime ? 'pointer' : 'default',
+              fontWeight: theme.typography.weights.semibold, fontSize: theme.typography.sizes.sm,
+              whiteSpace: 'nowrap', opacity: bookingSlot ? 0.6 : 1,
+            }}
+          >
+            {bookingSlot ? '...' : hasHold ? 'Změnit' : 'Nastavit'}
+          </button>
+        </div>
+      </div>
 
       {/* Meeting type */}
       <div>
