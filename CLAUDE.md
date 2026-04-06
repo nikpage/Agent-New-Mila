@@ -60,7 +60,10 @@ src/
 │   ├── api/agent/run/          # Main agent orchestration endpoint (triggered by dispatcher via QStash)
 │   ├── api/action/[id]/        # Action CRUD + execute/draft/todo/blacklist
 │   ├── api/auth/               # OAuth connect + callback
+│   ├── api/brief/[userId]/     # Brief card UI (refresh, reschedule-event)
+│   ├── api/commands/           # Command execution API
 │   ├── api/cron/morning-brief/ # Brief endpoint (called by QStash per-user schedules)
+│   ├── api/cron/instant-notify/ # Instant high-priority notification polling
 │   ├── api/gdpr/delete/        # GDPR Art. 17 — soft-delete user data
 │   ├── api/gdpr/export/        # GDPR Art. 15 — export all user data as JSON
 │   ├── api/ingest/             # Manual email/calendar ingestion
@@ -68,8 +71,14 @@ src/
 │   ├── api/ingest/bulk/worker/ # QStash worker — processes Phase 1–4 in chained batches of 5
 │   ├── api/backfill/action/    # Backfill report action handler (allow/blacklist/add/setrole)
 │   ├── api/health/             # Health check
+│   ├── api/superadmin/stats/   # Superadmin stats API
+│   ├── api/todo/[id]/complete/ # Todo completion endpoint
+│   ├── api/trigger/ingest/     # Trigger-based ingestion
 │   ├── api/whatsapp/status/    # WhatsApp daemon status proxy
 │   ├── action/[id]/            # Action detail + edit pages
+│   ├── auth/                   # OAuth connect + callback pages
+│   ├── brief/[userId]/         # Brief view page
+│   ├── superadmin/             # Superadmin dashboard page
 │   └── page.tsx                # Home/status dashboard
 │
 ├── shared/                     # Shared pure business logic (prevents cross-service coupling)
@@ -79,8 +88,8 @@ src/
 │   └── index.ts                # Barrel re-exports
 │
 ├── services/                   # Business logic (orchestration layer)
-│   ├── agent.ts                # Main pipeline — 7-step orchestration (parallel ingestion)
-│   ├── scheduling.ts           # Calendar slot finding (1511 lines) ⚠️ LARGEST
+│   ├── agent.ts                # Main pipeline — 8-step orchestration (parallel ingestion)
+│   ├── scheduling.ts           # Calendar slot finding (1510 lines) ⚠️ LARGEST
 │   ├── planning.ts             # Action generation with channel detection (parallel batches of 5)
 │   ├── threading.ts            # Conversation assignment (timeline-based: external thread ID → CP count → density heuristic → AI)
 │   ├── ingestion.ts            # Email ingestion (parallel batches of 5)
@@ -88,17 +97,19 @@ src/
 │   ├── backfill-report.ts      # "Welcome to Mila" report email after bulk ingestion (772 lines)
 │   ├── calendar-ingestion.ts   # Calendar sync + personal event filtering
 │   ├── lead-tracking.ts        # Cooling/cold/dead lead detection (parallel batches of 10)
-│   └── morning-brief.ts        # Daily summary email + instant notifications (886 lines)
+│   ├── morning-brief.ts        # Daily summary email + instant notifications (1047 lines)
+│   └── reflection.ts           # Journal observation extraction from conversations
 │
 ├── lib/                        # Shared utilities & integrations
-│   ├── db/                     # Supabase CRUD — 12 files, ~2800 lines total
+│   ├── db/                     # Supabase CRUD — 14 files, ~3800 lines total
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
-│   ├── supabase/               # Client + types (types.ts = 804 lines)
+│   ├── supabase/               # Client + types (types.ts = 949 lines)
 │   ├── ai/
 │   │   ├── gemini.ts           # AI functions (preFilter, classify, enrichMessage, proposeAction, etc.)
 │   │   ├── mila-voice.ts       # Centralized Mila text generation — ALL user-facing + CP-facing text
-│   │   ├── runner.ts           # runAITask() with 2-model fallback + 429 retry
-│   │   └── providers/          # gemini.ts (multi-key rotation), anthropic.ts, types.ts, index.ts
+│   │   ├── runner.ts           # runAITask() with 2-model fallback + 429/503 retry
+│   │   ├── context.ts          # AI context utilities
+│   │   └── providers/          # gemini.ts (multi-key rotation), gemini-keys.ts, anthropic.ts, types.ts, index.ts
 │   ├── qstash/
 │   │   └── client.ts           # QStash per-user brief scheduling (morning + afternoon)
 │   ├── whatsapp/
@@ -118,19 +129,35 @@ src/
 │   └── holidays.ts             # Holiday calendar
 │
 ├── components/                 # React components
-│   ├── action/ActionCard.tsx   # Main action UI (382 lines)
-│   ├── action/EditForm.tsx     # Action editor (142 lines)
+│   ├── action/ActionCard.tsx   # Main action UI (460 lines)
+│   ├── action/EditForm.tsx     # Action editor (228 lines)
 │   ├── action/SuccessOverlay.tsx # Post-action success animation (103 lines)
-│   ├── action/action-card-template.ts # HTML template for action card emails (140 lines)
+│   ├── action/action-card-template.ts # HTML template for action card emails (416 lines)
+│   ├── brief/                  # Brief UI components (BriefCard, BriefFeed, ScheduleCard, ReplyCard, TodoCard, etc.)
 │   └── ui/                     # Button, Card, Badge, Input
 │
 ├── config/
 │   ├── client.ts               # Per-client config (identity, business, AI persona, leads, WA, calendar, scoring)
-│   ├── ai-models.ts            # 7 AI stages × 2-model fallback chains
+│   ├── ai-models.ts            # 13 AI stages × 2-model fallback chains
 │   └── theme.ts                # Design tokens
 │
-└── scripts/
-    └── whatsapp-daemon.ts      # Standalone Baileys multi-session WA daemon (excluded from tsconfig)
+├── contexts/                   # React contexts (ThemeContext)
+├── hooks/                      # React hooks (usePressState)
+└── __tests__/                  # Top-level e2e + smoke tests
+```
+
+**Additional top-level directories** (outside src/):
+```
+scripts/
+├── whatsapp-daemon.ts          # Standalone Baileys multi-session WA daemon (excluded from tsconfig)
+├── configure-user.ts           # User setup script
+├── add-user.ts                 # Add user script
+├── cleanup-mila-calendar.ts    # Calendar cleanup
+├── cleanup-test-calendar.ts    # Test calendar cleanup
+├── bulk-ingest.sh              # Bulk ingestion helper
+├── run-agent.sh                # Agent runner helper
+├── health-check.sh             # Health check script
+└── e2e-test.ts                 # E2E test runner
 ```
 
 ## Shared Business Logic (src/shared/)
@@ -168,6 +195,7 @@ A global QStash schedule (`*/5 * * * *`, schedule ID `scd_6hCJK1oH54Qa6jHLwRBHb2
 ```
 Step 1: Verify user exists + has Google credentials (early return if fail)
 Step 0: purgeUserAsCp — remove any CP records matching user's own identity (user can't be their own counterparty)
+Step 0.5: Load journal entries + expire temporal entries
 Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
   Step 2: Ingest inbound emails from Gmail (clean → enrich → embed → write to deal_timeline)
   Step 2.1: Ingest outbound emails from Gmail (clean → enrich → embed → write to deal_timeline)
@@ -177,9 +205,10 @@ Step 4: Assign timeline entries to conversations (external thread ID → CP coun
 Step 4.5: Force-rebuild conversation summaries for all updated conversations (threading only rebuilds after 5 new messages, but planning needs fresh summaries even after 1)
 Step 5: Generate action proposals for updated conversations — uses timeline context (includes call logs, voice notes). One conversation may produce multiple actions (e.g. REPLY + SCHEDULE + TODO). Channel-aware, adaptive context, batched ×5.
 Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10). Ignores conversations where current_date < snooze_until. Skips service CPs entirely. Uses deal_timeline for activity detection (phone calls reset the counter).
+Step 7: Reflection — run runReflection() to extract journal observations from conversations.
 ```
 
-Result type includes: emailsIngested, whatsappMessagesProcessed, calendarEventsSynced, calendarInvitationsDetected, messagesProcessed, conversationsUpdated, actionsGenerated, followUpsGenerated, coolingLeads, coldLeads.
+Result type includes: emailsIngested, whatsappMessagesProcessed, calendarEventsSynced, calendarInvitationsDetected, messagesProcessed, conversationsUpdated, actionsGenerated, followUpsGenerated, coolingLeads, coldLeads, reflectionObservations, replyDraftsGenerated.
 
 ### Action Deduplication
 One conversation should not produce duplicate action cards across pipeline runs. If an action was proposed in a previous brief and the agent hasn't acted on it, it carries forward — not duplicated. If new information changes the proposed action, the card updates.
@@ -203,12 +232,12 @@ The agent can also:
 Never read all files in a directory sequentially. This bloats context and causes hangs.
 
 Worst offenders (do NOT read all files in these):
-- `src/lib/db/` — 11 files, ~2500 lines. Use the index below to pick the right file.
-- `src/services/` — 11 files, ~4500 lines. Read only the service relevant to the task.
-- `src/lib/google/` — 5 files, ~1400 lines. Read only the API you need.
+- `src/lib/db/` — 14 files, ~3800 lines. Use the index below to pick the right file.
+- `src/services/` — 12 files, ~5500 lines. Read only the service relevant to the task.
+- `src/lib/google/` — 5 files, ~1600 lines. Read only the API you need.
 
 ### Do NOT follow imports into large type files
-`src/lib/supabase/types.ts` (804 lines) — Only read if you need specific type definitions. Use Grep to find the type you need instead.
+`src/lib/supabase/types.ts` (949 lines) — Only read if you need specific type definitions. Use Grep to find the type you need instead.
 
 ### Strategy for understanding code
 1. Start with Grep to find the function/type you need
@@ -231,7 +260,8 @@ Instead of reading these files, use this index:
 | channels.ts | getOrCreateChannel, getChannelType, getChannelTypes (batch) |
 | embeddings.ts | saveMessageEmbedding, saveConversationEmbedding, getConversationsWithEmbeddingsByCP |
 | gdpr.ts | writeAuditLog, exportAllUserData, deleteAllUserData, enforceRetentionPolicy |
-| timeline.ts | createTimelineEntry, getUnassignedTimelineEntries, assignTimelineEntry, getTimelineForConversation, getTimelineForCP, getLatestInboundFromCP, getRecentDensityByConversation, getTimelineContextForConversations, getOrphanCallLogs |
+| journal.ts | Journal entry CRUD — createJournalEntry, getJournalEntries, updateJournalEntry, expireTemporalEntries, etc. |
+| timeline.ts | createTimelineEntry, getUnassignedTimelineEntries, assignTimelineEntry, getTimelineForConversation, getTimelineForCP, getLatestInboundFromCP, getRecentDensityByConversation, getTimelineContextForConversations, getOrphanCallLogs, getCoolingConversations |
 | locks.ts | tryAcquireUserLock, releaseUserLock |
 | index.ts | Barrel re-exports (do not read) |
 
@@ -343,9 +373,9 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 **Wiring**: Both `planning.ts` and `lead-tracking.ts` import `selectOfferMultiplier` and `computeDaysIgnored` from `@/shared/scoring` — never from each other. Both import `getLatestInboundFromCP` from `@/lib/db/timeline` for activity detection (replaces the old `getLatestMessageFromCP` from messages). Both pass sellerMultiplier (from CP role), kcHighValue (from user settings), and daysIgnored (from shared computation) to `calculatePriorityScore()`. `planning.ts` additionally passes weight (from AI response). Lead tracking passes no boost multipliers — escalation is handled entirely by daysIgnored^1.5 via the main formula.
 
 ## AI Model Configuration
-**Config**: `src/config/ai-models.ts` — 12 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
+**Config**: `src/config/ai-models.ts` — 13 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
 
-**Runner**: `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, retries 429s with exponential backoff (1s, 2s, 4s), logs which model succeeded.
+**Runner**: `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, retries 429s and 503s with exponential backoff (1s, 2s, 4s), logs which model succeeded.
 
 **Model selection rule**: Structured JSON output → Gemini. Czech prose output → Claude. This ensures reliable Czech text generation.
 
@@ -357,14 +387,15 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 | threading | extractTopic, shouldJoinConversation | gemini-2.5-flash → claude-sonnet-4-6 |
 | analysis | analyzeConversation | gemini-2.5-flash → claude-sonnet-4-6 |
 | planning | proposeAction (type, rationale, intent) | claude-haiku-4-5-20251001 → gemini-2.5-flash |
-| drafting | All mila-voice.ts functions (generateFinalDraft, generateBriefIntro, generateSchedulingIntent, generateLeadFollowUpIntent, generateUrgentIntro) | claude-sonnet-4-6 → gemini-2.5-flash |
+| urgency_review | Post-planning urgency validation | gemini-2.5-flash → claude-haiku-4-5-20251001 |
+| drafting | All mila-voice.ts functions (generateFinalDraft, generateBriefIntro, generateSchedulingIntent, generateLeadFollowUpIntent, generateUrgentIntro, generateBriefHeadline, regenerateDraftWithInstruction) | claude-sonnet-4-6 → gemini-2.5-flash |
 | reflection | Journal observation extraction | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
 | draft_edit | Gap fill + spell/grammar on save | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
 | contradiction_analysis | Resolve conflicting beliefs | claude-sonnet-4-6 → gemini-2.5-flash |
 | contradiction_escalation | Opus fallback for unresolved contradictions | claude-opus-4-6 → claude-sonnet-4-6 |
 | belief_audit | Monthly/quarterly full belief review | claude-opus-4-6 → claude-sonnet-4-6 |
 
-**Rate limit handling**: On 429/RESOURCE_EXHAUSTED errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
+**Rate limit handling**: On 429/RESOURCE_EXHAUSTED/503 errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
 
 **Embedding model**: gemini-embedding-001 (768-dim, multilingual) — separate from chat, NO fallback chain. Embeddings are critical for cross-channel conversation threading. Failures are logged with `[Embeddings] FAILED` prefix for Sentry visibility. Without embeddings, only Gmail thread ID matching works — cross-channel and cross-thread merging is lost.
 
@@ -403,7 +434,7 @@ Unified conversation tracking across channels, email threads, and senders. An em
 Operates on `deal_timeline` entries (not raw messages):
 1. **External thread ID match (fast path)** — if the timeline entry has a linked message with external_thread_id, use `findConversationByExternalThread()`. Same-channel email fast path.
 2. **CP conversation count** — count active conversations for this CP. Zero = create new. One = assign immediately. Multiple = proceed to heuristic.
-3. **Density/recency heuristic** — count timeline entries per candidate conversation in the last 15 minutes. If one conversation has >= 3 recent entries and others have 0, assign without AI.
+3. **Density/recency heuristic** — count timeline entries per candidate conversation in the last 15 minutes. If one conversation has >= 3 recent entries and the second-highest count is 0, assign without AI.
 4. **AI assignment** — feed up to 10 recent timeline entries per candidate conversation to the AI (stage: threading). AI responds with conversation ID or "NEW".
 5. **Writeback** — write conversation_id to `deal_timeline` entry and linked `messages` row. Increment message count, add CP as participant.
 
@@ -413,7 +444,7 @@ Operates on `deal_timeline` entries (not raw messages):
 - Runs after cleaning, before threading. Extracts: who's involved, property/subject, message kind, deal numbers, core intent.
 - **Output language**: Controlled via `CRITICAL` directive at end of prompt using `settings.ai_language` (same pattern as all other AI functions). Enrichment prompt includes business context from UserSettings so domain-specific terms are interpreted correctly (e.g. Czech "statek" = farm/estate, not "ship").
 - Saves to `messages.enriched_text` column. Embedding generated from enriched text (not raw body).
-- **Stage**: enrichment (gemini-2.5-flash-lite → gemini-2.5-flash). Cost-sensitive — runs per message.
+- **Stage**: enrichment (gemini-2.5-flash → claude-haiku-4-5-20251001). Cost-sensitive — runs per message.
 - Accepts optional UserSettings for business context injection. All callers (ingestion.ts, bulk-ingestion.ts, QStash worker) fetch and pass user settings.
 - Runs in both regular ingestion (ingestion.ts) and bulk historical ingestion (bulk-ingestion.ts). Bulk enrichment runs in Phase 2 (Phase2EnrichResult tracks enriched, enrichmentFailed, embedded, embeddingFailed).
 
@@ -432,7 +463,7 @@ Per-message embeddings (`message_embeddings`) and per-conversation embeddings (`
 `cleanEmailText()` is a backward-compatible alias for `cleanMessageText(text, 'email')`
 
 ## Scheduling & Calendar Management
-**Implementation**: `src/services/scheduling.ts` (702 lines — largest service)
+**Implementation**: `src/services/scheduling.ts` (1510 lines — largest service)
 
 ### When the Optimizer Runs
 The schedule optimizer runs before ANY action card rendering — briefs, instant notifications, or any future surface. It must see ALL SCHEDULE actions for the user at once to batch-optimize. Never render SCHEDULE cards without running the optimizer first.
@@ -492,7 +523,7 @@ When a new meeting conflicts with existing events:
 - User-created events default weight = 7 (treated as planned but movable for high-value deals)
 - Weight is NEVER null — every event has a weight value. Do not add null guards for weight
 - Conflict resolution handles rare conflicts with confirmed events — separate from batch optimization
-- **Resolution actions** (`/api/action/[id]/resolve-conflict`): `reschedule_existing` (move conflicting event to alt slot + confirm new), `cancel_existing` (cancel conflicting + confirm new), `keep_both` (accept overlap + confirm new + complete action), `move_new` (move new meeting to different slot, stays as hold for user to confirm via UDĚLAT)
+- **Resolution actions** (`/api/action/[id]/resolve-conflict`): `reschedule_existing` (move conflicting event to alt slot + confirm new), `cancel_existing` (cancel conflicting + confirm new), `keep_both` (accept overlap + confirm new + complete action), `move_new` (move new meeting to different slot, stays as hold for user to confirm via UDĚLAT), `send_draft` (send the draft as-is)
 - All resolution actions except `move_new` confirm the new event and complete the action. `move_new` creates a new hold — user still needs to click UDĚLAT.
 
 **Design test case**: a W=100 personal event (doctor, kids' concert) against an nVal-max deal with a single possible time slot. An impossible situation. Mila surfaces the conflict, presents both sides, and the agent chooses. This is by design — Mila never resolves impossible conflicts silently.
@@ -517,6 +548,8 @@ When a new meeting conflicts with existing events:
 | `generateBriefIntro()` | Hardcoded greeting/subject in morning-brief.ts | Returns { greeting, subject, headline } for morning/afternoon briefs |
 | `generateQuietBriefIntro()` | N/A (new) | Returns { greeting, subject, body } for quiet briefs (no pending actions). Receives today's events + todos for context |
 | `generateUrgentIntro()` | Hardcoded urgent strings in morning-brief.ts | Returns { subject, header, body } for instant high-priority notifications |
+| `generateBriefHeadline()` | N/A | Generates per-action-card headline + story for brief cards |
+| `regenerateDraftWithInstruction()` | N/A | Rewrites draft based on user's free-text edit instruction |
 
 ### Mila → CP (uses settings.ai_tone_cp)
 
@@ -550,7 +583,7 @@ Historical email backfill with 5-phase pipeline (fetch → enrich → thread →
 ## WhatsApp Integration
 Standalone Baileys daemon (`scripts/whatsapp-daemon.ts`) — pure WebSocket, multi-session, ~5-10 MB/session. Messages flow into agent pipeline same as email. See docs/WHATSAPP.md for daemon API, message flow, and scaling details.
 
-- **Process Manager**: Runs via PM2 (`pm2 start scripts/whatsapp-daemon.ts --watch`) on an always-on server/PC.
+- **Process Manager**: Runs via PM2 (`pm2 start scripts/whatsapp-daemon.ts --watch`) on an always-on server/PC. Note: `scripts/` is at the repo root, not under `src/`.
 - **Companion Device**: Acts as a linked companion device. Works 24/7 even if the user's phone is turned off, out of battery, or in their pocket.
 - **Group Chats**: Extracts the participant (sender) ID from group messages, prepends the group name to the text (e.g., `[Group: Prodej Praha] Jan: Ano`), and processes it so Mila understands multi-party deal chats.
 - **Channel resolution**: Daemon creates/reuses a `channels` record (type='whatsapp', identifier=phone) per user via `getWhatsAppChannelId()`. The channel UUID is stored as `channel_id` on each message. Services use `getChannelType(channelId)` / `getChannelTypes(ids)` from `src/lib/db/channels.ts` to detect channel type. Email messages have `channel_id: null` (backward compat, resolves to 'email'). Future channels follow the same pattern: create a `channels` row, use its UUID.
@@ -585,7 +618,7 @@ User sends email to themselves with "Mila:" subject prefix → intercepted in in
 ## Testing
 **Framework**: Vitest 4 with @/* path aliases. Tests co-located (foo.ts → foo.test.ts). Mock-Only-AI philosophy: mock AI + Google APIs, everything else (DB, scoring, tokens, cleaning) runs for real.
 
-**414 tests total**: 288 unit + 22 integration (need DB) + 10 smoke (opt-in) + 12 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See docs/TESTING.md
+**~511 tests total**: across 32 test files including unit, integration (need DB), 10 smoke (opt-in), and 8 e2e (opt-in, 100% live). Full test inventory, tiers, and update rules: See docs/TESTING.md
 
 **Key rules**:
 - Changed a function → update its pinning test
@@ -682,7 +715,7 @@ Actions with urgency >= 9 get an immediate email notification (same action card 
 - **Client-side**: Session replay + error tracking
 - **Server-side**: API route errors, database issues
 - **Edge runtime**: Middleware errors
-- **Config**: instrumentation.ts, instrumentation-client.ts, sentry.*.config.ts
+- **Config**: instrumentation.ts, instrumentation-client.ts (exist at both repo root and src/), sentry.server.config.ts, sentry.edge.config.ts
 - **Global handler**: `src/app/global-error.tsx` (React error boundary)
 - **Setup**: Requires SENTRY_DSN env var. Free tier = 5k errors/month.
 
@@ -701,7 +734,7 @@ Actions with urgency >= 9 get an immediate email notification (same action card 
 - **docs/COST-ESTIMATE.md** — Per-user monthly cost breakdown, AI model assignments, scaling scenarios, cost reduction levers
 
 ## GDPR Compliance
-**Implementation**: `src/lib/db/gdpr.ts` — deleteAllUserData (FK-safe cascade across 13 tables), exportAllUserData, writeAuditLog (never throws), enforceRetentionPolicy.
+**Implementation**: `src/lib/db/gdpr.ts` — deleteAllUserData (FK-safe cascade across 14 tables), exportAllUserData, writeAuditLog (never throws), enforceRetentionPolicy.
 
 - `POST /api/gdpr/delete` — Art. 17 Right to Erasure. Auth: API key.
 - `GET /api/gdpr/export?userId=` — Art. 15 Right of Access. Auth: API key.
