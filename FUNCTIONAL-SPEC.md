@@ -27,10 +27,14 @@ The fundamental unit is the deal, not the message thread. A deal is the ongoing 
 
 ### 2.1 Threading Logic
 
-Messages are matched to deals using a combination of:
+Messages are matched to deals using a pipeline of four mechanisms, in order:
 
-- **Explicit identifiers:** email thread IDs, In-Reply-To headers, contact matching (email address, phone number)
-- **Semantic similarity:** vector embeddings that recognize when a new message relates to the same property, people, or deal — even across channels, with different subject lines, or from a new contact (e.g. the CP's spouse or lawyer)
+1. **External thread ID match** — email thread IDs, In-Reply-To headers. Fast path for same-channel email chains.
+2. **Contact matching** — if the counterparty has exactly one active deal, assign immediately.
+3. **Density/recency heuristic** — if one candidate deal has ≥3 timeline entries in the last 15 minutes and no other deal is close, assign without AI.
+4. **AI assignment** — feed recent timeline entries per candidate deal to the AI. AI responds with deal ID or "NEW."
+
+Vector embeddings were previously used for semantic matching across channels and subject lines. They have been superseded by the timeline-based algorithm above and are preserved for potential future semantic search only.
 
 When a message matches no existing deal, a new deal is created.
 
@@ -87,14 +91,13 @@ Action cards do not contain finished drafts. The workflow is multi-step:
 
 1. **Action card** — Mila presents her plan and outline.
 2. **Edit card** (on UPRAVIT) — A form with deal-specific questions Mila needs answered (e.g. is parking available? when was the roof last done?) plus a general comments field for the agent to shape tone or add details.
-3. **Draft** — Mila generates the full draft using conversation context, approved intent, and edit input. Draft tone adapts to channel (formal for email, short for WhatsApp) and counterparty (configured per user).
+3. **Draft** — Generated on-demand at execution time, not during proposal creation. Mila generates the full draft using conversation context, approved intent, and edit input. Draft tone adapts to channel (formal for email, short for WhatsApp) and counterparty (configured per user).
 4. **Review** — Agent reviews draft, can edit again, then approves with UDĚLAT. Mila sends.
 
 ### 3.4 Deduplication
 
 One deal should not produce duplicate action cards across pipeline runs. If an action was proposed in a previous brief and the agent hasn't acted on it, it carries forward — not duplicated. If new information changes the proposed action, the card updates.
 
-*Note: deduplication is a known active bug in the current build.*
 
 ## 4. Priority Ranking
 
@@ -102,14 +105,16 @@ Based on the WSJF (Weighted Shortest Job First) framework, adapted for real esta
 
 ### 4.1 Brief Priority Formula
 
-**priority = (nVal × sellerMult × stageWeight) × (urgency + daysIgnored^1.5)**
+**Score = (nVal × sellerMult) + (urgency × daysIgnored^1.5) + W**
+
+Three additive terms — deal importance + time pressure + scheduling weight:
 
 Where:
 
-- **nVal:** deal value normalized to the agent's typical range, producing meaningful separation across their full deal spectrum. A small deal for this agent scores low; a large deal scores high. The normalization method is a Layer 3 implementation detail — what matters is that the output produces a usable ranked order.
+- **nVal:** deal value normalized to the agent's typical range, producing meaningful separation across their full deal spectrum. A small deal for this agent scores low; a large deal scores high. Hard floor of 1 — no deal ever drops to 0. The normalization method is a Layer 3 implementation detail — what matters is that the output produces a usable ranked order.
 - **sellerMult:** multiplier applied to seller-side deals. Sellers are harder to find than buyers. Configured per agent.
-- **stageWeight:** multiplier reflecting deal lifecycle stage. A deal near closing is worth more attention than a fresh acquisition — more time invested, more at stake. Ascending from initial contact through closing.
-- **urgency (0–10):** AI-assigned based on when the action is due. Urgency is about scheduling — when something needs to happen. It is not about conversation health (that's lead protection, §5).
+- **urgency (0–10):** AI-assigned based on when the action is due. Urgency is about scheduling — when something needs to happen. It is not about conversation health (that's lead protection, §5). Multiplied against daysIgnored^1.5 — urgency amplifies the aging curve.
+- **W:** scheduling immovability (1–10 or 100), added flat to the priority score. A hard-to-move event with W=7 outranks an otherwise equivalent event with W=1. See §4.2 for the full W scale. W serves double duty: it contributes to ranking AND determines how strongly an event resists being moved by the scheduler.
 
 **Urgency scale:**
 
@@ -138,12 +143,12 @@ These factors are independent. A small urgent deal beats a large routine one. A 
 
 ### 4.2 Slot Defense (W — Immovability)
 
-W is not a ranking factor. It is a scheduling constraint that determines how strongly an existing calendar event resists being moved.
+W serves dual purpose: it is added flat to the priority score AND determines how strongly an existing calendar event resists being moved by the scheduler.
 
 - **1–10:** movable to hard-to-move. A casual viewing might be a 3. A client meeting with a specific requested time might be a 7.
 - **100:** effectively immovable. Court dates, notary appointments, personal commitments (doctor, kids' concert, partner's flight). The gap between 10 and 100 is intentional — it creates a hard tier.
 
-W applies to non-deal events too. The agent's life doesn't stop for work.
+W applies to non-deal events too. The agent's life doesn't stop for work. W is never null — every event has a value.
 
 ### 4.3 Conflict Resolution
 

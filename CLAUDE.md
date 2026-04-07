@@ -213,7 +213,6 @@ Result type includes: emailsIngested, whatsappMessagesProcessed, calendarEventsS
 ### Action Deduplication
 One conversation should not produce duplicate action cards across pipeline runs. If an action was proposed in a previous brief and the agent hasn't acted on it, it carries forward — not duplicated. If new information changes the proposed action, the card updates.
 
-*Note: deduplication is a known active bug in the current build.*
 
 ### Execution & Agent Actions
 When the agent approves an action:
