@@ -375,7 +375,10 @@ When a conversation requires multiple steps, think through the critical path the
 - What must happen FIRST or the deal is lost? (confirm, reply, lock in the appointment)
 - What meeting needs to be booked — at what ACTUAL time, at what ACTUAL location?
 - What does the user need to prepare BEFORE the meeting? (documents, approvals, external confirmations)
-Return a separate action for each genuinely independent step. Each gets its own urgency based on ITS OWN deadline — the confirmation email is urgency 10 if the deadline is today, while the document prep might be urgency 7 if the meeting is tomorrow.
+Return a separate action for each genuinely independent step. Each gets its own urgency based on ITS OWN deadline.
+
+CRITICAL — MEETING TIME = DEADLINE FOR PREP:
+A proposed or confirmed meeting time IS a deadline for any action that must happen before that meeting. If a call is scheduled for "zítra v 9:00", then a TODO to prepare for that call has a deadline of TOMORROW → urgency 9. If a notary signing is "zítra v 9:00" and documents must be ready by 8:30, the TODO to gather documents has a deadline of TOMORROW → urgency 9. This applies to any action that is causally dependent on the meeting — prep tasks, document gathering, approvals needed before the meeting. It does NOT apply to unrelated actions that happen to be in the same conversation.
 
 CRITICAL - VOICE AND PERSPECTIVE:
 - You are Mila, the user's assistant. Address the user directly as "vy" (you).
@@ -431,7 +434,7 @@ CRITICAL: You must generate ALL user-facing text (rationale_cs, intent_cs, missi
 
 CRITICAL — URGENCY RULES (MUST FOLLOW EXACTLY):
 CRITICAL: Write urgencyJustification FIRST. State the facts. Then assign the urgency number. Never assign the number before reasoning through the evidence.
-Urgency is based ONLY on deadline language explicitly stated in the conversation. Do NOT infer urgency from deal size, importance, or your own judgment about what "should" be urgent.
+Urgency is based ONLY on deadline language explicitly stated in the conversation OR on a proposed/confirmed meeting time that creates a preparation deadline (see MEETING TIME = DEADLINE FOR PREP above). Do NOT infer urgency from deal size, importance, or your own judgment about what "should" be urgent.
 
 Scale:
   10 = HARD deadline TODAY (explicit: "dnes", "today", "do 17:00")
@@ -487,11 +490,14 @@ async function reviewUrgency(
   actions: ProposedAction[],
   conversationText: string
 ): Promise<ProposedAction[]> {
+  // Review ALL actions when any action has urgency >= 5.
+  // Low-urgency siblings that should be high are the most dangerous errors
+  // (e.g., a TODO at urgency=2 that's actually prep for a tomorrow meeting).
+  const anyHighUrgency = actions.some(a => (a.urgency || 0) >= 5)
+  if (!anyHighUrgency) return actions
+
   const actionsToReview = actions
     .map((a, i) => ({ index: i, urgency: a.urgency || 0, justification: (a as Record<string, unknown>).urgencyJustification || '' }))
-    .filter(a => a.urgency >= 5)
-
-  if (actionsToReview.length === 0) return actions
 
   const reviewPrompt = `You are an urgency auditor. Your ONLY job: check if the claimed urgency matches the conversation text per the scale below. You receive NO deal value, NO names — only the conversation and the claims.
 
@@ -506,6 +512,7 @@ URGENCY SCALE:
 
 HARD RULES:
 - urgency 7+ requires a HARD DEADLINE with a specific date/day or stated consequence quoted from the conversation
+- A proposed/confirmed meeting time IS a deadline for prep tasks. If a meeting is "zítra v 9:00", a TODO to prepare documents for that meeting has a deadline of TOMORROW → urgency 9. Only applies to actions causally dependent on the meeting — not unrelated actions.
 - "do konce dubna" when today is late March = 3-4 (weeks away), NOT 7+
 - Deal importance, relationship importance, or dollar value do NOT increase urgency
 - If the justification quotes words not actually present in the conversation, lower urgency to 2
