@@ -405,8 +405,8 @@ Respond with ONLY valid JSON — an array of one or more action objects:
   "rationale_cs": "One sentence in ${planningLang}: the BUSINESS REASON this action is needed NOW. Focus on consequences, deadlines, or relationship risk. NEVER repeat what intent_cs says.",
   "intent_cs": "PROACTIVE description in ${planningLang}: what Mila HAS ALREADY DONE + what she WILL DO when user clicks UDĚLAT. Must contain SPECIFIC data from the conversation (names, dates, amounts, locations). For TODO: describe the concrete task the user must do themselves. NEVER repeat what rationale_cs says.",
   "missingInfo": [{"label": "FULL question in ${planningLang}", "value": null}],
-  "urgency": 1-10 (see URGENCY RULES below),
-  "urgencyJustification": "Quote the EXACT words from the conversation that justify this urgency level. If urgency <= 2, write 'No deadline language found.'",
+  "urgencyJustification": "Before assigning urgency: state today's date, state the deadline language found (quote exact words from the conversation), calculate how many hours/days remain. If no deadline language exists, write 'No deadline language found.' Write this reasoning BEFORE deciding the number.",
+  "urgency": 1-10 (see URGENCY RULES below — assign this AFTER writing urgencyJustification above),
   "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, use range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
   "weight": 1-10 (how immovable is this? 1 = easy to reschedule, 10 = hard to move. Use 100 ONLY for absolutely immovable commitments like court dates, kids events, airport pickups),
   "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null (classify the nature of this deal/conversation),
@@ -430,6 +430,7 @@ Rules:
 CRITICAL: You must generate ALL user-facing text (rationale_cs, intent_cs, missingInfo labels) in ${planningLang}. Do not output English.
 
 CRITICAL — URGENCY RULES (MUST FOLLOW EXACTLY):
+CRITICAL: Write urgencyJustification FIRST. State the facts. Then assign the urgency number. Never assign the number before reasoning through the evidence.
 Urgency is based ONLY on deadline language explicitly stated in the conversation. Do NOT infer urgency from deal size, importance, or your own judgment about what "should" be urgent.
 
 Scale:
