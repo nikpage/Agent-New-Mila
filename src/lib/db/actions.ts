@@ -411,45 +411,33 @@ export async function getActionsForConversation(
 
 /**
  * Get the set of action_type values that already exist for a conversation
- * and should NOT be re-proposed.
+ * and should NOT be re-proposed (unless the new proposal has higher urgency).
  *
- * Includes:
- *  - pending actions (not yet acted on)
- *  - approved/completed actions created within the last 7 days
- *    (prevents re-proposing meetings that were already confirmed,
- *     replies already sent, etc.)
+ * Returns pending actions keyed by type with their urgency, so planning
+ * can compare and update existing actions when new info raises urgency.
  */
-export async function getPendingActionTypes(conversationId: string): Promise<Set<string>> {
+export async function getPendingActionsByType(conversationId: string): Promise<Map<string, { id: string; urgency: number; intent_cs: string | null }>> {
   const supabase = getSupabaseAdmin()
 
-  // 1. All pending actions — always block re-proposal
-  const { data: pending, error: pendingErr } = await supabase
+  const { data: pending, error } = await supabase
     .from('action_proposals')
-    .select('action_type')
+    .select('id, action_type, urgency, intent_cs')
     .eq('conversation_id', conversationId)
     .eq('status', 'pending')
 
-  if (pendingErr) {
-    throw new Error(`Failed to get pending action types: ${pendingErr.message}`)
+  if (error) {
+    throw new Error(`Failed to get pending actions: ${error.message}`)
   }
 
-  // 2. Recently approved/completed actions — prevent re-planning handled items
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
-  const { data: recent, error: recentErr } = await supabase
-    .from('action_proposals')
-    .select('action_type')
-    .eq('conversation_id', conversationId)
-    .in('status', ['approved', 'completed'])
-    .gte('created_at', sevenDaysAgo)
-
-  if (recentErr) {
-    throw new Error(`Failed to get recent action types: ${recentErr.message}`)
+  // Keep the highest-urgency pending action per type
+  const byType = new Map<string, { id: string; urgency: number; intent_cs: string | null }>()
+  for (const r of pending || []) {
+    const existing = byType.get(r.action_type)
+    if (!existing || (r.urgency ?? 0) > existing.urgency) {
+      byType.set(r.action_type, { id: r.id, urgency: r.urgency ?? 0, intent_cs: r.intent_cs })
+    }
   }
-
-  const types = new Set<string>()
-  for (const r of pending || []) types.add(r.action_type)
-  for (const r of recent || []) types.add(r.action_type)
-  return types
+  return byType
 }
 
 /**

@@ -3,8 +3,9 @@ import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt, formatEnrichedForPrompt } from '@/lib/ai/context'
 import {
   createAction,
+  dismissAction,
   calculatePriorityScore,
-  getPendingActionTypes,
+  getPendingActionsByType,
 } from '@/lib/db/actions'
 import { hasActiveEventForConversation } from '@/lib/db/events'
 import { getConversationById, getRecentMessages, updateConversation } from '@/lib/db/conversations'
@@ -130,22 +131,39 @@ export async function generateActionProposal(
 
     const createdActions: ActionProposal[] = []
 
-    // Filter out action types that already have pending actions for this conversation
-    const existingPendingTypes = await getPendingActionTypes(conversation.id)
+    // Get existing pending actions so we can compare urgency before skipping
+    const existingPending = await getPendingActionsByType(conversation.id)
 
     // Skip SCHEDULE if conversation already has an active event (hold or confirmed)
     const hasEvent = await hasActiveEventForConversation(conversation.user_id, conversation.id)
     if (hasEvent) {
-      existingPendingTypes.add('SCHEDULE')
+      existingPending.set('SCHEDULE', { id: '__event__', urgency: Infinity, intent_cs: null })
     }
 
-    // Dedup: max one of each actionType per conversation per run, and skip already-pending types
+    // Dedup with urgency comparison:
+    // - No existing pending of this type → keep proposal
+    // - Existing pending has LOWER urgency → update existing action (don't create new)
+    // - Existing pending has EQUAL or HIGHER urgency → skip
     const seenTypes = new Set<string>()
+    const updatedActionIds: string[] = []
     const dedupedProposals = proposals.filter(p => {
-      if (existingPendingTypes.has(p.actionType)) return false
       if (seenTypes.has(p.actionType)) return false
       seenTypes.add(p.actionType)
-      return true
+
+      const existing = existingPending.get(p.actionType)
+      if (!existing) return true
+
+      // Active calendar event — never override
+      if (existing.id === '__event__') return false
+
+      // New proposal has higher urgency → will update existing action
+      if (p.urgency > existing.urgency) {
+        updatedActionIds.push(existing.id)
+        return true
+      }
+
+      // Same or lower urgency — skip
+      return false
     })
 
     // SCHEDULE absorbs REPLY: when both exist, merge REPLY content into SCHEDULE
@@ -254,7 +272,13 @@ export async function generateActionProposal(
         weight,
       })
 
-      // Repair 3: log urgent actions for visibility
+      // Supersede: if this proposal replaces a lower-urgency pending action, dismiss the old one
+      const superseded = existingPending.get(proposal.actionType)
+      if (superseded && updatedActionIds.includes(superseded.id)) {
+        await dismissAction(superseded.id)
+        console.log(`[Planning] Superseded ${proposal.actionType} (urgency ${superseded.urgency} → ${proposal.urgency}) for ${cp.name || cp.primary_identifier}`)
+      }
+
       if (proposal.urgency >= 9) {
         console.log(`[Planning] URGENT action created: urgency=${proposal.urgency}, type=${proposal.actionType}, cp=${cp.name || cp.primary_identifier}`)
       }
