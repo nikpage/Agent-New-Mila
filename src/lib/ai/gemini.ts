@@ -520,6 +520,11 @@ HARD RULES:
 CONVERSATION TEXT:
 ${conversationText.slice(0, 3000)}
 
+SIBLING ACTIONS (same conversation):
+${actions.map((a, i) => `Action ${i}: ${a.actionType} urgency=${a.urgency}`).join('\n')}
+
+If a TODO is required before a sibling SCHEDULE, it inherits that SCHEDULE's urgency. Do not lower it below the sibling SCHEDULE's urgency.
+
 CLAIMS TO REVIEW:
 ${actionsToReview.map(a => `Action ${a.index}: claimed urgency ${a.urgency}, justification: "${a.justification}"`).join('\n')}
 
