@@ -33,6 +33,15 @@ describe('isMilaCommand', () => {
   it('rejects Fwd: Mila:', () => {
     expect(isMilaCommand('Fwd: Mila: contact')).toBe(false)
   })
+
+  it('rejects system-generated emails with long subjects (backfill report)', () => {
+    expect(isMilaCommand('Mila: Vaše schránka je připravena — 4 kontaktů, 4 konverzací')).toBe(false)
+  })
+
+  it('accepts commands near the 40-char limit', () => {
+    // 38 chars after "Mila: " — should still be accepted
+    expect(isMilaCommand('Mila: kontakt Jan Novotný z firma ABC')).toBe(true)
+  })
 })
 
 describe('classifyCommand', () => {

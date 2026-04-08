@@ -466,16 +466,20 @@ HARD RULES:
     actions = [JSON.parse(jsonMatch[0])]
   }
 
-  // Two-pass urgency review: a second AI checks urgency claims against conversation text
-  // Only review actions with urgency >= 5 (lower urgency is unlikely to cause false positives)
-  const needsReview = actions.some(a => (a.urgency || 0) >= 5)
-  if (needsReview) {
-    try {
-      actions = await reviewUrgency(actions, recentText)
-    } catch (e) {
-      console.error('[Planning] Urgency review failed, using original values:', e)
-    }
-  }
+  // DISABLED 2026-04-08: urgency_review was over-correcting valid urgency assessments.
+  // Root cause: review rejects valid deadline reasoning as "fabricated quotes" and ignores
+  // sibling inheritance rules. Haiku's urgency assessment has improved after prompt changes
+  // (urgencyJustification-before-number, meeting-deadline rules). Re-enable only after
+  // adding e2e assertions that verify both pre-review and post-review urgency values.
+  //
+  // const needsReview = actions.some(a => (a.urgency || 0) >= 5)
+  // if (needsReview) {
+  //   try {
+  //     actions = await reviewUrgency(actions, recentText)
+  //   } catch (e) {
+  //     console.error('[Planning] Urgency review failed, using original values:', e)
+  //   }
+  // }
 
   return actions
 }

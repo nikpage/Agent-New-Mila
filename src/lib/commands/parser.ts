@@ -44,10 +44,20 @@ const COMMAND_ALIASES: Record<string, MilaCommandType> = {
 /**
  * Check if an email subject starts with "Mila:" (case-insensitive).
  * Must be at the start — "Re: Mila: ..." does NOT match.
+ * Rejects system-generated emails (backfill reports, briefs) that happen to
+ * use the "Mila:" prefix — they have long informational subjects, not short
+ * imperative commands. Max 60 chars after prefix to filter these out.
  */
 export function isMilaCommand(subject: string): boolean {
   if (!subject) return false
-  return MILA_PREFIX.test(subject.trim())
+  const trimmed = subject.trim()
+  if (!MILA_PREFIX.test(trimmed)) return false
+  // System-generated emails (e.g. "Mila: Vaše schránka je připravena — 4 kontaktů, 4 konverzací")
+  // use the same prefix but have long subjects. Real commands are short: "Mila: kontakt", "Mila: todo".
+  // The command keyword goes in the subject; details go in the email body.
+  const afterPrefix = trimmed.replace(MILA_PREFIX, '').trim()
+  if (afterPrefix.length > 40) return false
+  return true
 }
 
 /**

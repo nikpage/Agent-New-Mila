@@ -30,11 +30,14 @@ import { v4 as uuidv4 } from 'uuid'
  * If geocoding fails, keeps raw text but flags for user confirmation.
  */
 export async function validateMeetingLocation(
-  raw: string
+  raw: string,
+  region?: string
 ): Promise<{ location: string | undefined; needsConfirmation: boolean }> {
+  console.log(`[Planning] Geocoding raw AI location: "${raw}"${region ? ` (region: ${region})` : ''}`)
   try {
-    const result = await geocodeAddress(raw)
+    const result = await geocodeAddress(raw, region)
     if (result) {
+      console.log(`[Planning] Geocoded: "${raw}" → "${result.formattedAddress}"`)
       return { location: result.formattedAddress, needsConfirmation: false }
     }
   } catch {
@@ -42,6 +45,7 @@ export async function validateMeetingLocation(
   }
 
   // Geocode couldn't resolve — keep raw text but ask user to confirm
+  console.log(`[Planning] Geocode failed for "${raw}" — keeping raw text`)
   return { location: raw, needsConfirmation: true }
 }
 
@@ -220,9 +224,16 @@ export async function generateActionProposal(
         }
 
         // Validate location via geocode if we have one
+        // Extract region code from timezone (e.g. Europe/Prague → cz) for geocoding bias
+        const tzRegionMap: Record<string, string> = {
+          'Europe/Prague': 'cz', 'Europe/Bratislava': 'sk', 'Europe/Berlin': 'de',
+          'Europe/Vienna': 'at', 'Europe/Warsaw': 'pl', 'Europe/London': 'gb',
+          'Europe/Paris': 'fr', 'Europe/Rome': 'it', 'Europe/Madrid': 'es',
+        }
+        const geocodeRegion = tzRegionMap[settings.timezone] || undefined
         let locationPartial = false
         if (meetingLocation) {
-          const validated = await validateMeetingLocation(meetingLocation)
+          const validated = await validateMeetingLocation(meetingLocation, geocodeRegion)
           meetingLocation = validated.location
           locationPartial = validated.needsConfirmation
         }

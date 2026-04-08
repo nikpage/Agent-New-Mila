@@ -183,7 +183,13 @@ export async function PUT(
         let resolvedLocation = locationValue
         let locationPartial = true
         try {
-          const geocoded = await geocodeAddress(locationValue)
+          const tzRegionMap: Record<string, string> = {
+            'Europe/Prague': 'cz', 'Europe/Bratislava': 'sk', 'Europe/Berlin': 'de',
+            'Europe/Vienna': 'at', 'Europe/Warsaw': 'pl', 'Europe/London': 'gb',
+            'Europe/Paris': 'fr', 'Europe/Rome': 'it', 'Europe/Madrid': 'es',
+          }
+          const geocodeRegion = tzRegionMap[settings?.timezone || ''] || undefined
+          const geocoded = await geocodeAddress(locationValue, geocodeRegion)
           if (geocoded) {
             resolvedLocation = geocoded.formattedAddress
             locationPartial = false

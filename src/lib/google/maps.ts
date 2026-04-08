@@ -117,7 +117,8 @@ export function formatTravelTime(seconds: number): string {
  * Geocode an address to coordinates
  */
 export async function geocodeAddress(
-  address: string
+  address: string,
+  region?: string
 ): Promise<{ lat: number; lng: number; formattedAddress: string } | null> {
   const apiKey = process.env.GOOGLE_MAPS_API_KEY
 
@@ -130,6 +131,12 @@ export async function geocodeAddress(
     address,
     key: apiKey,
   })
+
+  // Bias results towards user's region to prevent cross-country mismatches
+  // (e.g. Czech street name resolving to Italy)
+  if (region) {
+    params.append('region', region)
+  }
 
   try {
     const response = await fetch(
