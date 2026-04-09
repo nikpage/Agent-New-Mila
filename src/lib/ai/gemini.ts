@@ -190,6 +190,35 @@ CRITICAL: You must generate ALL text values in ${outputLanguage}. Do not output 
 }
 
 /**
+ * Extract the CP's current request from the latest inbound message.
+ * Focused single-task call that runs BEFORE proposeAction to lock in what the
+ * CP is actually asking — prevents intent drift where the planning AI latches
+ * onto conversation history instead of the latest message.
+ * Stage: enrichment (cheap, Gemini Flash)
+ */
+export async function extractCPRequest(
+  latestInboundText: string,
+  cpName: string | null,
+  settings?: UserSettings
+): Promise<string> {
+  const lang = settings?.ai_language || 'Czech'
+  const prompt = `Read this message from ${cpName || 'the counterparty'} and answer concisely:
+
+1. What is the sender specifically ASKING, REQUESTING, or DEMANDING? Quote their key words.
+2. What response do they expect (a reply, a meeting confirmation, documents, information)?
+3. Is there a deadline? Quote it if yes.
+
+If the message is purely informational with no request, say "No specific request — informational update."
+
+MESSAGE:
+${latestInboundText.slice(0, 2000)}
+
+Respond in ${lang}. Plain text, 2-4 sentences max.`
+
+  return (await runAITask('enrichment', prompt)).trim()
+}
+
+/**
  * Analyze a conversation for summary, risks, next steps.
  * Stage: analysis (gemini-2.5-flash → claude-sonnet)
  *
@@ -296,7 +325,8 @@ export async function proposeAction(
   settings: UserSettings,
   channel: 'email' | 'whatsapp' = 'email',
   journalText: string = '',
-  enrichedText: string = ''
+  enrichedText: string = '',
+  cpRequest: string = ''
 ): Promise<ProposedAction[]> {
   const planningLang = settings.ai_language || 'Czech'
   console.log(`[AI:proposeAction] Running stage 'planning' for ${cpName || 'unknown CP'}`)
@@ -354,11 +384,14 @@ CONVERSATION-FIRST REASONING:
 A conversation may span multiple CPs, email threads, and channels (email + WhatsApp) — but it represents ONE deal or relationship. The recent messages below are raw inputs that update the conversation state. Do NOT treat them as separate items needing separate actions.
 Your job: (1) Understand HOW we got here — the arc of the conversation so far (use CONVERSATION STATE above). (2) Assess WHERE things stand RIGHT NOW. (3) Decide WHAT the user needs to do next. Focus your rationale_cs on the current situation and why action is needed now, not on summarizing individual messages.
 
-CRITICAL — EXTRACT THE CP'S REQUEST FIRST:
+${cpRequest ? `CP'S CURRENT REQUEST (pre-extracted from latest inbound — treat as ground truth, do NOT override with your own interpretation):
+${cpRequest}
+
+Your action MUST address THIS specific request. Do NOT substitute a different topic from conversation history or your own inference.` : `CRITICAL — EXTRACT THE CP'S REQUEST FIRST:
 Before deciding action type, read the latest [inbound] message(s) and answer:
 - What is the CP explicitly ASKING, REQUESTING, or DEMANDING the user to do? Quote the exact words.
 - Is there a DEADLINE attached? ("do 17:00", "zítra", "co nejdřív")
-- What happens if the user does NOT act? (stated or implied consequence)
+- What happens if the user does NOT act? (stated or implied consequence)`}
 
 CONFIRMATION = SCHEDULE: When the CP asks the user to CONFIRM a deal, meeting, or agreement (e.g. "potvrďte do 17:00"), that IS a SCHEDULE action — sending the calendar invite IS the confirmation. Do NOT put "confirm the deal" into a TODO. The SCHEDULE action with urgency 10 is how the user confirms. The TODO (if any) is for PREPARATION tasks the user must do separately (gather documents, get approvals, verify facts).
 

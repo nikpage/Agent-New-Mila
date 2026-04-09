@@ -1,4 +1,4 @@
-import { proposeAction } from '@/lib/ai/gemini'
+import { proposeAction, extractCPRequest, type ProposedAction, type EnrichedMessageData } from '@/lib/ai/gemini'
 import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt, formatEnrichedForPrompt } from '@/lib/ai/context'
 import {
@@ -47,6 +47,91 @@ export async function validateMeetingLocation(
   // Geocode couldn't resolve — keep raw text but ask user to confirm
   console.log(`[Planning] Geocode failed for "${raw}" — keeping raw text`)
   return { location: raw, needsConfirmation: true }
+}
+
+/**
+ * Post-AI overrides: use enrichment data as ground truth to catch AI errors.
+ * The enrichment step runs a focused extraction on the latest message and is more
+ * reliable for factual fields than the multi-task proposeAction prompt.
+ */
+function applyEnrichmentOverrides(
+  proposals: ProposedAction[],
+  enriched: EnrichedMessageData | null
+): ProposedAction[] {
+  if (!enriched) return proposals
+
+  for (const p of proposals) {
+    // --- Urgency clamp from enrichment classification ---
+    if (enriched.urgency) {
+      if (enriched.urgency.classification === 'HARD DEADLINE' && p.urgency < 7) {
+        console.log(`[Planning] Urgency override: ${p.urgency} → 7 (enrichment: HARD DEADLINE "${enriched.urgency.quote}")`)
+        p.urgency = 7
+      }
+      if (enriched.urgency.classification === 'SOFT REFERENCE' && p.urgency > 6) {
+        console.log(`[Planning] Urgency override: ${p.urgency} → 5 (enrichment: SOFT REFERENCE "${enriched.urgency.quote}")`)
+        p.urgency = 5
+      }
+    }
+
+    // --- Address validation for SCHEDULE actions ---
+    if (p.actionType === 'SCHEDULE' && p.suggestedLocation && enriched.addresses?.length) {
+      const aiLoc = p.suggestedLocation.toLowerCase()
+      const matchesAny = enriched.addresses.some(addr => {
+        const a = addr.toLowerCase()
+        return aiLoc.includes(a) || a.includes(aiLoc)
+      })
+      if (!matchesAny) {
+        // AI produced an address not found in enriched data — likely hallucinated or from signature
+        console.log(`[Planning] Address override: "${p.suggestedLocation}" not in enriched addresses [${enriched.addresses.join('; ')}]`)
+        p.suggestedLocation = enriched.addresses[0]
+        p.locationConfidence = 'low'
+      }
+    }
+  }
+
+  return proposals
+}
+
+/**
+ * Deterministic action type corrections based on enrichment data.
+ * When enrichment clearly extracted a meeting time + type, ensure SCHEDULE exists.
+ * When TODO has confirmation-like intent alongside SCHEDULE, drop the TODO.
+ */
+function applyActionTypeCorrections(
+  proposals: ProposedAction[],
+  enriched: EnrichedMessageData | null
+): ProposedAction[] {
+  if (!enriched) return proposals
+
+  // If enrichment found proposed meeting times AND a meeting type, ensure SCHEDULE exists
+  if (enriched.proposedTimes?.length && enriched.meetingType) {
+    const hasSchedule = proposals.some(p => p.actionType === 'SCHEDULE')
+    if (!hasSchedule) {
+      const replyIdx = proposals.findIndex(p => p.actionType === 'REPLY')
+      if (replyIdx !== -1) {
+        console.log(`[Planning] Action type override: REPLY → SCHEDULE (enrichment found meeting time + type "${enriched.meetingType}")`)
+        proposals[replyIdx] = { ...proposals[replyIdx], actionType: 'SCHEDULE' as ProposedAction['actionType'] }
+        if (!proposals[replyIdx].meetingType) {
+          proposals[replyIdx].meetingType = 'address'
+        }
+      }
+    }
+  }
+
+  // Drop TODO with confirmation/reply intent when SCHEDULE already exists
+  const hasSchedule = proposals.some(p => p.actionType === 'SCHEDULE')
+  if (hasSchedule) {
+    const confirmPattern = /\b(potvrdit|potvrďte|confirm|odpovědět|odpovězte|reagovat|reply)\b/i
+    return proposals.filter(p => {
+      if (p.actionType === 'TODO' && p.intent_cs && confirmPattern.test(p.intent_cs)) {
+        console.log(`[Planning] Dropping TODO with confirmation intent — SCHEDULE handles it`)
+        return false
+      }
+      return true
+    })
+  }
+
+  return proposals
 }
 
 export async function generateActionProposal(
@@ -120,8 +205,29 @@ export async function generateActionProposal(
       console.log(`[Planning:DEBUG] Journal entries: ${milaCtx.journal.length} (${milaCtx.journal.filter(j => j.type === 'belief').length} beliefs)`)
     }
 
+    // Pre-extract CP's current request from the latest inbound message.
+    // This focused extraction runs before proposeAction so the planning AI
+    // gets a locked input for what the CP is asking — prevents intent drift.
+    const latestInboundMsg = [...recentMessages].reverse().find(m => m.direction === 'inbound')
+    let cpRequest = ''
+    if (latestInboundMsg) {
+      const inboundText = latestInboundMsg.cleaned_text || latestInboundMsg.raw_text || ''
+      if (inboundText.length > 20) {
+        try {
+          cpRequest = await extractCPRequest(inboundText, cp.name, settings)
+          console.log(`[Planning] CP request extracted: ${cpRequest.slice(0, 150)}`)
+        } catch (e) {
+          console.warn('[Planning] CP request extraction failed, continuing without:', e)
+        }
+      }
+    }
+
     // Get AI recommendations — one or more actions per conversation
-    const proposals = await proposeAction(summary, formattedMessages, cp.name, settings, channel, journalText, enrichedText)
+    let proposals = await proposeAction(summary, formattedMessages, cp.name, settings, channel, journalText, enrichedText, cpRequest)
+
+    // Post-AI corrections: use enrichment data as ground truth to override AI errors
+    proposals = applyEnrichmentOverrides(proposals, milaCtx.enriched)
+    proposals = applyActionTypeCorrections(proposals, milaCtx.enriched)
 
     const latestInbound = await getLatestInboundFromCP(conversation.user_id, cp.id)
     const daysIgnored = computeDaysIgnored(latestInbound?.occurred_at, conversation.created_at)
