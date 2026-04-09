@@ -288,11 +288,14 @@ export async function generateActionProposal(
     // Get existing pending actions so we can compare urgency before skipping
     const existingPending = await getPendingActionsByType(conversation.id)
 
-    // Skip SCHEDULE if conversation already has an active event (hold or confirmed)
+    // Skip SCHEDULE if conversation already has a future confirmed event (not holds)
+    // Holds are supersedable — they're tentative. Only confirmed events block.
     const hasEvent = await hasActiveEventForConversation(conversation.user_id, conversation.id)
-    if (hasEvent) {
+    if (hasEvent && !existingPending.has('SCHEDULE')) {
+      // Active event but no pending SCHEDULE action — event is confirmed, block new SCHEDULE
       existingPending.set('SCHEDULE', { id: '__event__', urgency: Infinity, intent_cs: null })
     }
+    // If both an event AND a pending SCHEDULE exist, the pending action's urgency governs dedup (not Infinity)
 
     // Dedup with urgency comparison:
     // - No existing pending of this type → keep proposal
@@ -307,7 +310,7 @@ export async function generateActionProposal(
       const existing = existingPending.get(p.actionType)
       if (!existing) return true
 
-      // Active calendar event — never override
+      // Confirmed event with no pending action — block
       if (existing.id === '__event__') return false
 
       // New proposal has higher urgency → will update existing action

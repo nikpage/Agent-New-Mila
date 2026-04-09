@@ -358,6 +358,7 @@ export async function hasActiveEventForConversation(
     .eq('conversation_id', conversationId)
     .neq('status', 'cancelled')
     .neq('event_type', 'travel_buffer')
+    .gte('end_time', new Date().toISOString())
 
   if (error) {
     console.error(`Failed to check events for conversation ${conversationId}:`, error)
