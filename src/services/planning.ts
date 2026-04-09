@@ -129,8 +129,18 @@ export function selectMeetingLocation(
   if (/\b(online|video|meet|zoom|teams)\b/i.test(mt)) return { location: null, confidence: null }
 
   if (!enriched.addresses?.length) return { location: null, confidence: null }
-  if (enriched.addresses.length === 1) return { location: enriched.addresses[0], confidence: 'high' }
-  return { location: enriched.addresses[0], confidence: 'low' } // first = likely from body, not signature
+
+  // Strip "Adresa:" prefix if enrichment leaked it into JSON values
+  const cleaned = enriched.addresses.map(a => a.replace(/^Adresa:\s*/i, '').trim()).filter(Boolean)
+  if (!cleaned.length) return { location: null, confidence: null }
+
+  // Prefer addresses with a street number over bare names
+  const withNumber = cleaned.filter(a => /\d/.test(a))
+  if (withNumber.length === 1) return { location: withNumber[0], confidence: 'high' }
+  if (withNumber.length > 1) return { location: withNumber[0], confidence: 'low' }
+
+  if (cleaned.length === 1) return { location: cleaned[0], confidence: 'high' }
+  return { location: cleaned[0], confidence: 'low' }
 }
 
 /**

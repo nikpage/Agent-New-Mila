@@ -73,7 +73,7 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
     primary: 'claude-haiku-4-5-20251001',
     fallback1: 'gemini-2.5-flash',
     fallback2: null,
-    thinkingBudget: 512,
+    thinkingBudget: 1024,
   },
 
   // Planning intent — generateIntent (content generation for decided action type)
