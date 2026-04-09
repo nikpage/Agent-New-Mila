@@ -162,7 +162,7 @@ Respond with ONLY valid JSON matching this exact schema. No markdown. No backtic
   "messageType": "string | null",
   "coreIntent": "string | null",
   "addresses": ["string"],
-  "proposedTimes": [{"original": "string", "interpreted": "string", "isoDate": "ISO 8601 datetime string or null"}],
+  "proposedTimes": [{"original": "exact quote", "interpreted": "human-readable", "isoDate": "YYYY-MM-DDTHH:mm:ss — ALWAYS compute from TODAY'S DATE above. Example: if today is ${isoDate} and message says 'zítra v 9:00', isoDate = '${new Date(now.getTime() + 86_400_000).toISOString().split('T')[0]}T09:00:00'. null ONLY if no date/time extractable."}],
   "meetingType": "string | null",
   "urgency": {"quote": "string", "classification": "HARD DEADLINE | SOFT REFERENCE"} | null,
   "dealStage": "string | null",
@@ -379,12 +379,15 @@ ACTION TYPES:
 3. TODO — something the user needs to do themselves that is NOT a message and NOT a meeting (gather documents, review internally, get approval, prepare paperwork).
 
 RULES:
-- SCHEDULE ABSORBS REPLY: When SCHEDULE exists, do NOT add REPLY. The calendar invite is the reply.
+- SCHEDULE ABSORBS REPLY: When SCHEDULE exists, do NOT add REPLY. The calendar invite IS the reply.
 - CONFIRMATION = SCHEDULE: "potvrďte obchod", "confirm by 5pm", etc. → SCHEDULE, never TODO.
 - Meeting times in enriched data → SCHEDULE must exist.
-- TODO is for preparation tasks SEPARATE from communication.
-- Return one OR multiple actions only when genuinely independent tasks exist.
-- Each action must address a different task. Never duplicate.
+- STRONGLY PREFER ONE ACTION. Return TWO actions ONLY when ALL of these are true:
+  a) One is SCHEDULE and the other is TODO
+  b) The TODO is a BLOCKING prerequisite — user CANNOT attend the meeting without it (e.g. "přineste list vlastnictví", "get bank approval", "obtain certificate")
+  c) The email EXPLICITLY states this requirement as something the user must bring/provide
+- "Prepare notes", "review contract", "confirm details", "prepare for discussion" are NOT separate TODOs — that is normal meeting prep implied by SCHEDULE itself.
+- When in doubt, return ONE action.
 - You MUST return at least one action.
 
 Respond with ONLY valid JSON array:
@@ -457,9 +460,9 @@ CRITICAL — FORMATTING:
 - Plain text only. No markdown. No ** bold **. No # headers.
 
 ACTION-SPECIFIC RULES:
-- TODO: intent_cs MUST be a numbered checklist (e.g. "1. Zajistěte list vlastnictví\\n2. Vyžádejte bezdlužnost SVJ"). NOT a paragraph.
-- REPLY: intent_cs describes the email content Mila will prepare. missingInfo = questions CP asked.
-- SCHEDULE: intent_cs describes what Mila will schedule + what the invite will say. missingInfo = questions CP asked that need answering in the invite.
+- TODO: intent_cs is a numbered checklist. Each item is max 6 words: verb + object. Example: "1. Zajistit list vlastnictví\\n2. Ověřit bezdlužnost SVJ\\n3. Připravit plnou moc". NO addresses, dates, parenthetical details, or explanations in items. Max 4 items.
+- REPLY: intent_cs is ONE sentence (max 20 words) describing what Mila will write. NOT a numbered list. Example: "Potvrdí dostupnost bytu a navrhne termíny prohlídky."
+- SCHEDULE: intent_cs is ONE sentence (max 20 words) describing the meeting. NOT a numbered list. Example: "Naplánuje telefonát s Evou na zítra v 9:00 k doladění smlouvy."
 - Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up later".
 
 Do NOT assign urgency, suggestedLocation, or suggestedTime — those are computed separately.
