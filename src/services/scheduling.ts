@@ -961,6 +961,13 @@ export async function optimizeScheduleActions(
       )
     }
 
+    // For explicitly low-urgency actions (urgency 1 = "no rush"), prefer later slots.
+    // Don't cram a casual meeting into 9:35am when the CP said there's no hurry.
+    const actionUrgency = action.urgency ?? 2
+    if (actionUrgency <= 1 && candidateSlots.length > 1) {
+      candidateSlots = [...candidateSlots].reverse()
+    }
+
     // All candidateSlots are already GCal-free. Pick the first batch-available one.
     let scheduled = false
     for (const slot of candidateSlots) {
