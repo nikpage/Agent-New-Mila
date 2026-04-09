@@ -20,7 +20,7 @@
  *   --skip-inject     Skip email injection (re-run agent on existing mail)
  *   --skip-brief      Skip morning brief step
  *   --single-round    Only run Round 1 + interact, skip Round 2
- *   --cleanup-only    Delete previously injected test emails and exit
+ *   --cleanup-only    (removed — cleanup never worked reliably)
  *   --prod            Use production URL (https://mila.specialagents.pro)
  */
 
@@ -533,7 +533,6 @@ const HIGH_PRIORITY_EMAIL: TestEmail = {
 }
 
 const ALL_TEST_SENDERS = [...TEST_EMAILS, HIGH_PRIORITY_EMAIL]
-const TEST_CP_EMAILS = ALL_TEST_SENDERS.map(e => extractEmail(e.from))
 
 // ─── CP Response Profiles (adaptive, not canned) ────────────────────────────
 
@@ -1130,64 +1129,7 @@ async function runBrief(userId: string): Promise<void> {
   log('brief', `Brief sent successfully`)
 }
 
-// ─── Cleanup ────────────────────────────────────────────────────────────────
-
-async function cleanupTestEmails(userId: string, messageIds?: string[]): Promise<number> {
-  const gmail = await getGmailClient(userId)
-  const deletedIds = new Set<string>()
-
-  if (messageIds?.length) {
-    for (const id of messageIds) {
-      try {
-        await gmail.users.messages.delete({ userId: 'me', id })
-        deletedIds.add(id)
-      } catch {
-        // Message may already be gone
-      }
-    }
-    if (deletedIds.size > 0) {
-      log('cleanup', `Permanently deleted ${deletedIds.size} tracked test emails`)
-    }
-  }
-
-  const cpFromTo = TEST_CP_EMAILS.map(e => `from:${e} to:${e}`).join(' ')
-  const searchQueries = [
-    `${TEST_MARKER}`,
-    `{${cpFromTo}}`,
-  ]
-
-  for (const q of searchQueries) {
-    log('cleanup', `Searching Gmail with q="${q}" (includeSpamTrash=true)...`)
-    let pageToken: string | undefined
-    do {
-      const list = await gmail.users.messages.list({
-        userId: 'me',
-        q,
-        includeSpamTrash: true,
-        maxResults: 500,
-        ...(pageToken ? { pageToken } : {}),
-      })
-
-      const msgs = list.data.messages || []
-      log('cleanup', `  Found ${msgs.length} messages in this page`)
-
-      for (const msg of msgs) {
-        if (!msg.id || deletedIds.has(msg.id)) continue
-        try {
-          await gmail.users.messages.delete({ userId: 'me', id: msg.id })
-          deletedIds.add(msg.id)
-        } catch {
-          // Already deleted or gone
-        }
-      }
-
-      pageToken = list.data.nextPageToken ?? undefined
-    } while (pageToken)
-  }
-
-  log('cleanup', `Total: ${deletedIds.size} test emails permanently deleted`)
-  return deletedIds.size
-}
+// ─── Cleanup (removed — Gmail batch delete never worked reliably) ────────
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
@@ -1213,18 +1155,10 @@ async function main() {
     fail('preflight', 'NEXTAUTH_SECRET not set in .env.local (needed for action tokens)')
   }
 
-  if (flags.has('--cleanup-only')) {
-    await cleanupTestEmails(USER_ID)
-    log('done', 'Cleanup complete (run scripts/cleanup-test-calendar.ts to clean calendar events)')
-    return
-  }
-
-  const allGmailIds: string[] = []
   const allChecks: CheckResult[] = []
 
-  try {
-    // ═══════════════════════════════════════════════════════════════════════
-    // ROUND 1: Inject each email independently → agent → instant-notify
+  // ═══════════════════════════════════════════════════════════════════════
+  // ROUND 1: Inject each email independently → agent → instant-notify
     //
     // In production, emails arrive at different times. Each triggers its own
     // cron cycle: agent ingests → proposes actions → instant-notify schedules.
@@ -1248,19 +1182,8 @@ async function main() {
       console.log()
       console.log('─── Phase 0: Injecting Conversation History ────────────')
 
-      const evaHistoryIds = await injectHistoryThread(
-        USER_ID,
-        EVA_NEGOTIATION_HISTORY,
-        'eva-negotiation'
-      )
-      allGmailIds.push(...evaHistoryIds)
-
-      const novotnyHistoryIds = await injectHistoryThread(
-        USER_ID,
-        NOVOTNY_NEGOTIATION_HISTORY,
-        'novotny-negotiation'
-      )
-      allGmailIds.push(...novotnyHistoryIds)
+      await injectHistoryThread(USER_ID, EVA_NEGOTIATION_HISTORY, 'eva-negotiation')
+      await injectHistoryThread(USER_ID, NOVOTNY_NEGOTIATION_HISTORY, 'novotny-negotiation')
 
       // Run bulk ingestion to process history — ingest, enrich, thread, summarize.
       // NO action generation — history is context only, not new work.
@@ -1301,7 +1224,6 @@ async function main() {
         // Inject single email
         const [injectedEmail] = await injectEmails(USER_ID, [email])
         injected.push(injectedEmail)
-        allGmailIds.push(injectedEmail.gmailId)
 
         // Run agent — ingests this email, creates conversation + action
         const agentResult = await runAgent(USER_ID, emailLabel)
@@ -1428,8 +1350,7 @@ async function main() {
         console.log()
         console.log('─── Generating Tailored CP Responses ──────────────────')
 
-        const cpResponseIds = await injectTailoredCPResponses(USER_ID, injected, milaReplies)
-        allGmailIds.push(...cpResponseIds)
+        await injectTailoredCPResponses(USER_ID, injected, milaReplies)
 
         const r2 = await runAgent(USER_ID, 'R2')
 
@@ -1481,13 +1402,6 @@ async function main() {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Cleanup
-    // ═══════════════════════════════════════════════════════════════════════
-    console.log()
-    log('cleanup', 'Cleaning up test emails (calendar events preserved for inspection)...')
-    await cleanupTestEmails(USER_ID, allGmailIds.length > 0 ? allGmailIds : undefined)
-
-    // ═══════════════════════════════════════════════════════════════════════
     // Summary
     // ═══════════════════════════════════════════════════════════════════════
     console.log()
@@ -1510,12 +1424,6 @@ async function main() {
     console.log('═══════════════════════════════════════════════════════')
 
     if (!allPassed) process.exit(1)
-
-  } catch (error) {
-    log('cleanup', 'Cleaning up test emails after failure (calendar events preserved)...')
-    await cleanupTestEmails(USER_ID, allGmailIds.length > 0 ? allGmailIds : undefined).catch(() => {})
-    throw error
-  }
 }
 
 main().catch(err => {
