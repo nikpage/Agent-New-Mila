@@ -31,7 +31,9 @@ vi.mock('@/lib/ai/gemini', () => ({
   classifyEmail: vi.fn(),
   filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
-  proposeAction: vi.fn(),
+  decideActionType: vi.fn(),
+  generateIntent: vi.fn(),
+  extractCPRequest: vi.fn(),
   extractTopic: vi.fn(),
   analyzeConversation: vi.fn(),
   shouldJoinConversation: vi.fn(),
@@ -103,7 +105,7 @@ vi.mock('@/lib/google/maps', () => ({
 // ─── Static imports ─────────────────────────────────────────────────────────
 
 import { fetchUnreadEmails, fetchRecentEmails } from '@/lib/google/gmail'
-import { proposeAction, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/gemini'
+import { decideActionType, generateIntent, extractCPRequest, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/gemini'
 import { runAgentForUser } from './agent'
 
 // ─── Shared setup ──────────────────────────────────────────────────────────
@@ -123,11 +125,19 @@ beforeEach(() => {
     currentState: 'Active', nextSteps: ['Reply'], keyPoints: ['Key'],
     risks: [], confidence: 0.8, confidenceReason: 'Test', dealType: 'sale',
   } as never)
-  vi.mocked(proposeAction).mockResolvedValue([{
-    actionType: 'REPLY', rationale_cs: 'Test', intent_cs: 'Test intent',
-    missingInfo: [], dollarValue: 1000000, urgency: 5,
-    weight: 30, dealType: 'sale',
-  }] as never)
+  vi.mocked(decideActionType).mockResolvedValue([{
+    actionType: 'REPLY',
+    rationale_cs: 'Test',
+  }])
+  vi.mocked(generateIntent).mockResolvedValue({
+    intent_cs: 'Test intent',
+    missingInfo: [],
+    dollarValue: 1000000,
+    dealType: 'sale',
+    weight: 30,
+    cpPhone: null,
+  })
+  vi.mocked(extractCPRequest).mockResolvedValue('')
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
