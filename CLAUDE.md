@@ -105,7 +105,7 @@ src/
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
 │   ├── supabase/               # Client + types (types.ts = 949 lines)
 │   ├── ai/
-│   │   ├── gemini.ts           # AI functions (preFilter, classify, enrichMessage, proposeAction, etc.)
+│   │   ├── gemini.ts           # AI functions (preFilter, classify, enrichMessage, decideActionType, generateIntent, etc.)
 │   │   ├── mila-voice.ts       # Centralized Mila text generation — ALL user-facing + CP-facing text
 │   │   ├── runner.ts           # runAITask() with 2-model fallback + 429/503 retry
 │   │   ├── context.ts          # AI context utilities
@@ -203,7 +203,7 @@ Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
 Step 3: Get all unassigned timeline entries (deal_timeline WHERE conversation_id IS NULL)
 Step 4: Assign timeline entries to conversations (external thread ID → CP count → density heuristic → AI)
 Step 4.5: Force-rebuild conversation summaries for all updated conversations (threading only rebuilds after 5 new messages, but planning needs fresh summaries even after 1)
-Step 5: Generate action proposals for updated conversations — uses timeline context (includes call logs, voice notes). One conversation may produce multiple actions (e.g. REPLY + SCHEDULE + TODO). Channel-aware, adaptive context, batched ×5.
+Step 5: Generate action proposals via decomposed pipeline: extractCPRequest → decideActionType → computeUrgencyFromEnrichment (deterministic) → selectMeetingLocation (deterministic) → generateIntent. One conversation may produce multiple actions (e.g. SCHEDULE + TODO). Channel-aware, batched ×5.
 Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10). Ignores conversations where current_date < snooze_until. Skips service CPs entirely. Uses deal_timeline for activity detection (phone calls reset the counter).
 Step 7: Reflection — run runReflection() to extract journal observations from conversations.
 ```
@@ -385,8 +385,8 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 | enrichment | Per-message key info extraction | gemini-2.5-flash → claude-haiku-4-5-20251001 |
 | threading | extractTopic, shouldJoinConversation | gemini-2.5-flash → claude-sonnet-4-6 |
 | analysis | analyzeConversation | gemini-2.5-flash → claude-sonnet-4-6 |
-| planning | proposeAction (type, rationale, intent) | claude-haiku-4-5-20251001 → gemini-2.5-flash |
-| urgency_review | Post-planning urgency validation | gemini-2.5-flash → claude-haiku-4-5-20251001 |
+| planning_type | decideActionType (narrow action classification) | claude-haiku-4-5-20251001 → gemini-2.5-flash |
+| planning_intent | generateIntent (content + metadata for decided type) | claude-haiku-4-5-20251001 → gemini-2.5-flash |
 | drafting | All mila-voice.ts functions (generateFinalDraft, generateBriefIntro, generateSchedulingIntent, generateLeadFollowUpIntent, generateUrgentIntro, generateBriefHeadline, regenerateDraftWithInstruction) | claude-sonnet-4-6 → gemini-2.5-flash |
 | reflection | Journal observation extraction | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
 | draft_edit | Gap fill + spell/grammar on save | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
@@ -404,9 +404,9 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 
 **Prompt language convention**: ALL prompts are written in English. This is consistent across all 9 AI functions because LLMs reason better in English. Output language is controlled via a strict directive injected at the end of the prompt: `CRITICAL: You must generate the final text for the user in ${settings.ai_language}. Do not output English.` This ensures high-quality reasoning with localized output (Czech by default).
 
-**Business context injection**: `getAISystemPrompt()` from `src/config/client.ts` is prepended to `proposeAction()`, `generateFinalDraft()`, and `analyzeConversation()` prompts. Includes: user name/role, company, specialization, market, deal range, office_location, home_location, lawyer_notary, high-value signals, language, tone. This lets the AI resolve contextual references like "your office" or "at the notary" to actual addresses. `enrichMessage()` receives the same location data in its business context line. All AI functions that process user content now receive UserSettings for consistent language and domain interpretation. Channel context (email vs WhatsApp) adjusts tone. High-value signal detection (`containsHighValueSignals`) flags conversations in the `proposeAction` prompt. AI estimates dollarValue and weight (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies dealType.
+**Business context injection**: `getAISystemPrompt()` from `src/config/client.ts` is prepended to `generateIntent()`, `generateFinalDraft()`, and `analyzeConversation()` prompts. Includes: user name/role, company, specialization, market, deal range, office_location, home_location, lawyer_notary, high-value signals, language, tone. This lets the AI resolve contextual references like "your office" or "at the notary" to actual addresses. `enrichMessage()` receives the same location data in its business context line. All AI functions that process user content now receive UserSettings for consistent language and domain interpretation. Channel context (email vs WhatsApp) adjusts tone. `generateIntent` estimates dollarValue and weight (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies dealType.
 
-**Address inference for SCHEDULE**: `suggestedLocation` in proposeAction is the MEETING VENUE — where people will physically meet, NOT the property/deal subject. Priority: (1) explicit venue stated in conversation, (2) CP's office from signature if meeting is at their place, (3) user's office if CP says "at your office", (4) property address only for viewings/inspections. Email signature addresses are the sender's company address — never confuse with meeting venue. "Office space in Karlin" does NOT mean the meeting is in Karlin. Both proposeAction and generateFinalDraft prompts enforce this rule.
+**Address inference for SCHEDULE**: `suggestedLocation` is determined by the deterministic `selectMeetingLocation()` function in `planning.ts` — reads directly from enrichment's `addresses[]`. No AI involved, no hallucination. The MEETING VENUE is where people will physically meet, NOT the property/deal subject. Priority: (1) single address = high confidence, (2) multiple addresses = first address at low confidence. Phone/online meetings get no location. `generateFinalDraft` prompts still enforce venue rules for CP-facing drafts.
 
 **UDĚLAT button disable logic**: Only SCHEDULE actions can have UDĚLAT disabled (when location is missing or unfilled fields exist without a hold event). REPLY, TODO, and all other action types are NEVER blocked — their UDĚLAT is always active. This logic lives in `ActionCard.tsx`, `action-card-template.ts`, and `morning-brief.ts` (both brief and instant-notify HTML renderers).
 
@@ -751,7 +751,7 @@ All services use batched Promise.allSettled for fault isolation — one item's f
 |---------|---------|-------------|-------|
 | dispatch/route.ts | Gmail history.list per user, QStash fan-out | 100 (check), 1/sec (publish) | Pages at 1000 users; staggered agent run delivery |
 | agent.ts | Steps 2/2.1/2.5 in parallel | 3 | Inbound, outbound, calendar are independent |
-| planning.ts | Conversations batched | 5 | Each involves an AI call (proposeAction) |
+| planning.ts | Conversations batched | 5 | Each involves AI calls (decideActionType + generateIntent per action) |
 | ingestion.ts | Emails batched (inbound + outbound) | 5 | classifyEmail AI call is the bottleneck |
 | lead-tracking.ts | Conversations batched | 10 | Independent conversations, DB-heavy |
 | threading.ts | Pre-assigned lookups + CP fetches | All | Promise.all for reads; serial for assignToConversation (prevents duplicate creation) |

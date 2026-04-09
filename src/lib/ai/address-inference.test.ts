@@ -1,9 +1,10 @@
 /**
- * Pinning tests: Address inference rules in AI prompts
+ * Pinning tests: Address inference rules in AI prompts and planning code
  *
  * RULE: suggestedLocation is the MEETING VENUE, not the property/deal subject.
  * Email signature addresses are the sender's company address, not the venue.
- * Both proposeAction and generateFinalDraft prompts must enforce this.
+ * Address selection is now deterministic in planning.ts (selectMeetingLocation),
+ * and generateFinalDraft prompts still enforce venue rules for drafts.
  *
  * DO NOT modify expected values — if these fail, the address logic has regressed.
  */
@@ -17,8 +18,8 @@ function readSrc(relativePath: string): string {
   return fs.readFileSync(path.join(SRC, relativePath), 'utf-8')
 }
 
-describe('Address inference — gemini.ts (proposeAction prompt)', () => {
-  const code = readSrc('src/lib/ai/gemini.ts')
+describe('Address inference — planning.ts (selectMeetingLocation + computeUrgencyFromEnrichment)', () => {
+  const code = readSrc('src/services/planning.ts')
 
   it('suggestedLocation is defined as meeting venue, not property', () => {
     expect(code).toContain('WHERE PEOPLE WILL MEET')
@@ -38,12 +39,12 @@ describe('Address inference — gemini.ts (proposeAction prompt)', () => {
   })
 
   it('has the Karlin anti-example', () => {
-    // This specific anti-example prevents the AI from confusing deal subject with venue
+    // This specific anti-example prevents confusing deal subject with venue
     expect(code).toContain('office space in Karlin')
     expect(code).toContain('does NOT mean the meeting is in Karlin')
   })
 
-  it('ADDRESS INFERENCE rule exists in the rules section', () => {
+  it('ADDRESS INFERENCE rule exists in the planning module', () => {
     expect(code).toContain('ADDRESS INFERENCE for SCHEDULE')
     expect(code).toContain('MEETING VENUE')
   })

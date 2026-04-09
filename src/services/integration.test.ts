@@ -38,7 +38,9 @@ vi.mock('@/lib/ai/gemini', () => ({
   classifyEmail: vi.fn(),
   filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
-  proposeAction: vi.fn(),
+  decideActionType: vi.fn(),
+  generateIntent: vi.fn(),
+  extractCPRequest: vi.fn(),
   extractTopic: vi.fn(),
   analyzeConversation: vi.fn(),
   shouldJoinConversation: vi.fn(),
@@ -103,7 +105,7 @@ vi.mock('@/lib/google/maps', () => ({
 
 // ─── Static imports (vi.mock hoisted above these) ──────────────────────────
 
-import { proposeAction, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
+import { decideActionType, generateIntent, extractCPRequest, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
 import { generateBriefIntro, generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
 import { sendEmail, fetchUnreadEmails, fetchEmailsPaginated, getUserEmail } from '@/lib/google/gmail'
 import { generateActionToken, validateActionToken } from '@/lib/auth/tokens'
@@ -119,16 +121,19 @@ beforeEach(() => {
   }
 
   // Default AI mock returns
-  vi.mocked(proposeAction).mockResolvedValue([{
+  vi.mocked(decideActionType).mockResolvedValue([{
     actionType: 'REPLY',
     rationale_cs: 'Odpovědět na poptávku bytu',
+  }])
+  vi.mocked(generateIntent).mockResolvedValue({
     intent_cs: 'Nabídnout prohlídku bytu na Vinohradech',
     missingInfo: [],
     dollarValue: 8500000,
-    urgency: 7,
-    weight: 40,
     dealType: 'sale',
-  }] as never)
+    weight: 40,
+    cpPhone: null,
+  })
+  vi.mocked(extractCPRequest).mockResolvedValue('')
   vi.mocked(generateBriefIntro).mockResolvedValue({
     greeting: 'Dobré ráno',
     subject: 'Mila: akční návrhy',
@@ -167,10 +172,18 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
 
     const cp = await createTestCP({ name: 'Jan Novák', primary_identifier: 'jan@example.com', role: 'buyer' })
     const conv = await createTestConversation()
+    // enriched_text must be valid JSON with urgency data so computeUrgencyFromEnrichment
+    // produces the expected urgency (7) — HARD DEADLINE + "tento týden"
+    const urgencyEnriched = JSON.stringify({
+      parties: ['Jan Novák'],
+      subject: 'byt Vinohrady 3+kk',
+      coreIntent: 'Zájem o prohlídku',
+      urgency: { quote: 'tento týden', classification: 'HARD DEADLINE' },
+    })
     const now = Date.now()
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id, direction: 'inbound', timestamp: new Date(now - 3000).toISOString(), occurred_at: new Date(now - 3000).toISOString() })
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id, direction: 'outbound', timestamp: new Date(now - 2000).toISOString(), occurred_at: new Date(now - 2000).toISOString() })
-    await createTestMessage({ cp_id: cp.id, conversation_id: conv.id, direction: 'inbound', timestamp: new Date(now - 1000).toISOString(), occurred_at: new Date(now - 1000).toISOString() })
+    await createTestMessage({ cp_id: cp.id, conversation_id: conv.id, direction: 'inbound', timestamp: new Date(now - 1000).toISOString(), occurred_at: new Date(now - 1000).toISOString(), enriched_text: urgencyEnriched })
 
     const actions = await generateActionProposal(conv)
 
@@ -219,7 +232,7 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     const actions = await generateActionProposal(conv)
 
     expect(actions).toHaveLength(0)
-    expect(proposeAction).not.toHaveBeenCalled()
+    expect(decideActionType).not.toHaveBeenCalled()
 
     // No action created in DB
     const dbActions = await getTestActions()
@@ -233,12 +246,18 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     const conv = await createTestConversation()
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id })
 
-    vi.mocked(proposeAction).mockResolvedValue([{
-      actionType: 'REPLY', rationale_cs: 'Test', intent_cs: 'Test',
-      missingInfo: [], dollarValue: 1000, urgency: 5,
-      weight: 7,
+    vi.mocked(decideActionType).mockResolvedValue([{
+      actionType: 'REPLY',
+      rationale_cs: 'Test',
+    }])
+    vi.mocked(generateIntent).mockResolvedValue({
+      intent_cs: 'Test',
+      missingInfo: [],
+      dollarValue: 1000,
       dealType: null,
-    }] as never)
+      weight: 7,
+      cpPhone: null,
+    })
 
     const actions = await generateActionProposal(conv)
 

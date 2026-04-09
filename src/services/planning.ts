@@ -1,4 +1,4 @@
-import { proposeAction, extractCPRequest, type ProposedAction, type EnrichedMessageData } from '@/lib/ai/gemini'
+import { decideActionType, generateIntent, extractCPRequest, type ProposedAction, type EnrichedMessageData } from '@/lib/ai/gemini'
 import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt, formatEnrichedForPrompt } from '@/lib/ai/context'
 import {
@@ -49,90 +49,100 @@ export async function validateMeetingLocation(
   return { location: raw, needsConfirmation: true }
 }
 
+// ─── Deterministic functions (no AI) ────────────────────────────────────────
+
 /**
- * Post-AI overrides: use enrichment data as ground truth to catch AI errors.
- * The enrichment step runs a focused extraction on the latest message and is more
- * reliable for factual fields than the multi-task proposeAction prompt.
+ * Compute urgency from enrichment data — no AI, pure date math.
+ *
+ * ADDRESS INFERENCE for SCHEDULE actions uses selectMeetingLocation below.
+ * suggestedLocation is the MEETING VENUE — WHERE PEOPLE WILL MEET,
+ * NOT the property or deal subject unless the meeting is literally at the property.
+ * Priority: (1) explicit venue stated in conversation, (2) CP's office from
+ * signature if meeting is at their place, (3) user's office if CP says
+ * "at your office", (4) property address ONLY if the meeting is literally at the property (e.g. a viewing/inspection).
+ * Addresses in email signatures are the SENDER's company address — do not
+ * confuse with meeting venue. A conversation about "office space in Karlin"
+ * does NOT mean the meeting is in Karlin.
+ * ADDRESS INFERENCE for SCHEDULE: selectMeetingLocation reads from enrichment's
+ * addresses[] — the MEETING VENUE, not the property subject.
  */
-function applyEnrichmentOverrides(
-  proposals: ProposedAction[],
-  enriched: EnrichedMessageData | null
-): ProposedAction[] {
-  if (!enriched) return proposals
+export function computeUrgencyFromEnrichment(
+  enriched: EnrichedMessageData | null,
+  today: Date
+): { deadlineUrgency: number; meetingPrepUrgency: number } {
+  let deadlineUrgency = 2 // default: no deadline language
+  let meetingPrepUrgency = 2 // default: no meeting
 
-  for (const p of proposals) {
-    // --- Urgency clamp from enrichment classification ---
-    if (enriched.urgency) {
-      if (enriched.urgency.classification === 'HARD DEADLINE' && p.urgency < 7) {
-        console.log(`[Planning] Urgency override: ${p.urgency} → 7 (enrichment: HARD DEADLINE "${enriched.urgency.quote}")`)
-        p.urgency = 7
+  if (enriched?.urgency) {
+    const quote = (enriched.urgency.quote || '').toLowerCase()
+    if (enriched.urgency.classification === 'HARD DEADLINE') {
+      if (/\b(dnes|today|do \d{1,2}[:.]\d{2})\b/.test(quote)) {
+        deadlineUrgency = 10
+      } else if (/\b(zítra|tomorrow)\b/.test(quote)) {
+        deadlineUrgency = 9
+      } else if (/\b(pondělí|úterý|střed[auy]|čtvrtek|pátek|sobota|neděle|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(quote)) {
+        deadlineUrgency = 8
+      } else if (/\b(tento týden|this week)\b/i.test(quote)) {
+        deadlineUrgency = 7
+      } else if (/\b(jinak|propadá|otherwise|expire|forfeit)\b/i.test(quote)) {
+        deadlineUrgency = 7
+      } else {
+        deadlineUrgency = 7 // HARD DEADLINE, no recognizable pattern → assume this week
       }
-      if (enriched.urgency.classification === 'SOFT REFERENCE' && p.urgency > 6) {
-        console.log(`[Planning] Urgency override: ${p.urgency} → 5 (enrichment: SOFT REFERENCE "${enriched.urgency.quote}")`)
-        p.urgency = 5
-      }
-    }
-
-    // --- Address validation for SCHEDULE actions ---
-    if (p.actionType === 'SCHEDULE' && p.suggestedLocation && enriched.addresses?.length) {
-      const aiLoc = p.suggestedLocation.toLowerCase()
-      const matchesAny = enriched.addresses.some(addr => {
-        const a = addr.toLowerCase()
-        return aiLoc.includes(a) || a.includes(aiLoc)
-      })
-      if (!matchesAny) {
-        // AI produced an address not found in enriched data — likely hallucinated or from signature
-        console.log(`[Planning] Address override: "${p.suggestedLocation}" not in enriched addresses [${enriched.addresses.join('; ')}]`)
-        p.suggestedLocation = enriched.addresses[0]
-        p.locationConfidence = 'low'
+    } else if (enriched.urgency.classification === 'SOFT REFERENCE') {
+      if (/\b(žádný spěch|no rush|není kam spěchat)\b/i.test(quote)) {
+        deadlineUrgency = 1
+      } else {
+        deadlineUrgency = 5
       }
     }
   }
 
-  return proposals
+  if (enriched?.proposedTimes?.[0]?.isoDate) {
+    try {
+      const meetingDate = new Date(enriched.proposedTimes[0].isoDate)
+      const daysUntil = Math.max(0, Math.floor((meetingDate.getTime() - today.getTime()) / 86_400_000))
+      if (daysUntil === 0) meetingPrepUrgency = 10
+      else if (daysUntil === 1) meetingPrepUrgency = 9
+      else if (daysUntil <= 3) meetingPrepUrgency = 8
+      else if (daysUntil <= 5) meetingPrepUrgency = 7
+      else meetingPrepUrgency = 5
+    } catch {
+      // parse failed — keep default
+    }
+  }
+
+  return { deadlineUrgency, meetingPrepUrgency }
 }
 
 /**
- * Deterministic action type corrections based on enrichment data.
- * When enrichment clearly extracted a meeting time + type, ensure SCHEDULE exists.
- * When TODO has confirmation-like intent alongside SCHEDULE, drop the TODO.
+ * Select meeting location from enrichment data — no AI, no hallucination.
+ * Reads directly from enrichment's addresses[].
  */
-function applyActionTypeCorrections(
-  proposals: ProposedAction[],
+export function selectMeetingLocation(
   enriched: EnrichedMessageData | null
-): ProposedAction[] {
-  if (!enriched) return proposals
+): { location: string | null; confidence: 'high' | 'low' | null } {
+  if (!enriched) return { location: null, confidence: null }
 
-  // If enrichment found proposed meeting times AND a meeting type, ensure SCHEDULE exists
-  if (enriched.proposedTimes?.length && enriched.meetingType) {
-    const hasSchedule = proposals.some(p => p.actionType === 'SCHEDULE')
-    if (!hasSchedule) {
-      const replyIdx = proposals.findIndex(p => p.actionType === 'REPLY')
-      if (replyIdx !== -1) {
-        console.log(`[Planning] Action type override: REPLY → SCHEDULE (enrichment found meeting time + type "${enriched.meetingType}")`)
-        proposals[replyIdx] = { ...proposals[replyIdx], actionType: 'SCHEDULE' as ProposedAction['actionType'] }
-        if (!proposals[replyIdx].meetingType) {
-          proposals[replyIdx].meetingType = 'address'
-        }
-      }
-    }
-  }
+  const mt = (enriched.meetingType || '').toLowerCase()
+  if (/\b(phone|call|telefon|zavolat|hovor)\b/i.test(mt)) return { location: null, confidence: null }
+  if (/\b(online|video|meet|zoom|teams)\b/i.test(mt)) return { location: null, confidence: null }
 
-  // Drop TODO with confirmation/reply intent when SCHEDULE already exists
-  const hasSchedule = proposals.some(p => p.actionType === 'SCHEDULE')
-  if (hasSchedule) {
-    const confirmPattern = /\b(potvrdit|potvrďte|confirm|odpovědět|odpovězte|reagovat|reply)\b/i
-    return proposals.filter(p => {
-      if (p.actionType === 'TODO' && p.intent_cs && confirmPattern.test(p.intent_cs)) {
-        console.log(`[Planning] Dropping TODO with confirmation intent — SCHEDULE handles it`)
-        return false
-      }
-      return true
-    })
-  }
-
-  return proposals
+  if (!enriched.addresses?.length) return { location: null, confidence: null }
+  if (enriched.addresses.length === 1) return { location: enriched.addresses[0], confidence: 'high' }
+  return { location: enriched.addresses[0], confidence: 'low' } // first = likely from body, not signature
 }
+
+/**
+ * Extract suggested meeting time from enrichment data — no AI.
+ */
+export function extractSuggestedTime(
+  enriched: EnrichedMessageData | null
+): string | null {
+  return enriched?.proposedTimes?.[0]?.isoDate || null
+}
+
+// ─── Main orchestration ─────────────────────────────────────────────────────
 
 export async function generateActionProposal(
   conversation: ConversationThread
@@ -143,8 +153,6 @@ export async function generateActionProposal(
   const timelineEntries = await getTimelineForConversation(conversation.id, 10)
 
   // Find CP from latest message — support both inbound AND outbound
-  // Outbound: user sent an email to CP (e.g., proposing a meeting)
-  // Inbound: CP sent an email to user
   const latestWithCP = recentMessages
     .filter(m => m.cp_id)
     .pop()
@@ -159,38 +167,7 @@ export async function generateActionProposal(
   const channelType = await getChannelType(lastMessage?.channel_id)
   const channel: 'email' | 'whatsapp' = channelType === 'whatsapp' ? 'whatsapp' : 'email'
 
-  // Prefer timeline entries (includes calls, voice notes) over raw messages.
-  // Fall back to messages for conversations created before timeline was active.
-  const allFormatted = timelineEntries.length > 0
-    ? timelineEntries.map(e => ({
-        direction: e.direction === 'in' ? 'inbound' : e.direction === 'out' ? 'outbound' : e.direction,
-        text: e.content || '',
-      }))
-    : recentMessages.map(m => ({
-        direction: m.direction || 'UNKNOWN',
-        text: m.enriched_text || m.cleaned_text || m.raw_text || '',
-      }))
-
-  const PLANNING_TARGET_CHARS = 2000
-  const PLANNING_MIN_MESSAGES = 3
-  let planCharCount = 0
-  let planMsgCount = 0
-  for (let i = allFormatted.length - 1; i >= 0; i--) {
-    planCharCount += allFormatted[i].text.length
-    planMsgCount++
-    if (planCharCount >= PLANNING_TARGET_CHARS && planMsgCount >= PLANNING_MIN_MESSAGES) break
-  }
-  planMsgCount = Math.max(planMsgCount, Math.min(PLANNING_MIN_MESSAGES, allFormatted.length))
-  const formattedMessages = allFormatted.slice(-planMsgCount)
-
   try {
-    // DEBUG: log what the planning AI will see
-    console.log(`[Planning:DEBUG] Context for ${cp.name || cp.primary_identifier}:`)
-    for (const m of formattedMessages) {
-      console.log(`[Planning:DEBUG]   [${m.direction}] ${m.text.slice(0, 200)}`)
-    }
-    console.log(`[Planning:DEBUG] Summary: ${JSON.stringify(summary)?.slice(0, 300)}`)
-
     // Get user settings for AI context
     const settings = await getUserSettings(conversation.user_id)
 
@@ -205,9 +182,7 @@ export async function generateActionProposal(
       console.log(`[Planning:DEBUG] Journal entries: ${milaCtx.journal.length} (${milaCtx.journal.filter(j => j.type === 'belief').length} beliefs)`)
     }
 
-    // Pre-extract CP's current request from the latest inbound message.
-    // This focused extraction runs before proposeAction so the planning AI
-    // gets a locked input for what the CP is asking — prevents intent drift.
+    // Step 3: Pre-extract CP's current request from the latest inbound message.
     const latestInboundMsg = [...recentMessages].reverse().find(m => m.direction === 'inbound')
     let cpRequest = ''
     if (latestInboundMsg) {
@@ -222,20 +197,79 @@ export async function generateActionProposal(
       }
     }
 
-    // Get AI recommendations — one or more actions per conversation
-    let proposals = await proposeAction(summary, formattedMessages, cp.name, settings, channel, journalText, enrichedText, cpRequest)
+    // Step 4: Decide action types (narrow AI call — classification only)
+    const decisions = await decideActionType(cpRequest, enrichedText, summary, cp.name, settings)
 
-    // Post-AI corrections: use enrichment data as ground truth to override AI errors
-    proposals = applyEnrichmentOverrides(proposals, milaCtx.enriched)
-    proposals = applyActionTypeCorrections(proposals, milaCtx.enriched)
+    // Step 5: SCHEDULE absorbs REPLY safety net
+    const hasScheduleDecision = decisions.some(d => d.actionType === 'SCHEDULE')
+    const filteredDecisions = hasScheduleDecision
+      ? decisions.filter(d => d.actionType !== 'REPLY')
+      : decisions
 
+    if (hasScheduleDecision && filteredDecisions.length < decisions.length) {
+      console.log(`[Planning] Filtered REPLY — SCHEDULE absorbs it`)
+    }
+
+    // Step 6: Compute urgency from enrichment (deterministic, no AI)
+    const { deadlineUrgency, meetingPrepUrgency } = computeUrgencyFromEnrichment(milaCtx.enriched, new Date())
+
+    // Step 7: For each decision, generate intent + assemble ProposedAction
+    const proposals: ProposedAction[] = []
+    for (const decision of filteredDecisions) {
+      // 7a: Compute urgency based on action type
+      let urgency: number
+      if (decision.actionType === 'SCHEDULE') {
+        urgency = Math.max(deadlineUrgency, meetingPrepUrgency)
+      } else if (decision.actionType === 'TODO' && hasScheduleDecision) {
+        urgency = Math.max(meetingPrepUrgency, deadlineUrgency - 1)
+      } else if (decision.actionType === 'REPLY') {
+        urgency = deadlineUrgency
+      } else {
+        // TODO standalone
+        urgency = deadlineUrgency
+      }
+
+      // 7b/7c: Location and time for SCHEDULE (deterministic, no AI)
+      let suggestedLocation: string | null = null
+      let locationConfidence: 'high' | 'low' | null = null
+      let suggestedTime: string | null = null
+      if (decision.actionType === 'SCHEDULE') {
+        const loc = selectMeetingLocation(milaCtx.enriched)
+        suggestedLocation = loc.location
+        locationConfidence = loc.confidence
+        suggestedTime = extractSuggestedTime(milaCtx.enriched)
+      }
+
+      // 7d: Generate intent (AI call — content generation)
+      const intent = await generateIntent(decision, cpRequest, enrichedText, summary, cp.name, settings, channel, journalText)
+
+      // 7e: Assemble ProposedAction
+      proposals.push({
+        actionType: decision.actionType,
+        rationale_cs: decision.rationale_cs,
+        intent_cs: intent.intent_cs,
+        missingInfo: intent.missingInfo,
+        urgency,
+        dollarValue: intent.dollarValue,
+        weight: intent.weight,
+        immovable: intent.immovable,
+        dealType: intent.dealType,
+        suggestedLocation,
+        locationConfidence,
+        suggestedTime,
+        meetingType: intent.meetingType,
+        cpPhone: intent.cpPhone,
+      })
+    }
+
+    // Step 8: Dedup with existing pending actions
     const latestInbound = await getLatestInboundFromCP(conversation.user_id, cp.id)
     const daysIgnored = computeDaysIgnored(latestInbound?.occurred_at, conversation.created_at)
     const offerMultiplier = selectOfferMultiplier(
       cp.role, settings.offer_multiplier_seller, settings.offer_multiplier_buyer
     )
     const isHighValue = containsHighValueSignals(
-      formattedMessages.map(m => m.text).join(' '),
+      recentMessages.map(m => m.enriched_text || m.cleaned_text || m.raw_text || '').join(' '),
       settings
     )
 
@@ -276,29 +310,6 @@ export async function generateActionProposal(
       return false
     })
 
-    // SCHEDULE absorbs REPLY: when both exist, merge REPLY content into SCHEDULE
-    // The calendar invite IS the reply — there should never be a separate REPLY alongside SCHEDULE
-    const hasSchedule = dedupedProposals.some(p => p.actionType === 'SCHEDULE')
-    const replyIndex = dedupedProposals.findIndex(p => p.actionType === 'REPLY')
-    if (hasSchedule && replyIndex !== -1) {
-      const scheduleProposal = dedupedProposals.find(p => p.actionType === 'SCHEDULE')!
-      const replyProposal = dedupedProposals[replyIndex]
-      // Merge REPLY's missingInfo into SCHEDULE (CP questions to answer in the invite)
-      if (replyProposal.missingInfo?.length) {
-        scheduleProposal.missingInfo = [
-          ...(scheduleProposal.missingInfo || []),
-          ...replyProposal.missingInfo,
-        ]
-      }
-      // Append REPLY intent to SCHEDULE intent if it adds new info
-      if (replyProposal.intent_cs && !scheduleProposal.intent_cs?.includes(replyProposal.intent_cs)) {
-        scheduleProposal.intent_cs = `${scheduleProposal.intent_cs} ${replyProposal.intent_cs}`
-      }
-      // Remove the REPLY
-      dedupedProposals.splice(replyIndex, 1)
-      console.log(`[Planning] Merged REPLY into SCHEDULE — calendar invite is the reply`)
-    }
-
     for (const proposal of dedupedProposals) {
       // Validate and write deal_type onto conversation thread if AI classified it
       const dealType = validateDealType(proposal.dealType)
@@ -306,10 +317,7 @@ export async function generateActionProposal(
         await updateConversation(conversation.id, { deal_type: dealType })
       }
 
-      // SCHEDULE actions: store AI's scheduling context for the batch optimizer.
-      // Planning decides WHAT (this conversation needs a meeting).
-      // The optimizer decides WHEN (assigns slots in one batch pass at brief time).
-      // No holds created here — prevents race conditions from parallel planning.
+      // SCHEDULE actions: store scheduling context for the batch optimizer.
       let schedulingPayload: Record<string, unknown> = {}
       if (proposal.actionType === 'SCHEDULE') {
         const proposedMeetingType = proposal.meetingType || 'address'
@@ -330,7 +338,6 @@ export async function generateActionProposal(
         }
 
         // Validate location via geocode if we have one
-        // Extract region code from timezone (e.g. Europe/Prague → cz) for geocoding bias
         const tzRegionMap: Record<string, string> = {
           'Europe/Prague': 'cz', 'Europe/Bratislava': 'sk', 'Europe/Berlin': 'de',
           'Europe/Vienna': 'at', 'Europe/Warsaw': 'pl', 'Europe/London': 'gb',
@@ -345,19 +352,14 @@ export async function generateActionProposal(
         }
 
         // Address confidence handling:
-        // - AI said 'low' confidence → flag for user verification even if geocode succeeded
+        // - Code said 'low' confidence → flag for user verification even if geocode succeeded
         // - No location at all → add missing_info asking user for the address
-        const aiLocationConfidence = proposal.locationConfidence || null
-        if (aiLocationConfidence === 'low' && meetingLocation) {
-          // Geocode may have succeeded but the AI wasn't sure this is the right place.
-          // Flag as partial so user sees the verification prompt in EditForm.
+        if (proposal.locationConfidence === 'low' && meetingLocation) {
           locationPartial = true
         }
 
         // Only ask for address if this is an in-person meeting
         if (!isRemoteMeeting && !meetingLocation) {
-          // No location found at all — inject a missing_info field asking the user.
-          // The 'adresa' keyword in the label is what EditForm uses to render it as a location field.
           const hasAddressField = proposal.missingInfo?.some(f => f.label.toLowerCase().includes('adresa'))
           if (!hasAddressField) {
             proposal.missingInfo = [
@@ -371,7 +373,7 @@ export async function generateActionProposal(
           suggestedTime: proposal.suggestedTime || null,
           suggestedLocation: meetingLocation || null,
           location_partial: locationPartial,
-          cp_availability: (proposal as Record<string, unknown>).cpAvailability as string || null,
+          cp_availability: null,
           duration: settings.default_meeting_duration,
           meeting_type: proposedMeetingType,
           is_online: proposedMeetingType === 'online',
@@ -448,9 +450,8 @@ export async function generateActionProposal(
 
 /**
  * Process conversations in parallel with controlled concurrency.
- * Each conversation involves an AI call (proposeAction) so we batch to
- * avoid overwhelming the Gemini rate limit while still being much faster
- * than fully serial processing.
+ * Each conversation involves AI calls so we batch to avoid overwhelming
+ * the rate limit while still being much faster than serial processing.
  */
 const PLANNING_CONCURRENCY = 5
 

@@ -11,8 +11,8 @@ export type AIStage =
   | 'enrichment'
   | 'threading'
   | 'analysis'
-  | 'planning'
-  | 'urgency_review'
+  | 'planning_type'
+  | 'planning_intent'
   | 'drafting'
   | 'reflection'
   | 'draft_edit'
@@ -68,20 +68,20 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
     fallback2: null,
   },
 
-  // Planning — proposeAction (thinking enabled for urgency/priority judgment)
-  planning: {
+  // Planning type — decideActionType (narrow: what action type is needed?)
+  planning_type: {
     primary: 'claude-haiku-4-5-20251001',
     fallback1: 'gemini-2.5-flash',
     fallback2: null,
-    thinkingBudget: 2048,
+    thinkingBudget: 512,
   },
 
-  // Urgency review — second-pass AI check on urgency claims (cheap, deterministic)
-  urgency_review: {
-    primary: 'gemini-2.5-flash',
-    fallback1: 'claude-haiku-4-5-20251001',
+  // Planning intent — generateIntent (content generation for decided action type)
+  planning_intent: {
+    primary: 'claude-haiku-4-5-20251001',
+    fallback1: 'gemini-2.5-flash',
     fallback2: null,
-    temperature: 0,
+    thinkingBudget: 1024,
   },
 
   // Drafting — generateFinalDraft, generateBriefHeadline
