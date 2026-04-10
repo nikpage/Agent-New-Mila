@@ -106,6 +106,7 @@ vi.mock('@/lib/google/maps', () => ({
 
 import { fetchUnreadEmails, fetchRecentEmails } from '@/lib/google/gmail'
 import { generateIntent, extractCPRequest, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/gemini'
+import { runAITask } from '@/lib/ai/runner'
 import { runAgentForUser } from './agent'
 
 // ─── Shared setup ──────────────────────────────────────────────────────────
@@ -125,7 +126,8 @@ beforeEach(() => {
     currentState: 'Active', nextSteps: ['Reply'], keyPoints: ['Key'],
     risks: [], confidence: 0.8, confidenceReason: 'Test', dealType: 'sale',
   } as never)
-  // Classification is deterministic (classifyFromEnrichment) — no AI mock needed
+  // classifyFromRawText uses runAITask — mock it to return REPLY (no scheduling signals)
+  vi.mocked(runAITask).mockResolvedValue('{"schedule": false, "todo": false}')
   vi.mocked(generateIntent).mockResolvedValue({
     intent_cs: 'Test intent',
     missingInfo: [],
