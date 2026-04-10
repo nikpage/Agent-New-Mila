@@ -938,6 +938,7 @@ export async function optimizeScheduleActions(
     const availableSlots = allSlots.filter(s => isSlotAvailable(s))
 
     if (availableSlots.length === 0) {
+      console.warn(`[optimizer] Action ${action.id} unscheduled — suggestedTime=${suggestedTime}, 0 free slots on search range`)
       result.unscheduled++
       continue
     }
@@ -991,6 +992,7 @@ export async function optimizeScheduleActions(
     }
 
     if (!scheduled) {
+      console.warn(`[optimizer] Action ${action.id} unscheduled — suggestedTime=${suggestedTime}, ${availableSlots.length} slots checked, all blockSlotForProposal failed`)
       result.unscheduled++
     }
   }
@@ -1128,6 +1130,7 @@ export async function scheduleSingleAction(
     }
   }
 
+  console.warn(`[optimizer] Single action ${action.id} unscheduled — suggestedTime=${suggestedTime}, ${candidateSlots.length} slots checked`)
   result.unscheduled++
   return result
 }

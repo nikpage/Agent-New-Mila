@@ -77,7 +77,7 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     // re-optimizes holds, respects buffers, deduplicates across meetings
     try {
       const optimizeResult = await optimizeScheduleActions(userId)
-      if (optimizeResult.optimized > 0 || optimizeResult.moveSuggestions.length > 0) {
+      if (optimizeResult.optimized > 0 || optimizeResult.unscheduled > 0 || optimizeResult.moveSuggestions.length > 0) {
         console.log(`[Brief] User ${user.email || userId}: optimizer — ${optimizeResult.optimized} optimized, ${optimizeResult.unscheduled} unscheduled, ${optimizeResult.moveSuggestions.length} move suggestions`)
       }
     } catch (optimizeError) {

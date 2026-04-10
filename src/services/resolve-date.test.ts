@@ -50,6 +50,26 @@ describe('resolveProposedDate', () => {
     expect(result!.confidence).toBe('inferred')
   })
 
+  it('"zítra" on Friday + eventContext "phone_call" → Monday', () => {
+    const result = resolveProposedDate(
+      makeProposed({ relativeRef: 'tomorrow', eventContext: 'phone_call' }),
+      FRIDAY, defaultSettings, null
+    )
+    expect(result).not.toBeNull()
+    expect(dateStr(result!.date)).toBe('2026-04-13') // Monday
+    expect(result!.confidence).toBe('inferred')
+  })
+
+  it('"zítra" on Friday + eventContext "online_meeting" → Monday', () => {
+    const result = resolveProposedDate(
+      makeProposed({ relativeRef: 'tomorrow', eventContext: 'online_meeting' }),
+      FRIDAY, defaultSettings, null
+    )
+    expect(result).not.toBeNull()
+    expect(dateStr(result!.date)).toBe('2026-04-13') // Monday
+    expect(result!.confidence).toBe('inferred')
+  })
+
   it('"zítra" on Friday + cpRole "notary" → Monday', () => {
     const result = resolveProposedDate(
       makeProposed({ relativeRef: 'tomorrow' }),
@@ -244,6 +264,14 @@ describe('shouldUseBusinessDays', () => {
 
   it('journal "jen pracovní dny" → business days', () => {
     expect(shouldUseBusinessDays('viewing', null, 'CP jen pracovní dny')).toBe(true)
+  })
+
+  it('phone_call → business days', () => {
+    expect(shouldUseBusinessDays('phone_call')).toBe(true)
+  })
+
+  it('online_meeting → business days', () => {
+    expect(shouldUseBusinessDays('online_meeting')).toBe(true)
   })
 
   it('no context, no role → default business days', () => {

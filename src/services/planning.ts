@@ -266,7 +266,7 @@ export function shouldUseBusinessDays(
 
   // --- Event context (third priority) ---
   const calendarDayContexts = ['viewing', 'showing', 'delivery']
-  const businessDayContexts = ['signing', 'notary', 'legal', 'office_meeting', 'deadline']
+  const businessDayContexts = ['signing', 'notary', 'legal', 'office_meeting', 'deadline', 'phone_call', 'online_meeting']
 
   if (eventContext && calendarDayContexts.includes(eventContext)) return false
   if (eventContext && businessDayContexts.includes(eventContext)) return true
