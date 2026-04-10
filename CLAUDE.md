@@ -203,7 +203,7 @@ Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
 Step 3: Get all unassigned timeline entries (deal_timeline WHERE conversation_id IS NULL)
 Step 4: Assign timeline entries to conversations (external thread ID → CP count → density heuristic → AI)
 Step 4.5: Force-rebuild conversation summaries for all updated conversations (threading only rebuilds after 5 new messages, but planning needs fresh summaries even after 1)
-Step 5: Generate action proposals via decomposed pipeline: extractCPRequest → decideActionType → computeUrgencyFromEnrichment (deterministic) → selectMeetingLocation (deterministic) → generateIntent. One conversation may produce multiple actions (e.g. SCHEDULE + TODO). Channel-aware, batched ×5.
+Step 5: Generate action proposals via decomposed pipeline: extractCPRequest → decideActionType → computeUrgencyFromEnrichment (deterministic) → selectMeetingLocation (deterministic) → generateIntent. Strongly prefers single actions; TODO alongside SCHEDULE only when email explicitly states a blocking prerequisite (documents to bring, approvals needed). Channel-aware, batched ×5.
 Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10). Ignores conversations where current_date < snooze_until. Skips service CPs entirely. Uses deal_timeline for activity detection (phone calls reset the counter).
 Step 7: Reflection — run runReflection() to extract journal observations from conversations.
 ```
@@ -212,6 +212,8 @@ Result type includes: emailsIngested, whatsappMessagesProcessed, calendarEventsS
 
 ### Action Deduplication
 One conversation should not produce duplicate action cards across pipeline runs. If an action was proposed in a previous brief and the agent hasn't acted on it, it carries forward — not duplicated. If new information changes the proposed action, the card updates.
+
+**Event-based dedup**: `hasActiveEventForConversation` only counts future events (past events don't block new SCHEDULEs). When both an active event AND a pending SCHEDULE action exist, the pending action's urgency governs dedup — holds are supersedable by higher-urgency proposals. Only confirmed events with no pending action block with Infinity.
 
 
 ### Execution & Agent Actions
@@ -385,8 +387,8 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 | enrichment | Per-message key info extraction | gemini-2.5-flash → claude-haiku-4-5-20251001 |
 | threading | extractTopic, shouldJoinConversation | gemini-2.5-flash → claude-sonnet-4-6 |
 | analysis | analyzeConversation | gemini-2.5-flash → claude-sonnet-4-6 |
-| planning_type | decideActionType (narrow action classification) | claude-haiku-4-5-20251001 → gemini-2.5-flash |
-| planning_intent | generateIntent (content + metadata for decided type) | claude-haiku-4-5-20251001 → gemini-2.5-flash |
+| planning_type | decideActionType (narrow action classification, thinkingBudget 1024) | claude-haiku-4-5-20251001 → gemini-2.5-flash |
+| planning_intent | generateIntent (content + metadata for decided type, thinkingBudget 1024) | claude-haiku-4-5-20251001 → gemini-2.5-flash |
 | drafting | All mila-voice.ts functions (generateFinalDraft, generateBriefIntro, generateSchedulingIntent, generateLeadFollowUpIntent, generateUrgentIntro, generateBriefHeadline, regenerateDraftWithInstruction) | claude-sonnet-4-6 → gemini-2.5-flash |
 | reflection | Journal observation extraction | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
 | draft_edit | Gap fill + spell/grammar on save | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
@@ -406,7 +408,9 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 
 **Business context injection**: `getAISystemPrompt()` from `src/config/client.ts` is prepended to `generateIntent()`, `generateFinalDraft()`, and `analyzeConversation()` prompts. Includes: user name/role, company, specialization, market, deal range, office_location, home_location, lawyer_notary, high-value signals, language, tone. This lets the AI resolve contextual references like "your office" or "at the notary" to actual addresses. `enrichMessage()` receives the same location data in its business context line. All AI functions that process user content now receive UserSettings for consistent language and domain interpretation. Channel context (email vs WhatsApp) adjusts tone. `generateIntent` estimates dollarValue and weight (0-100 immovability) in the user's configured currency with typical deal range as reference, and classifies dealType.
 
-**Address inference for SCHEDULE**: `suggestedLocation` is determined by the deterministic `selectMeetingLocation()` function in `planning.ts` — reads directly from enrichment's `addresses[]`. No AI involved, no hallucination. The MEETING VENUE is where people will physically meet, NOT the property/deal subject. Priority: (1) single address = high confidence, (2) multiple addresses = first address at low confidence. Phone/online meetings get no location. `generateFinalDraft` prompts still enforce venue rules for CP-facing drafts.
+**intent_cs formatting**: TODO actions use a numbered checklist (max 4 items, max 6 words each: verb + object). REPLY and SCHEDULE actions use a single sentence (max 20 words). No numbered lists for REPLY/SCHEDULE.
+
+**Address inference for SCHEDULE**: `suggestedLocation` is determined by the deterministic `selectMeetingLocation()` function in `planning.ts` — reads directly from enrichment's `addresses[]`. No AI involved, no hallucination. The MEETING VENUE is where people will physically meet, NOT the property/deal subject. Enrichment only extracts addresses with street names or building numbers — bare neighborhood/district names (Vinohrady, Smíchov, Karlín) are excluded. `selectMeetingLocation` strips any leaked "Adresa:" prefix and prefers addresses containing a number over bare names. Priority: (1) single numbered address = high confidence, (2) multiple numbered addresses = first at low confidence, (3) no numbered addresses = fallback to any address. Phone/online meetings get no location. `generateFinalDraft` prompts still enforce venue rules for CP-facing drafts.
 
 **UDĚLAT button disable logic**: Only SCHEDULE actions can have UDĚLAT disabled (when location is missing or unfilled fields exist without a hold event). REPLY, TODO, and all other action types are NEVER blocked — their UDĚLAT is always active. This logic lives in `ActionCard.tsx`, `action-card-template.ts`, and `morning-brief.ts` (both brief and instant-notify HTML renderers).
 
