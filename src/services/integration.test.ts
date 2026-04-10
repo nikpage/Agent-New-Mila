@@ -106,6 +106,7 @@ vi.mock('@/lib/google/maps', () => ({
 // ─── Static imports (vi.mock hoisted above these) ──────────────────────────
 
 import { generateIntent, extractCPRequest, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
+import { runAITask } from '@/lib/ai/runner'
 import { generateBriefIntro, generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
 import { sendEmail, fetchUnreadEmails, fetchEmailsPaginated, getUserEmail } from '@/lib/google/gmail'
 import { generateActionToken, validateActionToken } from '@/lib/auth/tokens'
@@ -119,6 +120,9 @@ beforeEach(() => {
   if (!process.env.NEXTAUTH_SECRET) {
     process.env.NEXTAUTH_SECRET = 'test-secret-at-least-32-characters-long-for-hmac'
   }
+
+  // classifyFromRawText uses runAITask — mock it to return REPLY (no scheduling signals)
+  vi.mocked(runAITask).mockResolvedValue('{"schedule": false, "todo": false}')
 
   // Default AI mock returns (decideActionType no longer called — classification is deterministic)
   vi.mocked(generateIntent).mockResolvedValue({
