@@ -82,7 +82,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 })
     }
 
-    await dismissAction(actionId)
+    await dismissAction(actionId, action.user_id)
 
     return NextResponse.json({ success: true })
   } catch (error) {

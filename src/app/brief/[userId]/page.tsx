@@ -87,7 +87,7 @@ async function loadBriefData(userId: string): Promise<BriefData> {
         )
         // Persist so next load is instant
         const existingPayload = (a.payload as Record<string, unknown>) || {}
-        await updateAction(a.id, { payload: { ...existingPayload, headline: hl.headline, story: hl.story } })
+        await updateAction(a.id, { payload: { ...existingPayload, headline: hl.headline, story: hl.story } }, userId)
         // Update in-place for this render
         a.headline = hl.headline
         a.story = hl.story

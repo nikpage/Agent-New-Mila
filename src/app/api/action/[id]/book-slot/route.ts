@@ -67,7 +67,7 @@ export async function POST(
         end,
         location: location || currentPayload.location,
       },
-    })
+    }, action.user_id)
 
     return NextResponse.json({
       success: true,

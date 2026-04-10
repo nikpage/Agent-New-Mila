@@ -40,7 +40,7 @@ export async function POST(
     await updateEvent(eventId, {
       start_time: startDate.toISOString(),
       end_time: endDate.toISOString(),
-    })
+    }, userId)
 
     // Update in Google Calendar if linked
     if (event.google_event_id) {

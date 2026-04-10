@@ -81,7 +81,7 @@ export async function POST(
         postponed_until: targetDate.toISOString(),
       },
       queued_for_brief: false,
-    })
+    }, action.user_id)
 
     return NextResponse.json({
       success: true,

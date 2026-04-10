@@ -109,13 +109,16 @@ export async function createEvent(event: EventInsert): Promise<Event> {
  */
 export async function updateEvent(
   eventId: string,
-  updates: Partial<Omit<Event, 'id' | 'user_id' | 'created_at'>>
+  updates: Partial<Omit<Event, 'id' | 'user_id' | 'created_at'>>,
+  userId?: string
 ): Promise<Event> {
   const supabase = getSupabaseAdmin()
-  const { data, error } = await supabase
+  let query = supabase
     .from('events')
     .update(updates)
     .eq('id', eventId)
+  if (userId) query = query.eq('user_id', userId)
+  const { data, error } = await query
     .select()
     .single()
 
@@ -129,12 +132,14 @@ export async function updateEvent(
 /**
  * Delete an event
  */
-export async function deleteEvent(eventId: string): Promise<void> {
+export async function deleteEvent(eventId: string, userId?: string): Promise<void> {
   const supabase = getSupabaseAdmin()
-  const { error } = await supabase
+  let query = supabase
     .from('events')
     .delete()
     .eq('id', eventId)
+  if (userId) query = query.eq('user_id', userId)
+  const { error } = await query
 
   if (error) {
     throw new Error(`Failed to delete event: ${error.message}`)
@@ -433,15 +438,15 @@ export async function getTravelBuffers(parentEventId: string): Promise<Event[]> 
 /**
  * Confirm a tentative event (change status from tentative to confirmed)
  */
-export async function confirmEvent(eventId: string): Promise<Event> {
-  return updateEvent(eventId, { status: 'confirmed' })
+export async function confirmEvent(eventId: string, userId?: string): Promise<Event> {
+  return updateEvent(eventId, { status: 'confirmed' }, userId)
 }
 
 /**
  * Cancel an event and clean up its travel buffers
  */
-export async function cancelEventWithCleanup(eventId: string): Promise<void> {
-  await updateEvent(eventId, { status: 'cancelled' })
+export async function cancelEventWithCleanup(eventId: string, userId?: string): Promise<void> {
+  await updateEvent(eventId, { status: 'cancelled' }, userId)
   await cleanupTravelBuffers(eventId)
 }
 
@@ -562,7 +567,7 @@ export async function rescheduleEvent(
   return updateEvent(eventId, {
     start_time: newStart.toISOString(),
     end_time: newEnd.toISOString(),
-  })
+  }, userId)
 }
 
 /**

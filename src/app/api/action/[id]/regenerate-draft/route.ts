@@ -64,7 +64,7 @@ export async function POST(
     )
 
     // Save the regenerated draft
-    await updateActionDraft(actionId, newDraft.subject, newDraft.body)
+    await updateActionDraft(actionId, newDraft.subject, newDraft.body, action.user_id)
 
     return NextResponse.json({
       subject: newDraft.subject,

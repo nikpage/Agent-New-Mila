@@ -32,7 +32,7 @@ export async function POST(
     await blacklistCP(action.cp_id)
 
     // Dismiss this action
-    await dismissAction(actionId)
+    await dismissAction(actionId, action.user_id)
 
     return NextResponse.json({ success: true })
 

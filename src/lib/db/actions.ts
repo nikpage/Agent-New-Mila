@@ -169,13 +169,16 @@ export async function createAction(action: ActionProposalInsert): Promise<Action
  */
 export async function updateAction(
   actionId: string,
-  updates: Partial<Omit<ActionProposal, 'id' | 'user_id' | 'created_at'>>
+  updates: Partial<Omit<ActionProposal, 'id' | 'user_id' | 'created_at'>>,
+  userId?: string
 ): Promise<ActionProposal> {
   const supabase = getSupabaseAdmin()
-  const { data, error } = await supabase
+  let query = supabase
     .from('action_proposals')
     .update(updates)
     .eq('id', actionId)
+  if (userId) query = query.eq('user_id', userId)
+  const { data, error } = await query
     .select()
     .single()
 
@@ -191,13 +194,16 @@ export async function updateAction(
  */
 export async function updateActionStatus(
   actionId: string,
-  status: ActionStatus
+  status: ActionStatus,
+  userId?: string
 ): Promise<void> {
   const supabase = getSupabaseAdmin()
-  const { error } = await supabase
+  let query = supabase
     .from('action_proposals')
     .update({ status, updated_at: new Date().toISOString() })
     .eq('id', actionId)
+  if (userId) query = query.eq('user_id', userId)
+  const { error } = await query
 
   if (error) {
     throw new Error(`Failed to update action status: ${error.message}`)
@@ -207,22 +213,22 @@ export async function updateActionStatus(
 /**
  * Mark action as approved and executed
  */
-export async function approveAction(actionId: string): Promise<void> {
-  await updateActionStatus(actionId, 'approved')
+export async function approveAction(actionId: string, userId?: string): Promise<void> {
+  await updateActionStatus(actionId, 'approved', userId)
 }
 
 /**
  * Mark action as completed
  */
-export async function completeAction(actionId: string): Promise<void> {
-  await updateActionStatus(actionId, 'completed')
+export async function completeAction(actionId: string, userId?: string): Promise<void> {
+  await updateActionStatus(actionId, 'completed', userId)
 }
 
 /**
  * Mark action as dismissed
  */
-export async function dismissAction(actionId: string): Promise<void> {
-  await updateActionStatus(actionId, 'dismissed')
+export async function dismissAction(actionId: string, userId?: string): Promise<void> {
+  await updateActionStatus(actionId, 'dismissed', userId)
 }
 
 /**
@@ -250,16 +256,19 @@ export async function dismissAllPendingActions(userId: string): Promise<number> 
 export async function updateActionDraft(
   actionId: string,
   subject: string,
-  body: string
+  body: string,
+  userId?: string
 ): Promise<void> {
   const supabase = getSupabaseAdmin()
-  const { error } = await supabase
+  let query = supabase
     .from('action_proposals')
     .update({
       draft_subject: subject,
       draft_body_text: body,
     })
     .eq('id', actionId)
+  if (userId) query = query.eq('user_id', userId)
+  const { error } = await query
 
   if (error) {
     throw new Error(`Failed to update action draft: ${error.message}`)

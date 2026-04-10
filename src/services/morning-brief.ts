@@ -228,11 +228,12 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       }
 
       const token = generateActionToken(action.id, userId)
-      const actionUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&view=details`
-      const editUrl = `${APP_BASE_URL}/action/${action.id}/edit?token=${token}`
-      const executeUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute&type=${action.action_type}`
-      const todoUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`
-      const blacklistUrl = `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`
+      const encodedToken = encodeURIComponent(token)
+      const actionUrl = `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&view=details`
+      const editUrl = `${APP_BASE_URL}/action/${action.id}/edit?token=${encodedToken}`
+      const executeUrl = `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=execute&type=${action.action_type}`
+      const todoUrl = `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=todo`
+      const blacklistUrl = `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=blacklist`
 
       // Conflict resolution URLs (only for SCHEDULE actions with conflicts)
       const actionPayload = action.payload as Record<string, unknown> | null
@@ -243,10 +244,10 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
       const firstUnresolvedIdx = hasConflicts
         ? (actionPayload!.conflicts as Record<string, unknown>[]).findIndex(c => !c.resolved)
         : 0
-      const resolveRescheduleUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=reschedule_existing&conflict_idx=${firstUnresolvedIdx}` : null
-      const resolveCancelUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=cancel_existing&conflict_idx=${firstUnresolvedIdx}` : null
-      const resolveMoveNewUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=move_new&conflict_idx=${firstUnresolvedIdx}` : null
-      const resolveKeepBothUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=keep_both&conflict_idx=${firstUnresolvedIdx}` : null
+      const resolveRescheduleUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=resolve_conflict&action=reschedule_existing&conflict_idx=${firstUnresolvedIdx}` : null
+      const resolveCancelUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=resolve_conflict&action=cancel_existing&conflict_idx=${firstUnresolvedIdx}` : null
+      const resolveMoveNewUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=resolve_conflict&action=move_new&conflict_idx=${firstUnresolvedIdx}` : null
+      const resolveKeepBothUrl = hasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=resolve_conflict&action=keep_both&conflict_idx=${firstUnresolvedIdx}` : null
 
       briefActions.push({
         action,
@@ -347,7 +348,7 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
         const existingPayload = (ba.action.payload as Record<string, unknown>) || {}
         return updateAction(ha.id, {
           payload: { ...existingPayload, headline: ha.headline, story: ha.story },
-        })
+        }, userId)
       })
     )
 
@@ -838,6 +839,7 @@ async function sendInstantNotificationForConversation(
       }
 
       const token = generateActionToken(action.id, userId)
+      const encodedToken = encodeURIComponent(token)
 
       // Conflict resolution URLs (only for SCHEDULE actions with conflicts)
       const instantPayload = action.payload as Record<string, unknown> | null
@@ -856,15 +858,15 @@ async function sendInstantNotificationForConversation(
         topic: conversation.topic,
         dealType: conversation.deal_type || null,
         summary: conversation.summary_json as ConversationSummary | null,
-        actionUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&view=details`,
-        editUrl: `${APP_BASE_URL}/action/${action.id}/edit?token=${token}`,
-        executeUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=execute&type=${action.action_type}`,
-        todoUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=todo`,
-        blacklistUrl: `${APP_BASE_URL}/action/${action.id}?token=${token}&do=blacklist`,
-        resolveRescheduleUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=reschedule_existing&conflict_idx=${instantFirstIdx}` : null,
-        resolveCancelUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=cancel_existing&conflict_idx=${instantFirstIdx}` : null,
-        resolveMoveNewUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=move_new&conflict_idx=${instantFirstIdx}` : null,
-        resolveKeepBothUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${token}&do=resolve_conflict&action=keep_both&conflict_idx=${instantFirstIdx}` : null,
+        actionUrl: `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&view=details`,
+        editUrl: `${APP_BASE_URL}/action/${action.id}/edit?token=${encodedToken}`,
+        executeUrl: `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=execute&type=${action.action_type}`,
+        todoUrl: `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=todo`,
+        blacklistUrl: `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=blacklist`,
+        resolveRescheduleUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=resolve_conflict&action=reschedule_existing&conflict_idx=${instantFirstIdx}` : null,
+        resolveCancelUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=resolve_conflict&action=cancel_existing&conflict_idx=${instantFirstIdx}` : null,
+        resolveMoveNewUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=resolve_conflict&action=move_new&conflict_idx=${instantFirstIdx}` : null,
+        resolveKeepBothUrl: instantHasConflicts ? `${APP_BASE_URL}/action/${action.id}?token=${encodedToken}&do=resolve_conflict&action=keep_both&conflict_idx=${instantFirstIdx}` : null,
       })
     }
 
@@ -960,7 +962,7 @@ async function sendInstantNotificationForConversation(
         const existingPayload = (ba.action.payload as Record<string, unknown>) || {}
         return updateAction(ha.id, {
           payload: { ...existingPayload, headline: ha.headline, story: ha.story },
-        })
+        }, ba.action.user_id)
       })
     )
 

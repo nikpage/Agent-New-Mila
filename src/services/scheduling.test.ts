@@ -390,7 +390,7 @@ describe('Scheduling — Hold Events', () => {
     await confirmSlot('user-1', 'event-1', 'novak@test.com')
 
     // Spec: "Approved → hold becomes confirmed event, invite sent to CP"
-    expect(mockConfirmEvent).toHaveBeenCalledWith('event-1')
+    expect(mockConfirmEvent).toHaveBeenCalledWith('event-1', 'user-1')
     expect(mockConfirmCalendarEvent).toHaveBeenCalledWith(
       'user-1',
       'gcal-1',
@@ -412,7 +412,7 @@ describe('Scheduling — Hold Events', () => {
     await rejectSlot('user-1', 'event-1')
 
     // Spec: "Rejected/edited → hold cleared"
-    expect(mockDeleteEvent).toHaveBeenCalledWith('event-1')
+    expect(mockDeleteEvent).toHaveBeenCalledWith('event-1', 'user-1')
     expect(mockDeleteCalendarEvent).toHaveBeenCalledWith('user-1', 'gcal-1', 'none')
   })
 
@@ -625,7 +625,7 @@ describe('Scheduling — Cleanup', () => {
   it('cleanupForCanceledEvent delegates to cancelEventWithCleanup', async () => {
     const { cleanupForCanceledEvent } = await import('./scheduling')
     await cleanupForCanceledEvent('user-1', 'event-1')
-    expect(mockCancelEventWithCleanup).toHaveBeenCalledWith('event-1')
+    expect(mockCancelEventWithCleanup).toHaveBeenCalledWith('event-1', 'user-1')
   })
 
   it('handleEventMoved cleans up old travel buffers and recalculates', async () => {
@@ -655,7 +655,7 @@ describe('Scheduling — Cleanup', () => {
     expect(mockUpdateEvent).toHaveBeenCalledWith('event-1', expect.objectContaining({
       start_time: expect.any(String),
       end_time: expect.any(String),
-    }))
+    }), 'user-1')
   })
 })
 

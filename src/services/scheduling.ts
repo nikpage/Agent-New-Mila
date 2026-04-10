@@ -350,10 +350,10 @@ export async function confirmSlot(
   description?: string,
   isOnline?: boolean
 ): Promise<{ event: Event; travelBuffer?: Event }> {
-  let confirmedEvent = await confirmEvent(confirmedEventId)
+  let confirmedEvent = await confirmEvent(confirmedEventId, userId)
 
   if (newTitle) {
-    confirmedEvent = await updateEvent(confirmedEventId, { title: newTitle })
+    confirmedEvent = await updateEvent(confirmedEventId, { title: newTitle }, userId)
   }
 
   // Google Meet conference data for online meetings
@@ -395,7 +395,7 @@ export async function confirmSlot(
         sendUpdates: 'all',
         conferenceData,
       })
-      confirmedEvent = await updateEvent(confirmedEventId, { google_event_id: gcalEvent.id })
+      confirmedEvent = await updateEvent(confirmedEventId, { google_event_id: gcalEvent.id }, userId)
     } catch (error) {
       console.error('Failed to create confirmed gcal event with attendee:', error)
     }
@@ -458,7 +458,7 @@ export async function rejectSlot(
   await cleanupTravelBuffers(eventId)
 
   // Delete hold from local DB
-  await deleteEvent(eventId)
+  await deleteEvent(eventId, userId)
 
   // Delete hold from Google Calendar
   if (event.google_event_id) {
@@ -600,7 +600,7 @@ export async function cleanupForCanceledEvent(
   userId: string,
   eventId: string
 ): Promise<void> {
-  await cancelEventWithCleanup(eventId)
+  await cancelEventWithCleanup(eventId, userId)
 }
 
 /**
@@ -629,7 +629,7 @@ export async function handleEventMoved(
   await updateEvent(eventId, {
     start_time: newStart.toISOString(),
     end_time: newEnd.toISOString(),
-  })
+  }, userId)
 
   // Recalculate travel buffer if location provided
   if (location) {
@@ -1296,7 +1296,7 @@ async function updateActionWithHold(
   await updateAction(action.id, {
     intent_cs: action.intent_cs || '',
     payload: holdPayload,
-  })
+  }, action.user_id)
 
   // Now try to rewrite intent_cs via mila-voice — optional beautification.
   // If this times out, the hold data and original intent are already persisted above.
@@ -1323,7 +1323,7 @@ async function updateActionWithHold(
     await updateAction(action.id, {
       intent_cs: intentCs,
       payload: holdPayload,
-    })
+    }, action.user_id)
   } catch (voiceError) {
     console.error('[optimizer] generateSchedulingIntent failed, fallback intent already persisted:', voiceError)
     // No action needed — original intent + holdPayload already written above

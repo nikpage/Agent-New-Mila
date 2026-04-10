@@ -28,7 +28,7 @@ export async function POST(
     }
 
     // Dismiss this action — user handles it themselves
-    await dismissAction(actionId)
+    await dismissAction(actionId, action.user_id)
 
     return NextResponse.json({ success: true })
 

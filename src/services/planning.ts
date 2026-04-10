@@ -407,7 +407,7 @@ export async function generateActionProposal(
       // Supersede: if this proposal replaces a lower-urgency pending action, dismiss the old one
       const superseded = existingPending.get(proposal.actionType)
       if (superseded && updatedActionIds.includes(superseded.id)) {
-        await dismissAction(superseded.id)
+        await dismissAction(superseded.id, conversation.user_id)
         console.log(`[Planning] Superseded ${proposal.actionType} (urgency ${superseded.urgency} → ${proposal.urgency}) for ${cp.name || cp.primary_identifier}`)
       }
 

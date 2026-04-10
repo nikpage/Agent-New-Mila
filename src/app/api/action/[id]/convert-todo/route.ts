@@ -42,7 +42,7 @@ export async function POST(
     // Only dismiss the action if this is a full conversion (no custom description).
     // Question-specific todos (with custom description) keep the parent action alive.
     if (!customDescription) {
-      await dismissAction(actionId)
+      await dismissAction(actionId, action.user_id)
     }
 
     return NextResponse.json({

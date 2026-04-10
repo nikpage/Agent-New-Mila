@@ -95,7 +95,7 @@ export async function POST(
             settings
           )
           const existingPayload = (a.payload as Record<string, unknown>) || {}
-          await updateAction(a.id, { payload: { ...existingPayload, headline: hl.headline, story: hl.story } })
+          await updateAction(a.id, { payload: { ...existingPayload, headline: hl.headline, story: hl.story } }, userId)
           ;(a as Record<string, unknown>).headline = hl.headline
           ;(a as Record<string, unknown>).story = hl.story
         })

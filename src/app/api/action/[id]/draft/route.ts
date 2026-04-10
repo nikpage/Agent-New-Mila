@@ -150,13 +150,13 @@ export async function PUT(
       return NextResponse.json({ success: true, command: 'cancel_all', dismissed })
     }
     if (notesLower && CANCEL_THIS_COMMANDS.includes(notesLower)) {
-      await dismissAction(actionId)
+      await dismissAction(actionId, action.user_id)
       return NextResponse.json({ success: true, command: 'cancel_this' })
     }
 
     // Update the draft if subject/body provided
     if (subject || draftBody) {
-      await updateActionDraft(actionId, subject || '', draftBody || '')
+      await updateActionDraft(actionId, subject || '', draftBody || '', action.user_id)
     }
 
     // Update missing_info with dynamic field values
@@ -169,7 +169,7 @@ export async function PUT(
 
       await updateAction(actionId, {
         missing_info: updatedMissingInfo
-      })
+      }, action.user_id)
 
       // Batch all payload updates into one write to avoid race conditions
       const locationField = missingInfo.find(f => f.label.toLowerCase().includes('adresa'))
@@ -228,7 +228,7 @@ export async function PUT(
         const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
         await updateAction(actionId, {
           payload: { ...freshPayload, ...payloadUpdates } as Record<string, unknown> & { [key: string]: string | number | boolean | null },
-        })
+        }, action.user_id)
       }
     } else {
       // No dynamicFields — still handle is_online and to
@@ -251,7 +251,7 @@ export async function PUT(
         const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
         await updateAction(actionId, {
           payload: { ...freshPayload, ...payloadUpdates } as Record<string, unknown> & { [key: string]: string | number | boolean | null },
-        })
+        }, action.user_id)
       }
     }
 
@@ -261,7 +261,7 @@ export async function PUT(
       const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
       await updateAction(actionId, {
         payload: { ...freshPayload, userNotes: notes },
-      })
+      }, action.user_id)
     }
 
     // Handle user edits for SCHEDULE actions — update intent_cs with hold info
@@ -287,7 +287,7 @@ export async function PUT(
       await updateAction(actionId, {
         intent_cs: updatedIntentCs,
         payload: { ...currentPayload, slotSelection: dynamicFields.slotSelection },
-      })
+      }, action.user_id)
     }
 
     // If notes provided, also update intent_cs to append the notes
@@ -295,7 +295,7 @@ export async function PUT(
       const currentIntentCs = action.intent_cs || action.rationale_cs || action.rationale
       await updateAction(actionId, {
         intent_cs: `${currentIntentCs}\n\nPoznámka: ${notes}`,
-      })
+      }, action.user_id)
     }
 
     return NextResponse.json({ success: true })

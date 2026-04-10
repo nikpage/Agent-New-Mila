@@ -221,7 +221,7 @@ export async function POST(
     const {
       token, action: resolutionAction, conflict_idx: conflictIdx = 0,
       edited_draft, selected_slot, new_duration, existing_duration,
-      force_into_slot, meeting_mode, location: meetingLocation, target_event,
+      force_into_slot, meeting_mode, location: meetingLocation,
     } = body as {
       token: string
       action: ResolutionAction
@@ -233,7 +233,6 @@ export async function POST(
       force_into_slot?: boolean
       meeting_mode?: 'address' | 'online' | 'phone'
       location?: string
-      target_event?: 'new' | 'existing'
     }
 
     if (!token) {
@@ -282,7 +281,7 @@ export async function POST(
       const freshAction = await getActionById(actionId)
       const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
       delete freshPayload.resolution_draft
-      await updateAction(actionId, { payload: freshPayload as unknown as Json })
+      await updateAction(actionId, { payload: freshPayload as unknown as Json }, userId)
       return NextResponse.json({ success: true, resolution: 'send_draft', emailSent: true })
     }
 
@@ -295,7 +294,7 @@ export async function POST(
       const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
       await updateAction(actionId, {
         payload: { ...freshPayload, conflicts: updatedConflicts } as unknown as Json,
-      })
+      }, userId)
       return NextResponse.json({ success: true, message: 'Conflict already resolved', resolved: true })
     }
 
@@ -308,7 +307,7 @@ export async function POST(
           endTime: newEnd,
         })
         const { updateEvent: updateDbEvent } = await import('@/lib/db/events')
-        await updateDbEvent(conflict.event_id, { end_time: newEnd.toISOString() })
+        await updateDbEvent(conflict.event_id, { end_time: newEnd.toISOString() }, userId)
       }
     }
     if (new_duration && new_duration > 0 && payload?.hold_event_id) {
@@ -320,13 +319,13 @@ export async function POST(
           endTime: newEnd,
         })
         const { updateEvent: updateDbEvent } = await import('@/lib/db/events')
-        await updateDbEvent(holdEvt.id, { end_time: newEnd.toISOString() })
+        await updateDbEvent(holdEvt.id, { end_time: newEnd.toISOString() }, userId)
         // Update the action payload with new end time
         const latestAction = await getActionById(actionId)
         const latestPayload = (latestAction?.payload as Record<string, unknown>) || {}
         await updateAction(actionId, {
           payload: { ...latestPayload, end: newEnd.toISOString() } as unknown as Json,
-        })
+        }, userId)
       }
     }
 
@@ -337,7 +336,7 @@ export async function POST(
       const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
       await updateAction(actionId, {
         payload: { ...freshPayload, conflicts: updatedConflicts } as unknown as Json,
-      })
+      }, userId)
 
       // Check if all conflicts are now resolved — if so, confirm the new event
       const allResolved = updatedConflicts.every((c: Record<string, unknown>) => c.resolved)
@@ -385,7 +384,7 @@ export async function POST(
           const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
           await updateAction(actionId, {
             payload: { ...freshPayload, resolution_draft: draftForReview } as unknown as Json,
-          })
+          }, userId)
         }
       }
 
@@ -403,7 +402,7 @@ export async function POST(
           console.error('[ResolveConflict] Failed to delete from GCal:', e)
         }
       }
-      await cancelEventWithCleanup(conflict.event_id)
+      await cancelEventWithCleanup(conflict.event_id, userId)
 
       // 2. Store draft for user to review + send via Odeslat
       let draftForReview: { to: string; subject: string; body: string } | null = null
@@ -429,7 +428,7 @@ export async function POST(
           const freshPayload = (freshAction?.payload as Record<string, unknown>) || {}
           await updateAction(actionId, {
             payload: { ...freshPayload, resolution_draft: draftForReview } as unknown as Json,
-          })
+          }, userId)
         }
       }
 
@@ -466,7 +465,7 @@ export async function POST(
         }
         // Delete hold from DB
         const { deleteEvent: deleteDbEvent } = await import('@/lib/db/events')
-        await deleteDbEvent(holdEventId)
+        await deleteDbEvent(holdEventId, userId)
       }
 
       // 2. Use user-selected slot or find one automatically
@@ -532,7 +531,7 @@ export async function POST(
           ...(effectiveLocation ? { location: effectiveLocation } : {}),
           ...(force_into_slot ? { forced_into_slot: true } : {}),
         } as unknown as Json,
-      })
+      }, userId)
 
       return NextResponse.json({
         success: true,
@@ -614,5 +613,5 @@ async function confirmNewEventAndComplete(
   }
 
   // Complete the action (conflicts stay marked resolved, not wiped — allows reopen)
-  await completeAction(actionId)
+  await completeAction(actionId, userId)
 }

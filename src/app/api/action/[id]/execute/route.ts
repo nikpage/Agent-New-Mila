@@ -81,7 +81,7 @@ export async function POST(
         draftBody = draft.body
 
         // Save the generated draft
-        await updateActionDraft(actionId, draftSubject, draftBody)
+        await updateActionDraft(actionId, draftSubject, draftBody, action.user_id)
       }
 
       if (!draftBody) {
@@ -119,7 +119,7 @@ export async function POST(
       }
 
       // Mark action as completed
-      await completeAction(actionId)
+      await completeAction(actionId, action.user_id)
 
       return NextResponse.json({ success: true, message: channel === 'whatsapp' ? 'WhatsApp message sent' : 'Email sent' })
     }
@@ -146,7 +146,7 @@ export async function POST(
           await declineInvitation(action.user_id, calendarEventId)
         }
 
-        await completeAction(actionId)
+        await completeAction(actionId, action.user_id)
         return NextResponse.json({ success: true, message: 'Invitation response sent' })
       }
 
@@ -219,7 +219,7 @@ export async function POST(
           meetingType === 'online' // only create Google Meet for online, not phone
         )
 
-        await completeAction(actionId)
+        await completeAction(actionId, action.user_id)
         return NextResponse.json({
           success: true,
           message: 'Meeting confirmed and invitation sent',
@@ -247,7 +247,7 @@ export async function POST(
           sendUpdates: 'all',
         })
 
-        await completeAction(actionId)
+        await completeAction(actionId, action.user_id)
         return NextResponse.json({
           success: true,
           message: 'Meeting created and invitation sent',
@@ -255,13 +255,13 @@ export async function POST(
       }
 
       // Default: just mark as completed
-      await completeAction(actionId)
+      await completeAction(actionId, action.user_id)
       return NextResponse.json({ success: true, message: 'Action completed' })
     }
 
     // TODO: user handles it themselves, just mark as completed
     if (action.action_type === 'TODO') {
-      await completeAction(actionId)
+      await completeAction(actionId, action.user_id)
       return NextResponse.json({ success: true, message: 'Todo marked as done' })
     }
 
@@ -274,7 +274,7 @@ export async function POST(
     }
 
     // For any other action types, just mark as completed
-    await completeAction(actionId)
+    await completeAction(actionId, action.user_id)
     return NextResponse.json({ success: true, message: 'Action completed' })
 
   } catch (error) {
