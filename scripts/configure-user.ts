@@ -5,7 +5,7 @@ import { readFileSync } from 'fs'
 import { getUserById, getUserSettings, updateUserSettings } from '../src/lib/db/users'
 import { DEFAULT_USER_SETTINGS } from '../src/lib/supabase/types'
 import type { UserSettings } from '../src/lib/supabase/types'
-import { createBriefSchedules, updateBriefSchedules } from '../src/lib/qstash/client'
+import { createBriefSchedules, updateBriefSchedules, createInstantNotifySchedule } from '../src/lib/qstash/client'
 
 const rl = createInterface({
   input: process.stdin,
@@ -287,6 +287,14 @@ async function main() {
       })
       console.log(`  Morning brief: ${morningTime} ${tz} (schedule: ${scheduleIds.morningScheduleId})`)
       console.log(`  Afternoon brief: ${afternoonTime} ${tz} (schedule: ${scheduleIds.afternoonScheduleId})`)
+
+      // Ensure the global instant-notify schedule exists (idempotent — QStash deduplicates by cron+destination)
+      try {
+        const instantId = await createInstantNotifySchedule()
+        console.log(`  Instant notify: every 5 min (schedule: ${instantId})`)
+      } catch (instantErr) {
+        console.warn('  ⚠ Instant notify schedule creation failed (may already exist):', instantErr)
+      }
     } catch (err) {
       console.error('\nFailed to set up QStash schedules:', err)
       console.error('You can set them up manually later or re-run this script.')
