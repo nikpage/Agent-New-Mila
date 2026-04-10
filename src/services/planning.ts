@@ -13,6 +13,7 @@ import { getCPById } from '@/lib/db/counterparties'
 import { getLatestInboundFromCP, getTimelineForConversation } from '@/lib/db/timeline'
 import { getUserSettings } from '@/lib/db/users'
 import { geocodeAddress } from '@/lib/google/maps'
+import { isWorkingDay, getNextWorkingDay } from '@/lib/holidays'
 import { containsHighValueSignals } from '@/config/client'
 import { selectOfferMultiplier, computeDaysIgnored } from '@/shared/scoring'
 import { getChannelType } from '@/lib/db/channels'
@@ -21,6 +22,7 @@ import type {
   ActionProposal,
   ConversationThread,
   ConversationSummary,
+  UserSettings,
 } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
 
@@ -68,7 +70,10 @@ export async function validateMeetingLocation(
  */
 export function computeUrgencyFromEnrichment(
   enriched: EnrichedMessageData | null,
-  today: Date
+  today: Date,
+  settings?: UserSettings | null,
+  cpRole?: string | null,
+  journalBeliefs?: string
 ): { deadlineUrgency: number; meetingPrepUrgency: number } {
   let deadlineUrgency = 2 // default: no deadline language
   let meetingPrepUrgency = 2 // default: no meeting
@@ -98,17 +103,15 @@ export function computeUrgencyFromEnrichment(
     }
   }
 
-  if (enriched?.proposedTimes?.[0]?.isoDate) {
-    try {
-      const meetingDate = new Date(enriched.proposedTimes[0].isoDate)
-      const daysUntil = Math.max(0, Math.floor((meetingDate.getTime() - today.getTime()) / 86_400_000))
+  if (enriched?.proposedTimes?.[0] && settings) {
+    const resolved = resolveProposedDate(enriched.proposedTimes[0], today, settings, cpRole, journalBeliefs)
+    if (resolved) {
+      const daysUntil = Math.max(0, Math.floor((resolved.date.getTime() - today.getTime()) / 86_400_000))
       if (daysUntil === 0) meetingPrepUrgency = 10
       else if (daysUntil === 1) meetingPrepUrgency = 9
       else if (daysUntil <= 3) meetingPrepUrgency = 8
       else if (daysUntil <= 5) meetingPrepUrgency = 7
       else meetingPrepUrgency = 5
-    } catch {
-      // parse failed — keep default
     }
   }
 
@@ -143,13 +146,179 @@ export function selectMeetingLocation(
   return { location: cleaned[0], confidence: 'low' }
 }
 
+// ─── Date resolution (no AI) ──────────────────────────────────────────────
+
+export interface ResolvedDate {
+  /** Start of the resolved day (00:00 in user's TZ) */
+  date: Date
+  /** Specific time if stated, null = "during business hours" */
+  time: string | null
+  /** How confident: 'exact' (specific date+time), 'day' (right day, no time), 'inferred' (business vs calendar day logic applied) */
+  confidence: 'exact' | 'day' | 'inferred'
+}
+
+/**
+ * Resolve a relative date reference to an actual calendar date.
+ *
+ * Resolution priority:
+ * 1. Journal beliefs about this CP (e.g. "always does Saturday viewings")
+ * 2. CP role (lawyer/notary → business days)
+ * 3. Event context from enrichment (viewing → calendar days, legal → business days)
+ * 4. Default: business days per user working_days setting
+ */
+export function resolveProposedDate(
+  proposed: NonNullable<EnrichedMessageData['proposedTimes']>[0],
+  today: Date,
+  settings: UserSettings,
+  cpRole?: string | null,
+  journalBeliefs?: string
+): ResolvedDate | null {
+
+  const workingDays = settings.working_days || [1, 2, 3, 4, 5]
+
+  // --- Explicit calendar date: trust it directly ---
+  if (proposed.relativeRef === 'specific_date' && proposed.specificDate) {
+    const d = new Date(proposed.specificDate + 'T00:00:00')
+    return { date: d, time: proposed.timeOfDay || null, confidence: proposed.timeOfDay ? 'exact' : 'day' }
+  }
+
+  // --- Named day of week: find the next occurrence (or today if it matches) ---
+  if (proposed.relativeRef === 'specific_day' && proposed.dayOfWeek) {
+    const targetDay = dayOfWeekToISO(proposed.dayOfWeek)
+    if (targetDay !== null) {
+      const d = nextOccurrenceOfDay(today, targetDay)
+      return { date: d, time: proposed.timeOfDay || null, confidence: proposed.timeOfDay ? 'exact' : 'day' }
+    }
+  }
+
+  // --- Relative references: "tomorrow", "today", etc ---
+  const useBusinessDays = shouldUseBusinessDays(proposed.eventContext, cpRole, journalBeliefs)
+
+  if (proposed.relativeRef === 'today') {
+    return { date: today, time: proposed.timeOfDay || null, confidence: proposed.timeOfDay ? 'exact' : 'day' }
+  }
+
+  if (proposed.relativeRef === 'tomorrow') {
+    const calendarTomorrow = addDays(today, 1)
+    if (useBusinessDays && !isWorkingDay(calendarTomorrow, workingDays)) {
+      return { date: getNextWorkingDay(today, workingDays), time: proposed.timeOfDay || null, confidence: 'inferred' }
+    }
+    return { date: calendarTomorrow, time: proposed.timeOfDay || null, confidence: proposed.timeOfDay ? 'exact' : 'day' }
+  }
+
+  if (proposed.relativeRef === 'day_after_tomorrow') {
+    const calendarDAT = addDays(today, 2)
+    if (useBusinessDays && !isWorkingDay(calendarDAT, workingDays)) {
+      return { date: getNextWorkingDay(addDays(today, 1), workingDays), time: proposed.timeOfDay || null, confidence: 'inferred' }
+    }
+    return { date: calendarDAT, time: proposed.timeOfDay || null, confidence: proposed.timeOfDay ? 'exact' : 'day' }
+  }
+
+  if (proposed.relativeRef === 'this_week') {
+    const nextWork = isWorkingDay(today, workingDays) ? today : getNextWorkingDay(today, workingDays)
+    return { date: nextWork, time: proposed.timeOfDay || null, confidence: 'inferred' }
+  }
+
+  if (proposed.relativeRef === 'next_week') {
+    const nextMonday = nextOccurrenceOfDay(today, 1)
+    const nextWork = isWorkingDay(nextMonday, workingDays) ? nextMonday : getNextWorkingDay(nextMonday, workingDays)
+    return { date: nextWork, time: proposed.timeOfDay || null, confidence: 'inferred' }
+  }
+
+  return null
+}
+
+/**
+ * Determine whether a "tomorrow"-type reference should snap to business days.
+ *
+ * Calendar days (weekends valid): viewings, showings, delivery
+ * Business days (skip weekends): legal, notary, signing, office meetings, deadlines
+ *
+ * Journal beliefs override everything — if Mila has learned this CP does
+ * Saturday viewings or never works Fridays, that knowledge wins.
+ */
+export function shouldUseBusinessDays(
+  eventContext?: string | null,
+  cpRole?: string | null,
+  journalBeliefs?: string
+): boolean {
+  // --- Journal beliefs override (highest priority) ---
+  if (journalBeliefs) {
+    const weekendMatch = journalBeliefs.search(/(?:\b(?:weekends?|saturdays?|sundays?)\b|(?:sobota|soboty|neděle|víkend[uy]?)(?=\s|$|[,.:;]))/i)
+    if (weekendMatch >= 0) {
+      const windowStart = Math.max(0, weekendMatch - 30)
+      const windowEnd = weekendMatch + 50
+      const window = journalBeliefs.slice(windowStart, windowEnd)
+      const weekendNegated = /(?:\b(?:never|not|no)\b|ne[- ]|nikdy)/i.test(window)
+      if (weekendNegated) return true   // CP avoids weekends → business days
+      return false                       // CP does weekends → calendar days
+    }
+
+    if (/(?:only weekdays|jen pracovní)/i.test(journalBeliefs)) {
+      return true
+    }
+  }
+
+  // --- CP role (second priority) ---
+  if (cpRole && ['lawyer', 'notary', 'appraiser', 'inspector'].includes(cpRole)) {
+    return true
+  }
+
+  // --- Event context (third priority) ---
+  const calendarDayContexts = ['viewing', 'showing', 'delivery']
+  const businessDayContexts = ['signing', 'notary', 'legal', 'office_meeting', 'deadline']
+
+  if (eventContext && calendarDayContexts.includes(eventContext)) return false
+  if (eventContext && businessDayContexts.includes(eventContext)) return true
+
+  // --- Default: business days ---
+  return true
+}
+
+function dayOfWeekToISO(day: string): number | null {
+  const map: Record<string, number> = {
+    monday: 1, tuesday: 2, wednesday: 3, thursday: 4,
+    friday: 5, saturday: 6, sunday: 7
+  }
+  return map[day.toLowerCase()] ?? null
+}
+
+function nextOccurrenceOfDay(from: Date, targetISODay: number): Date {
+  const d = new Date(from)
+  const currentISO = d.getDay() === 0 ? 7 : d.getDay()
+  let daysAhead = targetISODay - currentISO
+  if (daysAhead < 0) daysAhead += 7  // next occurrence; 0 = today (same day allowed)
+  d.setDate(d.getDate() + daysAhead)
+  return d
+}
+
+function addDays(date: Date, n: number): Date {
+  const d = new Date(date)
+  d.setDate(d.getDate() + n)
+  return d
+}
+
 /**
  * Extract suggested meeting time from enrichment data — no AI.
+ * Uses resolveProposedDate for context-aware date resolution.
  */
 export function extractSuggestedTime(
-  enriched: EnrichedMessageData | null
+  enriched: EnrichedMessageData | null,
+  settings: UserSettings,
+  cpRole?: string | null,
+  journalBeliefs?: string
 ): string | null {
-  return enriched?.proposedTimes?.[0]?.isoDate || null
+  if (!enriched?.proposedTimes?.[0]) return null
+  const resolved = resolveProposedDate(enriched.proposedTimes[0], new Date(), settings, cpRole, journalBeliefs)
+  if (!resolved) return null
+
+  if (resolved.time) {
+    const [hh, mm] = resolved.time.split(':')
+    const d = new Date(resolved.date)
+    d.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0)
+    return d.toISOString()
+  }
+  return resolved.date.toISOString()
 }
 
 // ─── Main orchestration ─────────────────────────────────────────────────────
@@ -221,7 +390,7 @@ export async function generateActionProposal(
     }
 
     // Step 6: Compute urgency from enrichment (deterministic, no AI)
-    const { deadlineUrgency, meetingPrepUrgency } = computeUrgencyFromEnrichment(milaCtx.enriched, new Date())
+    const { deadlineUrgency, meetingPrepUrgency } = computeUrgencyFromEnrichment(milaCtx.enriched, new Date(), settings, cp.role, journalText)
 
     // Step 7: For each decision, generate intent + assemble ProposedAction
     const proposals: ProposedAction[] = []
@@ -247,7 +416,7 @@ export async function generateActionProposal(
         const loc = selectMeetingLocation(milaCtx.enriched)
         suggestedLocation = loc.location
         locationConfidence = loc.confidence
-        suggestedTime = extractSuggestedTime(milaCtx.enriched)
+        suggestedTime = extractSuggestedTime(milaCtx.enriched, settings, cp.role, journalText)
       }
 
       // 7d: Generate intent (AI call — content generation)

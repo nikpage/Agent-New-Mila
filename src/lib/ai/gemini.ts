@@ -11,7 +11,15 @@ export interface EnrichedMessageData {
   messageType?: string | null
   coreIntent?: string | null
   addresses?: string[]
-  proposedTimes?: { original: string; interpreted: string; isoDate?: string }[]
+  proposedTimes?: {
+    original: string          // exact quote from message
+    interpreted: string       // human-readable interpretation
+    relativeRef?: string      // normalized: "today" | "tomorrow" | "day_after_tomorrow" | "this_week" | "next_week" | "specific_date" | "specific_day"
+    specificDate?: string     // YYYY-MM-DD only when the message contains an explicit calendar date (e.g. "15. března", "March 15"). null for relative refs
+    dayOfWeek?: string        // "monday"|"tuesday"|"wednesday"|"thursday"|"friday"|"saturday"|"sunday" — when a specific weekday is named
+    timeOfDay?: string        // "HH:mm" 24h format, null if no time stated
+    eventContext?: string     // "viewing"|"showing"|"signing"|"notary"|"legal"|"office_meeting"|"phone_call"|"online_meeting"|"deadline"|"delivery"|"other"
+  }[]
   meetingType?: string | null
   urgency?: { quote: string; classification: string } | null
   dealStage?: string | null
@@ -128,7 +136,7 @@ export async function enrichMessage(
   const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz })
   const isoDate = now.toISOString().split('T')[0]
 
-  const prompt = `${businessContext}TODAY'S DATE: ${todayStr} (${isoDate}). Use this to convert relative dates ("zítra", "příští týden", "v pátek") to absolute dates in the Navrhovaný čas extraction.
+  const prompt = `${businessContext}TODAY'S DATE: ${todayStr} (${isoDate}). Extract relative date references as-is — do NOT compute absolute dates. Just classify what kind of reference it is.
 
 Extract key information from this message the way a human assistant would read it. Only include what's actually present. Do not invent or guess. Leave out anything not clearly supported by the text. Interpret terms in context of the business domain above — do NOT translate domain-specific words literally.
 
@@ -162,7 +170,7 @@ Respond with ONLY valid JSON matching this exact schema. No markdown. No backtic
   "messageType": "string | null",
   "coreIntent": "string | null",
   "addresses": ["string"],
-  "proposedTimes": [{"original": "exact quote", "interpreted": "human-readable", "isoDate": "YYYY-MM-DDTHH:mm:ss — ALWAYS compute from TODAY'S DATE above. Example: if today is ${isoDate} and message says 'zítra v 9:00', isoDate = '${new Date(now.getTime() + 86_400_000).toISOString().split('T')[0]}T09:00:00'. null ONLY if no date/time extractable."}],
+  "proposedTimes": [{"original": "exact quote from message", "interpreted": "human-readable in Czech", "relativeRef": "today | tomorrow | day_after_tomorrow | this_week | next_week | specific_date | specific_day", "specificDate": "YYYY-MM-DD — ONLY when the message states an explicit calendar date like '15. března' or '2025-03-15'. null for relative references like 'zítra' or 'v pátek'.", "dayOfWeek": "monday|tuesday|...|sunday — when a named weekday is mentioned, e.g. 'v pátek' → 'friday'. null otherwise.", "timeOfDay": "HH:mm (24h) — e.g. 'v 9:00' → '09:00', 'at 2pm' → '14:00'. null if no time mentioned.", "eventContext": "viewing | showing | signing | notary | legal | office_meeting | phone_call | online_meeting | deadline | delivery | other"}],
   "meetingType": "string | null",
   "urgency": {"quote": "string", "classification": "HARD DEADLINE | SOFT REFERENCE"} | null,
   "dealStage": "string | null",
