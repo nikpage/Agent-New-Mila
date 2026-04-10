@@ -101,7 +101,7 @@ async function configureInteractive(existing: UserSettings): Promise<Partial<Use
   printSection('Meetings & Travel')
 
   settings.default_meeting_duration = await askNumber('Default meeting duration (minutes)', existing.default_meeting_duration)
-  settings.default_meeting_type = await askChoice('Default meeting type', ['online', 'in-person'] as const, existing.default_meeting_type as 'online' | 'in-person')
+  settings.default_meeting_type = await askChoice('Default meeting type', ['online', 'phone', 'office', 'walking'] as const, existing.default_meeting_type as 'online' | 'phone' | 'office' | 'walking')
   settings.meeting_buffer_minutes = await askNumber('Buffer between meetings (minutes)', existing.meeting_buffer_minutes)
   settings.travel_mode = await askChoice('Travel mode', ['driving', 'walking', 'transit', 'bicycling'] as const, existing.travel_mode)
   settings.home_location = await ask('Home address (for travel time calc)', existing.home_location || undefined)
