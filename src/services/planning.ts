@@ -3,6 +3,7 @@ import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt, formatEnrichedForPrompt } from '@/lib/ai/context'
 import {
   createAction,
+  updateAction,
   dismissAction,
   calculatePriorityScore,
   getPendingActionsByType,
@@ -476,6 +477,7 @@ export async function generateActionProposal(
     // - Existing pending has EQUAL or HIGHER urgency → skip
     const seenTypes = new Set<string>()
     const updatedActionIds: string[] = []
+    const refreshPairs: { existingId: string; proposal: ProposedAction }[] = []
     const dedupedProposals = proposals.filter(p => {
       if (seenTypes.has(p.actionType)) return false
       seenTypes.add(p.actionType)
@@ -492,7 +494,8 @@ export async function generateActionProposal(
         return true
       }
 
-      // Same or lower urgency — skip
+      // Same or lower urgency — don't create new, but queue intent refresh
+      refreshPairs.push({ existingId: existing.id, proposal: p })
       return false
     })
 
@@ -625,6 +628,31 @@ export async function generateActionProposal(
       })
 
       createdActions.push(action)
+    }
+
+    // Refresh existing actions whose conversations got new messages.
+    // The AI already generated updated intent — persist it so the brief reflects current state.
+    for (const { existingId, proposal } of refreshPairs) {
+      try {
+        await updateAction(existingId, {
+          intent_cs: proposal.intent_cs,
+          rationale_cs: proposal.rationale_cs,
+          urgency: proposal.urgency,
+          priority_score: calculatePriorityScore({
+            dollarValue: proposal.dollarValue,
+            urgency: proposal.urgency,
+            daysIgnored,
+            sellerMultiplier: offerMultiplier,
+            kcHighValue: settings.kc_high_value,
+            weight: proposal.immovable ? 100 : (proposal.weight || 0),
+          }),
+          dollar_value: proposal.dollarValue,
+          updated_at: new Date().toISOString(),
+        })
+        console.log(`[Planning] Refreshed ${proposal.actionType} for ${cp.name || cp.primary_identifier} — new intent from latest messages`)
+      } catch (err) {
+        console.error(`[Planning] Failed to refresh action ${existingId}:`, err)
+      }
     }
 
     return createdActions
