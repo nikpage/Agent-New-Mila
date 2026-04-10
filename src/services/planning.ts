@@ -377,7 +377,7 @@ export async function generateActionProposal(
     }
 
     // Step 4: Decide action types (narrow AI call — classification only)
-    const decisions = await decideActionType(cpRequest, enrichedText, summary, cp.name, settings)
+    const decisions = await decideActionType(cpRequest, enrichedText, summary, cp.name, settings, channel, journalText)
 
     // Step 5: SCHEDULE absorbs REPLY safety net
     const hasScheduleDecision = decisions.some(d => d.actionType === 'SCHEDULE')
@@ -420,7 +420,11 @@ export async function generateActionProposal(
       }
 
       // 7d: Generate intent (AI call — content generation)
-      const intent = await generateIntent(decision, cpRequest, enrichedText, summary, cp.name, settings, channel, journalText)
+      const recentMsgTexts = recentMessages.map(m => ({
+        direction: m.direction || 'inbound',
+        text: m.cleaned_text || m.raw_text || '',
+      })).filter(m => m.text.length > 0)
+      const intent = await generateIntent(decision, cpRequest, enrichedText, summary, cp.name, settings, channel, journalText, recentMsgTexts)
 
       // 7e: Assemble ProposedAction
       proposals.push({

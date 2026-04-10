@@ -358,12 +358,20 @@ export async function decideActionType(
   enrichedText: string,
   conversationSummary: ConversationSummary,
   cpName: string | null,
-  settings: UserSettings
+  settings: UserSettings,
+  channel: 'email' | 'whatsapp' = 'email',
+  journalText: string = ''
 ): Promise<ActionTypeDecision[]> {
   const lang = settings.ai_language || 'Czech'
   console.log(`[AI:decideActionType] Running stage 'planning_type' for ${cpName || 'unknown CP'}`)
 
+  const channelNote = channel === 'whatsapp'
+    ? 'CHANNEL: WhatsApp'
+    : 'CHANNEL: Email'
+
   const prompt = `You are Mila, a proactive executive assistant. Based on this conversation, decide what action type(s) are needed.
+
+${channelNote}
 
 CONVERSATION STATE:
 ${JSON.stringify(conversationSummary, null, 2)}
@@ -375,6 +383,7 @@ ${cpRequest || 'No specific request extracted.'}
 
 ENRICHED DATA FROM LATEST MESSAGE:
 ${enrichedText || '(none)'}
+${journalText ? `\nMILA'S NOTES (accumulated beliefs about this CP/deal):\n${journalText}` : ''}
 
 ACTION TYPES:
 1. REPLY — the user needs to send a message that is NOT related to any meeting or scheduling. Only use when there is NO meeting/viewing/appointment being discussed.
@@ -428,7 +437,8 @@ export async function generateIntent(
   cpName: string | null,
   settings: UserSettings,
   channel: 'email' | 'whatsapp' = 'email',
-  journalText: string = ''
+  journalText: string = '',
+  recentMessages: { direction: string; text: string }[] = []
 ): Promise<ActionIntentResult> {
   const lang = settings.ai_language || 'Czech'
   console.log(`[AI:generateIntent] Running stage 'planning_intent' for ${cpName || 'unknown CP'} (${decision.actionType})`)
@@ -438,11 +448,32 @@ export async function generateIntent(
     ? 'CHANNEL: WhatsApp — keep messages short, informal, no subject line needed.'
     : 'CHANNEL: Email — standard professional format.'
 
+  const now = new Date()
+  const tz = settings.timezone || 'Europe/Prague'
+  const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz })
+  const isoDate = now.toLocaleDateString('sv-SE', { timeZone: tz })
+  const timeStr = now.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', timeZone: tz })
+  const tomorrowDate = new Date(now.getTime() + 86400000).toISOString().split('T')[0]
+  const nextWeekDate = new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0]
+
+  const recentText = recentMessages.length > 0
+    ? recentMessages.map(m => `[${m.direction === 'outbound' ? 'outbound' : 'inbound'}]: ${m.text.slice(0, 500)}`).join('\n\n')
+    : ''
+
   const prompt = `${systemContext}
 
 ${channelNote}
 
+TODAY'S DATE: ${todayStr} (${isoDate}), current time: ${timeStr}, timezone: ${tz}
+Use this to resolve relative dates: "tomorrow" = ${tomorrowDate}, "next week" = week of ${nextWeekDate}.
+
 You are Mila, a proactive executive assistant. The action type has already been decided. Your job: generate the intent description and metadata for this action.
+
+ROLE IDENTIFICATION:
+- Messages marked [outbound] are sent BY YOUR BOSS (the email account owner, the user you work for).
+- Messages marked [inbound] are FROM THE COUNTERPARTY (${cpName || 'the other party'}).
+- NEVER confuse who is who. Your boss wrote the [outbound] messages. The counterparty wrote the [inbound] messages.
+- When describing actions, refer to your boss's actions as "vy" and the counterparty by name.
 
 ACTION TYPE (already decided — do NOT change): ${decision.actionType}
 RATIONALE: ${decision.rationale_cs}
@@ -454,6 +485,7 @@ ${cpRequest || 'No specific request extracted.'}
 
 CONVERSATION STATE:
 ${JSON.stringify(conversationSummary, null, 2)}
+${recentText ? `\nRECENT MESSAGES:\n${recentText}` : ''}
 
 ENRICHED DATA:
 ${enrichedText || '(none)'}
@@ -463,6 +495,7 @@ CRITICAL — VOICE AND PERSPECTIVE:
 - Address the user as "vy" (you). NEVER say "uživatel" (the user).
 - intent_cs describes what Mila HAS ALREADY DONE + what she WILL DO when user clicks UDĚLAT.
 - Be maximally specific: names, dates, amounts, locations from the conversation.
+- Base intent_cs on what the CP ACTUALLY SAID in RECENT MESSAGES, not on paraphrases.
 
 CRITICAL — FORMATTING:
 - Plain text only. No markdown. No ** bold **. No # headers.
@@ -472,6 +505,15 @@ ACTION-SPECIFIC RULES:
 - REPLY: intent_cs is ONE sentence (max 20 words) describing what Mila will write. NOT a numbered list. Example: "Potvrdí dostupnost bytu a navrhne termíny prohlídky."
 - SCHEDULE: intent_cs is ONE sentence (max 20 words) describing the meeting. NOT a numbered list. Example: "Naplánuje telefonát s Evou na zítra v 9:00 k doladění smlouvy."
 - Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up later".
+
+GOOD intent_cs examples:
+- "Zkontrolovala jsem kalendář a připravím odpověď ${cpName || 'protistraně'}: zodpovím otázku o parkování a nabídnu 3 termíny prohlídky. Klikněte UDĚLAT a odešlu email."
+- "Připravím potvrzení schůzky s ${cpName || 'protistranou'} na středu v 9:30 a zablokuji čas ve vašem kalendáři. Klikněte UDĚLAT."
+
+BAD intent_cs examples (NEVER write like this):
+- "Navrhuji odpovědět a buď potvrdit, nebo navrhnout jiný termín" (too vague)
+- "Navrhuji se zeptat na více podrobností" (vague, no concrete action)
+- "Navrhuji odpovědět na dotazy" (no specifics)
 
 Do NOT assign urgency, suggestedLocation, or suggestedTime — those are computed separately.
 

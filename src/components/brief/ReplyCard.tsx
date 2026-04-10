@@ -51,6 +51,7 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
   const [loading, setLoading] = useState(false)
   const [instruction, setInstruction] = useState('')
   const [regenerating, setRegenerating] = useState(false)
+  const [regenError, setRegenError] = useState(false)
   const [todoLoading, setTodoLoading] = useState<string | null>(null)
   const [todoConverted, setTodoConverted] = useState<Set<string>>(new Set())
 
@@ -79,18 +80,30 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
     })
   }, [registerFlush, action.id, token])
 
-  // Debounced auto-save for draft text edits
+  // Debounced auto-save for draft text edits + regenerate on subject change
   const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastSavedSubjectRef = useRef(draftSubject)
   const saveDraftText = useCallback((subject: string, body: string) => {
     if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current)
-    draftSaveTimer.current = setTimeout(() => {
-      fetch(`/api/action/${action.id}/draft`, {
+    draftSaveTimer.current = setTimeout(async () => {
+      await fetch(`/api/action/${action.id}/draft`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, subject, body }),
       }).catch(() => {})
+      // Subject changed → regenerate draft to match new subject
+      if (subject !== lastSavedSubjectRef.current && body) {
+        lastSavedSubjectRef.current = subject
+        try {
+          setRegenError(false)
+          const result = await onRegenerateDraft(`Předmět se změnil na: "${subject}". Uprav koncept tak, aby odpovídal novému předmětu.`)
+          setDraftBody(result.body)
+        } catch {
+          setRegenError(true)
+        }
+      }
     }, 1000)
-  }, [action.id, token])
+  }, [action.id, token, onRegenerateDraft])
 
   const summary = action.summaryJson
   const payload = action.payload as Record<string, unknown> | null
@@ -119,10 +132,11 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
       const anyFilled = missingInfo.some(f => updated[f.label]?.trim())
       if (anyFilled && draftLoaded) {
         try {
+          setRegenError(false)
           const result = await onRegenerateDraft('Doplň odpovědi do konceptu')
           setDraftSubject(result.subject)
           setDraftBody(result.body)
-        } catch { /* regen failure — draft stays as-is, user can retry via Přepsat */ }
+        } catch { setRegenError(true) }
       }
     }, 800)
   }, [onSaveDraft, onRegenerateDraft, missingInfo, draftLoaded])
@@ -156,8 +170,9 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
       setDraftSubject(result.subject)
       setDraftBody(result.body)
       setInstruction('')
+      setRegenError(false)
     } catch {
-      // Regeneration failed — keep current draft, instruction stays for retry
+      setRegenError(true)
     } finally {
       setRegenerating(false)
     }
@@ -354,6 +369,17 @@ export function ReplyCard({ action, token, onRegenerateDraft, onSaveDraft, onCon
               resize: 'vertical', lineHeight: 1.6, fontFamily: theme.typography.fontFamily,
             }}
           />
+        </div>
+      )}
+
+      {/* Regeneration error */}
+      {regenError && (
+        <div style={{
+          fontSize: theme.typography.sizes.sm,
+          color: theme.colors.error || '#dc2626',
+          padding: `${theme.spacing.xs} ${theme.spacing.sm}`,
+        }}>
+          Nepodařilo se aktualizovat koncept
         </div>
       )}
 
