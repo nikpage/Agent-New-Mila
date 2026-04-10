@@ -38,7 +38,7 @@ vi.mock('@/lib/ai/gemini', () => ({
   classifyEmail: vi.fn(),
   filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
-  decideActionType: vi.fn(),
+  decideActionType: vi.fn(), // kept in mock factory for import compat; no longer called by planning.ts
   generateIntent: vi.fn(),
   extractCPRequest: vi.fn(),
   extractTopic: vi.fn(),
@@ -105,7 +105,7 @@ vi.mock('@/lib/google/maps', () => ({
 
 // ─── Static imports (vi.mock hoisted above these) ──────────────────────────
 
-import { decideActionType, generateIntent, extractCPRequest, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
+import { generateIntent, extractCPRequest, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
 import { generateBriefIntro, generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
 import { sendEmail, fetchUnreadEmails, fetchEmailsPaginated, getUserEmail } from '@/lib/google/gmail'
 import { generateActionToken, validateActionToken } from '@/lib/auth/tokens'
@@ -120,11 +120,7 @@ beforeEach(() => {
     process.env.NEXTAUTH_SECRET = 'test-secret-at-least-32-characters-long-for-hmac'
   }
 
-  // Default AI mock returns
-  vi.mocked(decideActionType).mockResolvedValue([{
-    actionType: 'REPLY',
-    rationale_cs: 'Odpovědět na poptávku bytu',
-  }])
+  // Default AI mock returns (decideActionType no longer called — classification is deterministic)
   vi.mocked(generateIntent).mockResolvedValue({
     intent_cs: 'Nabídnout prohlídku bytu na Vinohradech',
     missingInfo: [],
@@ -232,7 +228,7 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     const actions = await generateActionProposal(conv)
 
     expect(actions).toHaveLength(0)
-    expect(decideActionType).not.toHaveBeenCalled()
+    // Classification is now deterministic — no AI call to check
 
     // No action created in DB
     const dbActions = await getTestActions()
@@ -246,10 +242,8 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     const conv = await createTestConversation()
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id })
 
-    vi.mocked(decideActionType).mockResolvedValue([{
-      actionType: 'REPLY',
-      rationale_cs: 'Test',
-    }])
+    // Classification is deterministic — no decideActionType mock needed.
+    // Test message has no scheduling signals so classifyFromEnrichment → REPLY.
     vi.mocked(generateIntent).mockResolvedValue({
       intent_cs: 'Test',
       missingInfo: [],

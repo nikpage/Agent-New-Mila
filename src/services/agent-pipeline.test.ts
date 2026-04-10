@@ -31,7 +31,7 @@ vi.mock('@/lib/ai/gemini', () => ({
   classifyEmail: vi.fn(),
   filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
-  decideActionType: vi.fn(),
+  decideActionType: vi.fn(), // kept in mock factory for import compat; no longer called
   generateIntent: vi.fn(),
   extractCPRequest: vi.fn(),
   extractTopic: vi.fn(),
@@ -105,7 +105,7 @@ vi.mock('@/lib/google/maps', () => ({
 // ─── Static imports ─────────────────────────────────────────────────────────
 
 import { fetchUnreadEmails, fetchRecentEmails } from '@/lib/google/gmail'
-import { decideActionType, generateIntent, extractCPRequest, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/gemini'
+import { generateIntent, extractCPRequest, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/gemini'
 import { runAgentForUser } from './agent'
 
 // ─── Shared setup ──────────────────────────────────────────────────────────
@@ -125,10 +125,7 @@ beforeEach(() => {
     currentState: 'Active', nextSteps: ['Reply'], keyPoints: ['Key'],
     risks: [], confidence: 0.8, confidenceReason: 'Test', dealType: 'sale',
   } as never)
-  vi.mocked(decideActionType).mockResolvedValue([{
-    actionType: 'REPLY',
-    rationale_cs: 'Test',
-  }])
+  // Classification is deterministic (classifyFromEnrichment) — no AI mock needed
   vi.mocked(generateIntent).mockResolvedValue({
     intent_cs: 'Test intent',
     missingInfo: [],

@@ -1,4 +1,5 @@
-import { decideActionType, generateIntent, extractCPRequest, type ProposedAction, type EnrichedMessageData } from '@/lib/ai/gemini'
+import { generateIntent, extractCPRequest, type ProposedAction, type EnrichedMessageData, type ActionTypeDecision } from '@/lib/ai/gemini'
+import { runAITask } from '@/lib/ai/runner'
 import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt, formatEnrichedForPrompt } from '@/lib/ai/context'
 import {
@@ -53,6 +54,60 @@ export async function validateMeetingLocation(
 }
 
 // ─── Deterministic functions (no AI) ────────────────────────────────────────
+
+/**
+ * Classify action type(s) from the raw message text.
+ *
+ * One narrow AI call on the actual words the CP wrote.
+ * Three binary yes/no questions — no prose, no rationale generation,
+ * no paraphrasing. The AI reads the raw text and answers:
+ *   1. Does this involve meeting/being somewhere at a time? → SCHEDULE
+ *   2. Does this ask the user to prepare/bring something? → TODO
+ *   3. Neither? → REPLY
+ */
+export async function classifyFromRawText(
+  rawText: string
+): Promise<ActionTypeDecision[]> {
+  if (!rawText || rawText.trim().length < 10) {
+    return [{ actionType: 'REPLY', rationale_cs: 'Zpráva příliš krátká.' }]
+  }
+
+  const prompt = `Read this message and answer three yes/no questions.
+
+MESSAGE:
+${rawText.slice(0, 2000)}
+
+1. SCHEDULE: Does this message involve meeting someone, being somewhere at a specific time, a viewing, signing, appointment, phone call, or confirming a scheduled event? (yes/no)
+2. TODO: Does this message ask the recipient to prepare, bring, obtain, or arrange something before a meeting? (yes/no)
+3. If both SCHEDULE and TODO are "no", is there anything that needs a reply? (yes/no)
+
+Respond with ONLY valid JSON: {"schedule": true/false, "todo": true/false}`
+
+  try {
+    const text = await runAITask('planning_type', prompt)
+    const match = text.match(/\{[\s\S]*\}/)
+    if (!match) throw new Error('No JSON in response')
+    const parsed = JSON.parse(match[0])
+
+    const decisions: ActionTypeDecision[] = []
+
+    if (parsed.schedule) {
+      decisions.push({ actionType: 'SCHEDULE', rationale_cs: 'Zpráva se týká schůzky nebo termínu.' })
+    }
+    if (parsed.todo && parsed.schedule) {
+      decisions.push({ actionType: 'TODO', rationale_cs: 'Zpráva žádá přípravné kroky před schůzkou.' })
+    }
+    if (!parsed.schedule) {
+      decisions.push({ actionType: 'REPLY', rationale_cs: 'Zpráva vyžaduje odpověď.' })
+    }
+
+    console.log(`[Planning] classifyFromRawText → [${decisions.map(d => d.actionType).join(', ')}] (schedule=${parsed.schedule}, todo=${parsed.todo})`)
+    return decisions
+  } catch (err) {
+    console.error('[Planning] Classification failed, defaulting to REPLY:', err)
+    return [{ actionType: 'REPLY', rationale_cs: 'Klasifikace selhala — výchozí odpověď.' }]
+  }
+}
 
 /**
  * Compute urgency from enrichment data — no AI, pure date math.
@@ -377,18 +432,18 @@ export async function generateActionProposal(
       }
     }
 
-    // Step 4: Decide action types (narrow AI call — classification only)
-    const decisions = await decideActionType(cpRequest, enrichedText, summary, cp.name, settings, channel, journalText)
+    // Step 4: Classify action types from the actual message (deterministic — no AI call)
+    const latestInboundText = latestInboundMsg
+      ? (latestInboundMsg.cleaned_text || latestInboundMsg.raw_text || '')
+      : ''
+    const decisions = await classifyFromRawText(latestInboundText)
 
-    // Step 5: SCHEDULE absorbs REPLY safety net
+    // Safety net: SCHEDULE absorbs REPLY (classifyFromEnrichment already enforces this,
+    // but guard against future changes)
     const hasScheduleDecision = decisions.some(d => d.actionType === 'SCHEDULE')
     const filteredDecisions = hasScheduleDecision
       ? decisions.filter(d => d.actionType !== 'REPLY')
       : decisions
-
-    if (hasScheduleDecision && filteredDecisions.length < decisions.length) {
-      console.log(`[Planning] Filtered REPLY — SCHEDULE absorbs it`)
-    }
 
     // Step 6: Compute urgency from enrichment (deterministic, no AI)
     const { deadlineUrgency, meetingPrepUrgency } = computeUrgencyFromEnrichment(milaCtx.enriched, new Date(), settings, cp.role, journalText)
