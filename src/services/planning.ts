@@ -11,7 +11,7 @@ import {
 import { hasActiveEventForConversation } from '@/lib/db/events'
 import { getConversationById, getRecentMessages, updateConversation } from '@/lib/db/conversations'
 import { getCPById } from '@/lib/db/counterparties'
-import { getLatestInboundFromCP, getTimelineForConversation } from '@/lib/db/timeline'
+import { getLatestInboundFromCP } from '@/lib/db/timeline'
 import { getUserSettings } from '@/lib/db/users'
 import { geocodeAddress } from '@/lib/google/maps'
 import { containsHighValueSignals } from '@/config/client'
@@ -202,7 +202,7 @@ export async function generateActionProposal(
     const createdActions: ActionProposal[] = []
     const seenTypes = new Set<string>()
     const updatedActionIds: string[] = []
-    const refreshPairs: { existingId: string; triageAction: TriageAction }[] = []
+    const refreshPairs: { existingId: string; existingUrgency: number; triageAction: TriageAction }[] = []
 
     for (const ta of triageActions) {
       if (seenTypes.has(ta.type)) continue
@@ -215,7 +215,7 @@ export async function generateActionProposal(
         if (ta.urgency > existing.urgency) {
           updatedActionIds.push(existing.id)
         } else {
-          refreshPairs.push({ existingId: existing.id, triageAction: ta })
+          refreshPairs.push({ existingId: existing.id, existingUrgency: existing.urgency, triageAction: ta })
           continue
         }
       }
@@ -348,16 +348,18 @@ export async function generateActionProposal(
       createdActions.push(action)
     }
 
-    // Refresh existing actions whose conversations got new messages
-    for (const { existingId, triageAction: ta } of refreshPairs) {
+    // Refresh existing actions whose conversations got new messages.
+    // Use Math.max to escalate urgency — never lower an existing action's urgency.
+    for (const { existingId, existingUrgency, triageAction: ta } of refreshPairs) {
       try {
+        const escalatedUrgency = Math.max(existingUrgency, ta.urgency)
         await updateAction(existingId, {
           intent_cs: ta.intent_cs,
           rationale_cs: ta.rationale_cs,
-          urgency: ta.urgency,
+          urgency: escalatedUrgency,
           priority_score: calculatePriorityScore({
             dollarValue: ta.dollar_value,
-            urgency: ta.urgency,
+            urgency: escalatedUrgency,
             daysIgnored,
             sellerMultiplier: offerMultiplier,
             kcHighValue: settings.kc_high_value,
@@ -366,7 +368,7 @@ export async function generateActionProposal(
           dollar_value: ta.dollar_value,
           updated_at: new Date().toISOString(),
         })
-        console.log(`[Planning] Refreshed ${ta.type} for ${cp.name || cp.primary_identifier} — new intent from latest messages`)
+        console.log(`[Planning] Refreshed ${ta.type} for ${cp.name || cp.primary_identifier} — urgency ${existingUrgency}→${escalatedUrgency}`)
       } catch (err) {
         console.error(`[Planning] Failed to refresh action ${existingId}:`, err)
       }
