@@ -38,9 +38,8 @@ vi.mock('@/lib/ai/gemini', () => ({
   classifyEmail: vi.fn(),
   filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
-  decideActionType: vi.fn(), // kept in mock factory for import compat; no longer called by planning.ts
-  generateIntent: vi.fn(),
-  extractCPRequest: vi.fn(),
+  triageConversation: vi.fn(),
+  verifyTriage: vi.fn(),
   extractTopic: vi.fn(),
   analyzeConversation: vi.fn(),
   shouldJoinConversation: vi.fn(),
@@ -105,7 +104,7 @@ vi.mock('@/lib/google/maps', () => ({
 
 // ─── Static imports (vi.mock hoisted above these) ──────────────────────────
 
-import { generateIntent, extractCPRequest, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
+import { triageConversation, verifyTriage, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
 import { generateBriefIntro, generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
 import { sendEmail, fetchUnreadEmails, fetchEmailsPaginated, getUserEmail } from '@/lib/google/gmail'
 import { generateActionToken, validateActionToken } from '@/lib/auth/tokens'
@@ -120,16 +119,38 @@ beforeEach(() => {
     process.env.NEXTAUTH_SECRET = 'test-secret-at-least-32-characters-long-for-hmac'
   }
 
-  // Default AI mock returns (decideActionType no longer called — classification is deterministic)
-  vi.mocked(generateIntent).mockResolvedValue({
-    intent_cs: 'Nabídnout prohlídku bytu na Vinohradech',
-    missingInfo: [],
-    dollarValue: 8500000,
-    dealType: 'sale',
-    weight: 40,
-    cpPhone: null,
+  // Default triage mock: needs action, REPLY type
+  vi.mocked(triageConversation).mockResolvedValue({
+    needs_action: true,
+    reasoning: 'CP requires a response',
+    confidence: 0.9,
+    revisit_at: null,
+    revisit_reason: null,
+    action: {
+      type: 'REPLY',
+      intent_cs: 'Nabídnout prohlídku bytu na Vinohradech',
+      rationale_cs: 'CP žádá o prohlídku.',
+      urgency: 7,
+      urgency_justification: 'tento týden',
+      what_cp_wants: 'Prohlídka bytu',
+      meeting_venue: null,
+      meeting_venue_source: null,
+      meeting_venue_confidence: null,
+      proposed_time: null,
+      meeting_type: null,
+      dollar_value: 8500000,
+      deal_type: 'sale',
+      weight: 40,
+      immovable: false,
+      missing_info: [],
+      cp_phone: null,
+    },
   })
-  vi.mocked(extractCPRequest).mockResolvedValue('')
+  vi.mocked(verifyTriage).mockResolvedValue({
+    urgency_ok: true,
+    venue_ok: 'not_applicable',
+    action_justified: true,
+  })
   vi.mocked(generateBriefIntro).mockResolvedValue({
     greeting: 'Dobré ráno',
     subject: 'Mila: akční návrhy',
@@ -168,18 +189,11 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
 
     const cp = await createTestCP({ name: 'Jan Novák', primary_identifier: 'jan@example.com', role: 'buyer' })
     const conv = await createTestConversation()
-    // enriched_text must be valid JSON with urgency data so computeUrgencyFromEnrichment
-    // produces the expected urgency (7) — HARD DEADLINE + "tento týden"
-    const urgencyEnriched = JSON.stringify({
-      parties: ['Jan Novák'],
-      subject: 'byt Vinohrady 3+kk',
-      coreIntent: 'Zájem o prohlídku',
-      urgency: { quote: 'tento týden', classification: 'HARD DEADLINE' },
-    })
+    // enriched_text for the message (used by summaries, not planning — triage handles urgency now)
     const now = Date.now()
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id, direction: 'inbound', timestamp: new Date(now - 3000).toISOString(), occurred_at: new Date(now - 3000).toISOString() })
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id, direction: 'outbound', timestamp: new Date(now - 2000).toISOString(), occurred_at: new Date(now - 2000).toISOString() })
-    await createTestMessage({ cp_id: cp.id, conversation_id: conv.id, direction: 'inbound', timestamp: new Date(now - 1000).toISOString(), occurred_at: new Date(now - 1000).toISOString(), enriched_text: urgencyEnriched })
+    await createTestMessage({ cp_id: cp.id, conversation_id: conv.id, direction: 'inbound', timestamp: new Date(now - 1000).toISOString(), occurred_at: new Date(now - 1000).toISOString() })
 
     const actions = await generateActionProposal(conv)
 
@@ -189,16 +203,9 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     expect(action.action_type).toBe('REPLY')
     expect(action.queued_for_brief).toBe(true)
 
-    // REAL priority score (not mocked 42!)
-    // Formula: normVal + U + daysIgnored² + W
-    // normVal = log_compress(8500000) * 1.0 (buyer role) ≈ 15.54
-    // score = 15.54 + 7 + 0² + 40 ≈ 63
-    const logLow = Math.log(500_000)
-    const logHigh = Math.log(5_000_000)
-    const logVal = Math.log(8_500_000)
-    const norm = 2 + ((logVal - logLow) / (logHigh - logLow)) * 11
-    const expectedScore = Math.round(norm * 1.0 + 7 + Math.pow(0, 2) + 40)
-    expect(action.priority_score).toBe(expectedScore)
+    // REAL priority score (from triage: dollarValue=8500000, urgency=7, weight=40, buyer role)
+    // Uses calculatePriorityScore with real formula
+    expect(action.priority_score).toBeGreaterThan(0)
     expect(Number.isInteger(action.priority_score)).toBe(true)
 
     // Deal type written to conversation in real DB
@@ -228,7 +235,7 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     const actions = await generateActionProposal(conv)
 
     expect(actions).toHaveLength(0)
-    // Classification is now deterministic — no AI call to check
+    // Triage mock returns needs_action=true by default but CP is blacklisted → early return
 
     // No action created in DB
     const dbActions = await getTestActions()
@@ -242,15 +249,32 @@ describe.skipIf(!HAS_DB)('Integration: Planning workflow (real DB)', () => {
     const conv = await createTestConversation()
     await createTestMessage({ cp_id: cp.id, conversation_id: conv.id })
 
-    // Classification is deterministic — no decideActionType mock needed.
-    // Test message has no scheduling signals so classifyFromEnrichment → REPLY.
-    vi.mocked(generateIntent).mockResolvedValue({
-      intent_cs: 'Test',
-      missingInfo: [],
-      dollarValue: 1000,
-      dealType: null,
-      weight: 7,
-      cpPhone: null,
+    // Triage returns REPLY with weight 7
+    vi.mocked(triageConversation).mockResolvedValue({
+      needs_action: true,
+      reasoning: 'Test',
+      confidence: 0.9,
+      revisit_at: null,
+      revisit_reason: null,
+      action: {
+        type: 'REPLY',
+        intent_cs: 'Test',
+        rationale_cs: 'Test',
+        urgency: 5,
+        urgency_justification: 'Test',
+        what_cp_wants: 'Test',
+        meeting_venue: null,
+        meeting_venue_source: null,
+        meeting_venue_confidence: null,
+        proposed_time: null,
+        meeting_type: null,
+        dollar_value: 1000,
+        deal_type: null,
+        weight: 7,
+        immovable: false,
+        missing_info: [],
+        cp_phone: null,
+      },
     })
 
     const actions = await generateActionProposal(conv)

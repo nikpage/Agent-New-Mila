@@ -43,14 +43,13 @@ vi.mock('@/lib/ai/gemini', () => ({
     risks: [], confidence: 0.8, confidenceReason: 'Test', dealType: null,
   }),
   shouldJoinConversation: vi.fn().mockResolvedValue(false),
-  decideActionType: vi.fn().mockResolvedValue([{
-    actionType: 'WAIT', rationale_cs: 'Test',
-  }]),
-  generateIntent: vi.fn().mockResolvedValue({
-    intent_cs: '', missingInfo: [], dollarValue: 0,
-    dealType: null, weight: 1, cpPhone: null,
+  triageConversation: vi.fn().mockResolvedValue({
+    needs_action: false, reasoning: 'Test', confidence: 0.9,
+    revisit_at: null, revisit_reason: null,
   }),
-  extractCPRequest: vi.fn().mockResolvedValue(''),
+  verifyTriage: vi.fn().mockResolvedValue({
+    urgency_ok: true, venue_ok: 'not_applicable', action_justified: true,
+  }),
 }))
 
 vi.mock('@/lib/ai/mila-voice', () => ({

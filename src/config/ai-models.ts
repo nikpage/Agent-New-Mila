@@ -11,8 +11,8 @@ export type AIStage =
   | 'enrichment'
   | 'threading'
   | 'analysis'
-  | 'planning_type'
-  | 'planning_intent'
+  | 'triage'
+  | 'triage_verify'
   | 'drafting'
   | 'reflection'
   | 'draft_edit'
@@ -68,20 +68,20 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
     fallback2: null,
   },
 
-  // Planning type — decideActionType (narrow: what action type is needed?)
-  planning_type: {
-    primary: 'claude-haiku-4-5-20251001',
+  // Triage — single-pass conversation decision (Sonnet + extended thinking)
+  triage: {
+    primary: 'claude-sonnet-4-6',
     fallback1: 'gemini-2.5-flash',
     fallback2: null,
-    thinkingBudget: 1024,
+    thinkingBudget: 3072,
   },
 
-  // Planning intent — generateIntent (content generation for decided action type)
-  planning_intent: {
-    primary: 'claude-haiku-4-5-20251001',
-    fallback1: 'gemini-2.5-flash',
+  // Triage verification — cheap cross-check against source message
+  triage_verify: {
+    primary: 'gemini-2.5-flash-lite',
+    fallback1: 'claude-haiku-4-5-20251001',
     fallback2: null,
-    thinkingBudget: 1024,
+    temperature: 0,
   },
 
   // Drafting — generateFinalDraft, generateBriefHeadline

@@ -303,7 +303,9 @@ export async function generateFinalDraft(
   /** Recent timeline entries — what was actually said in the conversation */
   recentTimeline?: string,
   /** Mila's journal beliefs about this CP's communication style */
-  journalNotes?: string
+  journalNotes?: string,
+  /** Recent messages for reference — use CP's actual words and tone */
+  recentMessages?: { direction: string; text: string }[]
 ): Promise<{ subject: string; body: string }> {
   console.log(`[AI:generateFinalDraft] Running stage 'drafting' for ${cpName || 'unknown CP'}`)
 
@@ -341,6 +343,7 @@ CONTEXT:
 ${JSON.stringify(safeContext, null, 2)}
 ${recentTimeline ? `\nRECENT CONVERSATION (what was actually said — reference specific points):\n${recentTimeline}` : ''}
 ${journalNotes ? `\nMILA'S NOTES ABOUT THIS CP (tone/style insights):\n${journalNotes}` : ''}
+${recentMessages?.length ? `\nRECENT MESSAGES (for reference — use CP's actual words and tone):\n${recentMessages.map(m => `[${m.direction === 'outbound' ? 'out' : 'in'}] ${m.text.slice(0, 500)}`).join('\n')}` : ''}
 
 THE PLAN (INTENT):
 ${intent}

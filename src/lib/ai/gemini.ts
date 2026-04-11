@@ -197,34 +197,6 @@ CRITICAL: You must generate ALL text values in ${outputLanguage}. Do not output 
   return raw
 }
 
-/**
- * Extract the CP's current request from the latest inbound message.
- * Focused single-task call that runs BEFORE planning to lock in what the
- * CP is actually asking — prevents intent drift where the planning AI latches
- * onto conversation history instead of the latest message.
- * Stage: enrichment (cheap, Gemini Flash)
- */
-export async function extractCPRequest(
-  latestInboundText: string,
-  cpName: string | null,
-  settings?: UserSettings
-): Promise<string> {
-  const lang = settings?.ai_language || 'Czech'
-  const prompt = `Read this message from ${cpName || 'the counterparty'} and answer concisely:
-
-1. What is the sender specifically ASKING, REQUESTING, or DEMANDING? Quote their key words.
-2. What response do they expect (a reply, a meeting confirmation, documents, information)?
-3. Is there a deadline? Quote it if yes.
-
-If the message is purely informational with no request, say "No specific request — informational update."
-
-MESSAGE:
-${latestInboundText.slice(0, 2000)}
-
-Respond in ${lang}. Plain text, 2-4 sentences max.`
-
-  return (await runAITask('enrichment', prompt)).trim()
-}
 
 /**
  * Analyze a conversation for summary, risks, next steps.
@@ -306,148 +278,57 @@ CRITICAL: You must generate ALL text field values in ${analysisLang}. Do not out
   } satisfies ConversationSummary
 }
 
-/**
- * Assembled action proposal — built by planning.ts from the decomposed pipeline pieces.
- */
-export type ProposedAction = {
-  actionType: ActionType
-  rationale_cs: string
+
+// ─── Triage (single-pass planning) ─────────────────────────────────────────
+
+export interface TriageAction {
+  type: ActionType
   intent_cs: string
-  missingInfo: { label: string; value: null }[]
+  rationale_cs: string
   urgency: number
-  dollarValue: number
+  urgency_justification: string
+  what_cp_wants: string
+  meeting_venue: string | null
+  meeting_venue_source: string | null
+  meeting_venue_confidence: 'high' | 'low' | null
+  proposed_time: string | null
+  meeting_type: 'address' | 'online' | 'phone' | null
+  dollar_value: number
+  deal_type: DealType | null
   weight: number
-  immovable?: boolean
-  dealType: DealType
-  suggestedLocation?: string | null
-  locationConfidence?: 'high' | 'low' | null
-  suggestedTime?: string | null
-  meetingType?: 'address' | 'online' | 'phone'
-  cpPhone?: string | null
+  immovable: boolean
+  missing_info: { label: string; value: null }[]
+  cp_phone: string | null
+}
+
+export interface TriageResult {
+  needs_action: boolean
+  reasoning: string
+  confidence: number
+  revisit_at: string | null
+  revisit_reason: string | null
+  action?: TriageAction
+  secondary_action?: TriageAction | null
 }
 
 /**
- * Output of decideActionType — narrow classification of what action type(s) are needed.
+ * Single-pass triage: decides whether a conversation needs action, what type,
+ * urgency, venue, intent — or "not now, revisit later".
+ * Stage: triage (claude-sonnet + extended thinking → gemini-2.5-flash)
  */
-export type ActionTypeDecision = {
-  actionType: ActionType
-  rationale_cs: string
-}
-
-/**
- * Output of generateIntent — content and metadata for a decided action type.
- */
-export type ActionIntentResult = {
-  intent_cs: string
-  missingInfo: { label: string; value: null }[]
-  dollarValue: number
-  dealType: DealType
-  meetingType?: 'address' | 'online' | 'phone'
-  weight: number
-  immovable?: boolean
-  cpPhone?: string | null
-}
-
-/**
- * Decide what action type(s) are needed for a conversation.
- * Narrow prompt — classification only, no content generation.
- * Stage: planning_type (Haiku → Gemini Flash)
- */
-export async function decideActionType(
-  cpRequest: string,
-  enrichedText: string,
-  conversationSummary: ConversationSummary,
-  cpName: string | null,
+export async function triageConversation(
+  latestInboundText: string,
+  recentMessages: { direction: string; text: string; age: string }[],
+  summary: ConversationSummary | null,
+  pendingActions: { type: string; intent: string; urgency: number }[],
+  cpName: string,
+  channel: 'email' | 'whatsapp',
   settings: UserSettings,
-  channel: 'email' | 'whatsapp' = 'email',
-  journalText: string = ''
-): Promise<ActionTypeDecision[]> {
-  const lang = settings.ai_language || 'Czech'
-  console.log(`[AI:decideActionType] Running stage 'planning_type' for ${cpName || 'unknown CP'}`)
+  journalText: string,
+): Promise<TriageResult> {
+  console.log(`[AI:triageConversation] Running stage 'triage' for ${cpName}`)
 
-  const channelNote = channel === 'whatsapp'
-    ? 'CHANNEL: WhatsApp'
-    : 'CHANNEL: Email'
-
-  const prompt = `You are Mila, a proactive executive assistant. Based on this conversation, decide what action type(s) are needed.
-
-${channelNote}
-
-CONVERSATION STATE:
-${JSON.stringify(conversationSummary, null, 2)}
-
-COUNTERPARTY: ${cpName || 'Unknown'}
-
-CP'S CURRENT REQUEST:
-${cpRequest || 'No specific request extracted.'}
-
-ENRICHED DATA FROM LATEST MESSAGE:
-${enrichedText || '(none)'}
-${journalText ? `\nMILA'S NOTES (accumulated beliefs about this CP/deal):\n${journalText}` : ''}
-
-ACTION TYPES:
-1. REPLY — the user needs to send a message that is NOT related to any meeting or scheduling. Only use when there is NO meeting/viewing/appointment being discussed.
-2. SCHEDULE — use whenever a meeting, viewing, appointment, or in-person event is involved:
-   - CP confirmed or proposed a specific time → SCHEDULE
-   - CP wants to meet but no time yet → SCHEDULE
-   - CP asks to sign a contract in person → SCHEDULE
-   - CP asks to confirm a deal/meeting → SCHEDULE (the calendar invite IS the confirmation)
-   - Enriched data contains proposed times and/or meeting type → SCHEDULE
-3. TODO — something the user needs to do themselves that is NOT a message and NOT a meeting (gather documents, review internally, get approval, prepare paperwork).
-
-RULES:
-- SCHEDULE ABSORBS REPLY: When SCHEDULE exists, do NOT add REPLY. The calendar invite IS the reply.
-- CONFIRMATION = SCHEDULE: "potvrďte obchod", "confirm by 5pm", etc. → SCHEDULE, never TODO.
-- Meeting times in enriched data → SCHEDULE must exist.
-- STRONGLY PREFER ONE ACTION. Return TWO actions ONLY when ALL of these are true:
-  a) One is SCHEDULE and the other is TODO
-  b) The TODO is a BLOCKING prerequisite — user CANNOT attend the meeting without it (e.g. "přineste list vlastnictví", "get bank approval", "obtain certificate")
-  c) The email EXPLICITLY states this requirement as something the user must bring/provide
-- "Prepare notes", "review contract", "confirm details", "prepare for discussion" are NOT separate TODOs — that is normal meeting prep implied by SCHEDULE itself.
-- When in doubt, return ONE action.
-- You MUST return at least one action.
-
-Respond with ONLY valid JSON array:
-[{"actionType": "REPLY" | "SCHEDULE" | "TODO", "rationale_cs": "One sentence: why this action is needed now"}]
-
-CRITICAL: rationale_cs must be in ${lang}. Do not output English.`
-
-  const text = await runAITask('planning_type', prompt)
-
-  const arrayMatch = text.match(/\[[\s\S]*\]/)
-  if (arrayMatch) {
-    const parsed = JSON.parse(arrayMatch[0])
-    return Array.isArray(parsed) ? parsed : [parsed]
-  }
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error('Failed to parse action type decision')
-  return [JSON.parse(jsonMatch[0])]
-}
-
-/**
- * Generate intent text and metadata for a decided action type.
- * Receives the locked action type — does not second-guess it.
- * Stage: planning_intent (Haiku → Gemini Flash)
- */
-export async function generateIntent(
-  decision: ActionTypeDecision,
-  cpRequest: string,
-  enrichedText: string,
-  conversationSummary: ConversationSummary,
-  cpName: string | null,
-  settings: UserSettings,
-  channel: 'email' | 'whatsapp' = 'email',
-  journalText: string = '',
-  recentMessages: { direction: string; text: string }[] = []
-): Promise<ActionIntentResult> {
-  const lang = settings.ai_language || 'Czech'
-  console.log(`[AI:generateIntent] Running stage 'planning_intent' for ${cpName || 'unknown CP'} (${decision.actionType})`)
-
-  const systemContext = getAISystemPrompt(settings, { excludeLawyerNotary: true })
-  const channelNote = channel === 'whatsapp'
-    ? 'CHANNEL: WhatsApp — keep messages short, informal, no subject line needed.'
-    : 'CHANNEL: Email — standard professional format.'
-
+  const systemContext = getAISystemPrompt(settings)
   const now = new Date()
   const tz = settings.timezone || 'Europe/Prague'
   const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz })
@@ -456,9 +337,22 @@ export async function generateIntent(
   const tomorrowDate = new Date(now.getTime() + 86400000).toISOString().split('T')[0]
   const nextWeekDate = new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0]
 
-  const recentText = recentMessages.length > 0
-    ? recentMessages.map(m => `[${m.direction === 'outbound' ? 'outbound' : 'inbound'}]: ${m.text.slice(0, 500)}`).join('\n\n')
-    : ''
+  const lang = settings.ai_language || 'Czech'
+  const channelNote = channel === 'whatsapp'
+    ? 'CHANNEL: WhatsApp — keep messages short, informal.'
+    : 'CHANNEL: Email — standard professional format.'
+
+  const recentText = recentMessages
+    .map(m => `[${m.direction === 'outbound' ? 'out' : 'in'} ${m.age}] ${m.text}`)
+    .join('\n\n')
+
+  const pendingText = pendingActions.length > 0
+    ? pendingActions.map(a => `- ${a.type}: "${a.intent}" (urgency ${a.urgency})`).join('\n')
+    : '(none)'
+
+  const summaryBlock = summary
+    ? `CONVERSATION SUMMARY:\n- Current state: ${summary.currentState}\n- Risks: ${(summary.risks || []).join(', ') || 'none'}\n- Next steps: ${(summary.nextSteps || []).join(', ') || 'none'}`
+    : 'CONVERSATION SUMMARY: (none available)'
 
   const prompt = `${systemContext}
 
@@ -467,84 +361,222 @@ ${channelNote}
 TODAY'S DATE: ${todayStr} (${isoDate}), current time: ${timeStr}, timezone: ${tz}
 Use this to resolve relative dates: "tomorrow" = ${tomorrowDate}, "next week" = week of ${nextWeekDate}.
 
-You are Mila, a proactive executive assistant. The action type has already been decided. Your job: generate the intent description and metadata for this action.
+You are Mila, a proactive executive assistant. Analyze this conversation and decide what to do.
 
 ROLE IDENTIFICATION:
-- Messages marked [outbound] are sent BY YOUR BOSS (the email account owner, the user you work for).
-- Messages marked [inbound] are FROM THE COUNTERPARTY (${cpName || 'the other party'}).
-- NEVER confuse who is who. Your boss wrote the [outbound] messages. The counterparty wrote the [inbound] messages.
-- When describing actions, refer to your boss's actions as "vy" and the counterparty by name.
+- Messages marked [out] are sent BY YOUR BOSS (the email account owner).
+- Messages marked [in] are FROM THE COUNTERPARTY (${cpName}).
+- NEVER confuse who is who.
 
-ACTION TYPE (already decided — do NOT change): ${decision.actionType}
-RATIONALE: ${decision.rationale_cs}
+${summaryBlock}
 
-COUNTERPARTY: ${cpName || 'Unknown'}
+EXISTING PENDING ACTIONS FOR THIS CONVERSATION:
+${pendingText}
 
-CP'S CURRENT REQUEST:
-${cpRequest || 'No specific request extracted.'}
+RECENT MESSAGES:
+${recentText}
 
-CONVERSATION STATE:
-${JSON.stringify(conversationSummary, null, 2)}
-${recentText ? `\nRECENT MESSAGES:\n${recentText}` : ''}
-
-ENRICHED DATA:
-${enrichedText || '(none)'}
+LATEST INBOUND MESSAGE:
+${latestInboundText.slice(0, 3000)}
 ${journalText ? `\nMILA'S NOTES (accumulated beliefs about this CP/deal):\n${journalText}` : ''}
 
-CRITICAL — VOICE AND PERSPECTIVE:
-- Address the user as "vy" (you). NEVER say "uživatel" (the user).
-- intent_cs describes what Mila HAS ALREADY DONE + what she WILL DO when user clicks UDĚLAT.
-- Be maximally specific: names, dates, amounts, locations from the conversation.
-- Base intent_cs on what the CP ACTUALLY SAID in RECENT MESSAGES, not on paraphrases.
+DECIDE one of three outcomes:
 
-CRITICAL — FORMATTING:
-- Plain text only. No markdown. No ** bold **. No # headers.
+OUTCOME 1 — needs_action: false, no revisit
+Conversation needs nothing. Use when: confirmations, FYIs, thank-yous, messages where a pending action already covers the request, routine updates with no new request.
 
-ACTION-SPECIFIC RULES:
-- TODO: intent_cs is a numbered checklist. Each item is max 6 words: verb + object. Example: "1. Zajistit list vlastnictví\\n2. Ověřit bezdlužnost SVJ\\n3. Připravit plnou moc". NO addresses, dates, parenthetical details, or explanations in items. Max 4 items.
-- REPLY: intent_cs is ONE sentence (max 20 words) describing what Mila will write. NOT a numbered list. Example: "Potvrdí dostupnost bytu a navrhne termíny prohlídky."
-- SCHEDULE: intent_cs is ONE sentence (max 20 words) describing the meeting. NOT a numbered list. Example: "Naplánuje telefonát s Evou na zítra v 9:00 k doladění smlouvy."
-- Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up later".
+OUTCOME 2 — needs_action: false, with revisit_at
+No action needed NOW, but something is expected on a future date. Examples:
+- CP says "I'll send the contract Monday" → revisit_at: "${nextWeekDate}", revisit_reason: "CP promised to send contract by Monday"
+- CP says "Let me check with my wife this weekend" → revisit_at the Monday after
+- CP says "We'll have the appraisal results in two weeks" → revisit_at 2 weeks from now
+revisit_at = the date AFTER which Mila should check back (when the promise should have been fulfilled). If date is vague ("soon", "next week sometime"), use the last reasonable day. If no date reference, don't set revisit_at.
 
-GOOD intent_cs examples:
-- "Zkontrolovala jsem kalendář a připravím odpověď ${cpName || 'protistraně'}: zodpovím otázku o parkování a nabídnu 3 termíny prohlídky. Klikněte UDĚLAT a odešlu email."
-- "Připravím potvrzení schůzky s ${cpName || 'protistranou'} na středu v 9:30 a zablokuji čas ve vašem kalendáři. Klikněte UDĚLAT."
+OUTCOME 3 — needs_action: true
+CP is making a new request that requires user action. NOT already covered by an existing pending action.
 
-BAD intent_cs examples (NEVER write like this):
-- "Navrhuji odpovědět a buď potvrdit, nebo navrhnout jiný termín" (too vague)
-- "Navrhuji se zeptat na více podrobností" (vague, no concrete action)
-- "Navrhuji odpovědět na dotazy" (no specifics)
-
-Do NOT assign urgency, suggestedLocation, or suggestedTime — those are computed separately.
+RULES:
+- confidence below 0.6 → system will discard the proposal
+- secondary_action: ONLY when a TODO is a BLOCKING prerequisite for a SCHEDULE AND the email EXPLICITLY states this requirement (e.g. "bring the ownership certificate to the signing")
+- meeting_venue: WHERE PEOPLE WILL PHYSICALLY MEET, not the property/deal subject. Must include meeting_venue_source quoting the message. Email signature addresses are the sender's company address, not the venue.
+- Urgency scale 1-10:
+  10 = Due within 1 hour, do NOW
+  9 = Due within 8 business hours, do NOW or ASAP
+  8 = Due end of business tomorrow
+  7 = Due in 2 business days
+  6 = Due in 3 business days
+  5 = Due in 5 business days
+  4 = Due next week
+  3 = Due within 2 weeks
+  1 = No time pressure
+  Must include urgency_justification citing evidence from the message.
+- ACTION TYPES:
+  REPLY — user needs to send a message NOT related to scheduling
+  SCHEDULE — meeting/viewing/appointment/signing/call involved. SCHEDULE ABSORBS REPLY.
+  TODO — user needs to do something that is NOT a message and NOT a meeting
+- intent_cs formatting:
+  TODO = numbered checklist (max 4 items, max 6 words each: verb + object)
+  REPLY/SCHEDULE = one sentence, max 20 words
+  Must be specific: names, dates, amounts from the conversation.
+  Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up later".
+- proposed_time: ISO 8601 datetime string if a specific time is mentioned, null otherwise. Resolve relative dates using today's date above.
+- dollar_value: estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference)
+- weight: 1-10 immovability (1=easy to reschedule, 10=hard to move). immovable=true only for absolutely immovable events.
+- what_cp_wants: one sentence summarizing what the CP is requesting/expecting
 
 Respond with ONLY valid JSON:
 {
-  "intent_cs": "Proactive description in ${lang}",
-  "missingInfo": [{"label": "Full question in ${lang}", "value": null}],
-  "dollarValue": estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference),
-  "dealType": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null,
-  "meetingType": "'address' for in-person, 'online' for video calls, 'phone' for phone calls. Default 'address' for SCHEDULE. Omit for non-SCHEDULE.",
-  "weight": 1-10 (immovability: 1=easy to reschedule, 10=hard to move),
-  "immovable": true only for absolutely immovable (court dates, kids events, airport pickups). Omit or false otherwise,
-  "cpPhone": "international phone number from conversation or null"
+  "needs_action": true | false,
+  "reasoning": "Why this decision (1-2 sentences)",
+  "confidence": 0.0-1.0,
+  "revisit_at": "YYYY-MM-DD" | null,
+  "revisit_reason": "string" | null,
+  "action": {
+    "type": "REPLY" | "SCHEDULE" | "TODO",
+    "intent_cs": "...",
+    "rationale_cs": "One sentence: why this action is needed now",
+    "urgency": 1-10,
+    "urgency_justification": "Evidence from message",
+    "what_cp_wants": "What the CP is requesting",
+    "meeting_venue": "address" | null,
+    "meeting_venue_source": "quote from message" | null,
+    "meeting_venue_confidence": "high" | "low" | null,
+    "proposed_time": "ISO datetime" | null,
+    "meeting_type": "address" | "online" | "phone" | null,
+    "dollar_value": 0,
+    "deal_type": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null,
+    "weight": 1-10,
+    "immovable": false,
+    "missing_info": [{"label": "Full question in ${lang}", "value": null}],
+    "cp_phone": "international phone number" | null
+  },
+  "secondary_action": null | { same shape as action }
 }
 
-CRITICAL: All user-facing text (intent_cs, missingInfo labels) must be in ${lang}. Do not output English.`
+If needs_action is false, omit the action and secondary_action fields entirely.
 
-  const text = await runAITask('planning_intent', prompt)
-  const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) throw new Error('Failed to parse action intent')
+CRITICAL: All user-facing text (intent_cs, rationale_cs, what_cp_wants, missing_info labels, reasoning, revisit_reason) must be in ${lang}. Do not output English.`
+
+  const raw = await runAITask('triage', prompt)
+  const jsonMatch = raw.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) throw new Error('Failed to parse triage result')
+
+  const parsed = JSON.parse(jsonMatch[0])
+
+  // Validate and coerce
+  const result: TriageResult = {
+    needs_action: parsed.needs_action === true,
+    reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : '',
+    confidence: typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : 0,
+    revisit_at: null,
+    revisit_reason: typeof parsed.revisit_reason === 'string' ? parsed.revisit_reason : null,
+  }
+
+  // Validate revisit_at
+  if (typeof parsed.revisit_at === 'string' && parsed.revisit_at) {
+    const dateMatch = parsed.revisit_at.match(/^\d{4}-\d{2}-\d{2}$/)
+    if (dateMatch) {
+      const revisitDate = new Date(parsed.revisit_at + 'T00:00:00')
+      if (!isNaN(revisitDate.getTime()) && revisitDate > now) {
+        result.revisit_at = parsed.revisit_at
+      } else {
+        console.warn(`[Triage] revisit_at "${parsed.revisit_at}" is in the past or invalid, ignoring`)
+      }
+    } else {
+      console.warn(`[Triage] revisit_at "${parsed.revisit_at}" is malformed, ignoring`)
+    }
+  }
+
+  if (result.needs_action && parsed.action) {
+    result.action = coerceTriageAction(parsed.action)
+    if (parsed.secondary_action && typeof parsed.secondary_action === 'object') {
+      result.secondary_action = coerceTriageAction(parsed.secondary_action)
+    }
+  }
+
+  return result
+}
+
+function coerceTriageAction(raw: Record<string, unknown>): TriageAction {
+  return {
+    type: (raw.type as ActionType) || 'REPLY',
+    intent_cs: typeof raw.intent_cs === 'string' ? raw.intent_cs : '',
+    rationale_cs: typeof raw.rationale_cs === 'string' ? raw.rationale_cs : '',
+    urgency: typeof raw.urgency === 'number' ? raw.urgency : 1,
+    urgency_justification: typeof raw.urgency_justification === 'string' ? raw.urgency_justification : '',
+    what_cp_wants: typeof raw.what_cp_wants === 'string' ? raw.what_cp_wants : '',
+    meeting_venue: typeof raw.meeting_venue === 'string' ? raw.meeting_venue : null,
+    meeting_venue_source: typeof raw.meeting_venue_source === 'string' ? raw.meeting_venue_source : null,
+    meeting_venue_confidence: (raw.meeting_venue_confidence as 'high' | 'low') || null,
+    proposed_time: typeof raw.proposed_time === 'string' ? raw.proposed_time : null,
+    meeting_type: (raw.meeting_type as 'address' | 'online' | 'phone') || null,
+    dollar_value: typeof raw.dollar_value === 'number' ? raw.dollar_value : 0,
+    deal_type: typeof raw.deal_type === 'string' ? (raw.deal_type as DealType) : null,
+    weight: typeof raw.weight === 'number' ? raw.weight : 1,
+    immovable: raw.immovable === true,
+    missing_info: Array.isArray(raw.missing_info) ? raw.missing_info : [],
+    cp_phone: typeof raw.cp_phone === 'string' ? raw.cp_phone : null,
+  }
+}
+
+// ─── Triage verification ───────────────────────────────────────────────────
+
+export interface VerifyResult {
+  urgency_ok: boolean
+  venue_ok: boolean | 'not_applicable'
+  action_justified: boolean
+}
+
+/**
+ * Cross-check triage result against the original message.
+ * Three binary questions — cheap, fast, deterministic.
+ * Stage: triage_verify (gemini-2.5-flash-lite → claude-haiku)
+ */
+export async function verifyTriage(
+  latestInboundText: string,
+  triage: TriageResult,
+  settings: UserSettings,
+): Promise<VerifyResult> {
+  console.log(`[AI:verifyTriage] Running stage 'triage_verify'`)
+  const action = triage.action!
+
+  const venueQuestion = action.meeting_venue
+    ? `2. VENUE: Triage says meeting at "${action.meeting_venue}" sourced from "${action.meeting_venue_source}". Is this where people will physically go, NOT a property being discussed or a signature address? (yes/no/not_applicable)`
+    : '2. VENUE: No venue specified. (not_applicable)'
+
+  const prompt = `Cross-check this triage decision against the original message. Answer three questions.
+
+ORIGINAL MESSAGE:
+${latestInboundText.slice(0, 2000)}
+
+TRIAGE DECISION:
+- needs_action: true
+- type: ${action.type}
+- urgency: ${action.urgency} because "${action.urgency_justification}"
+- intent: ${action.intent_cs}
+${action.meeting_venue ? `- venue: ${action.meeting_venue} (source: "${action.meeting_venue_source}")` : ''}
+
+QUESTIONS:
+1. URGENCY: Triage says urgency=${action.urgency} because "${action.urgency_justification}". Does the message actually contain this time pressure? (yes/no)
+${venueQuestion}
+3. ACTION: Triage says needs_action=true, type=${action.type}. Is this a new request requiring action, or just an acknowledgment/FYI/confirmation? (new_request/acknowledgment)
+
+Respond with ONLY valid JSON:
+{"urgency_ok": true/false, "venue_ok": true/false/"not_applicable", "action_justified": true/false}`
+
+  const raw = await runAITask('triage_verify', prompt)
+  const jsonMatch = raw.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) {
+    // Verification failed to parse — trust the triage
+    console.warn('[Triage:verify] Failed to parse verification, trusting triage as-is')
+    return { urgency_ok: true, venue_ok: 'not_applicable', action_justified: true }
+  }
 
   const parsed = JSON.parse(jsonMatch[0])
   return {
-    intent_cs: parsed.intent_cs || '',
-    missingInfo: Array.isArray(parsed.missingInfo) ? parsed.missingInfo : [],
-    dollarValue: typeof parsed.dollarValue === 'number' ? parsed.dollarValue : 0,
-    dealType: parsed.dealType || null,
-    meetingType: parsed.meetingType || undefined,
-    weight: typeof parsed.weight === 'number' ? parsed.weight : 0,
-    immovable: parsed.immovable === true ? true : undefined,
-    cpPhone: parsed.cpPhone || null,
+    urgency_ok: parsed.urgency_ok !== false,
+    venue_ok: parsed.venue_ok === 'not_applicable' ? 'not_applicable' : parsed.venue_ok !== false,
+    action_justified: parsed.action_justified !== false,
   }
 }
 

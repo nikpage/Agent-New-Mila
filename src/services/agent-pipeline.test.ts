@@ -31,9 +31,8 @@ vi.mock('@/lib/ai/gemini', () => ({
   classifyEmail: vi.fn(),
   filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
-  decideActionType: vi.fn(), // kept in mock factory for import compat; no longer called
-  generateIntent: vi.fn(),
-  extractCPRequest: vi.fn(),
+  triageConversation: vi.fn(),
+  verifyTriage: vi.fn(),
   extractTopic: vi.fn(),
   analyzeConversation: vi.fn(),
   shouldJoinConversation: vi.fn(),
@@ -105,7 +104,7 @@ vi.mock('@/lib/google/maps', () => ({
 // ─── Static imports ─────────────────────────────────────────────────────────
 
 import { fetchUnreadEmails, fetchRecentEmails } from '@/lib/google/gmail'
-import { generateIntent, extractCPRequest, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/gemini'
+import { triageConversation, verifyTriage, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/gemini'
 import { runAgentForUser } from './agent'
 
 // ─── Shared setup ──────────────────────────────────────────────────────────
@@ -125,16 +124,38 @@ beforeEach(() => {
     currentState: 'Active', nextSteps: ['Reply'], keyPoints: ['Key'],
     risks: [], confidence: 0.8, confidenceReason: 'Test', dealType: 'sale',
   } as never)
-  // Classification is deterministic (classifyFromEnrichment) — no AI mock needed
-  vi.mocked(generateIntent).mockResolvedValue({
-    intent_cs: 'Test intent',
-    missingInfo: [],
-    dollarValue: 1000000,
-    dealType: 'sale',
-    weight: 30,
-    cpPhone: null,
+  // Triage mocks
+  vi.mocked(triageConversation).mockResolvedValue({
+    needs_action: true,
+    reasoning: 'CP requires a response',
+    confidence: 0.9,
+    revisit_at: null,
+    revisit_reason: null,
+    action: {
+      type: 'REPLY',
+      intent_cs: 'Test intent',
+      rationale_cs: 'CP žádá odpověď.',
+      urgency: 5,
+      urgency_justification: 'Test',
+      what_cp_wants: 'Test',
+      meeting_venue: null,
+      meeting_venue_source: null,
+      meeting_venue_confidence: null,
+      proposed_time: null,
+      meeting_type: null,
+      dollar_value: 1000000,
+      deal_type: 'sale',
+      weight: 30,
+      immovable: false,
+      missing_info: [],
+      cp_phone: null,
+    },
   })
-  vi.mocked(extractCPRequest).mockResolvedValue('')
+  vi.mocked(verifyTriage).mockResolvedValue({
+    urgency_ok: true,
+    venue_ok: 'not_applicable',
+    action_justified: true,
+  })
 })
 
 // ═════════════════════════════════════════════════════════════════════════════
