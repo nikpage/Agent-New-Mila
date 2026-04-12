@@ -285,20 +285,15 @@ export interface TriageAction {
   type: ActionType
   intent_cs: string
   rationale_cs: string
-  urgency: number
+  urgency_category: 'CRITICAL' | 'TODAY' | 'THIS_WEEK' | 'SOON' | 'NONE'
   urgency_justification: string
   what_cp_wants: string
-  meeting_venue: string | null
-  meeting_venue_source: string | null
-  meeting_venue_confidence: 'high' | 'low' | null
-  proposed_time: string | null
-  meeting_type: 'address' | 'online' | 'phone' | null
-  dollar_value: number
+  venue_index: number | null
+  time_index: number | null
   deal_type: DealType | null
   weight: number
   immovable: boolean
   missing_info: { label: string; value: null }[]
-  cp_phone: string | null
 }
 
 export interface TriageResult {
@@ -325,6 +320,7 @@ export async function triageConversation(
   channel: 'email' | 'whatsapp',
   settings: UserSettings,
   journalText: string,
+  enrichment: EnrichedMessageData | null,
 ): Promise<TriageResult> {
   console.log(`[AI:triageConversation] Running stage 'triage' for ${cpName}`)
 
@@ -354,6 +350,46 @@ export async function triageConversation(
     ? `CONVERSATION SUMMARY:\n- Current state: ${summary.currentState}\n- Risks: ${(summary.risks || []).join(', ') || 'none'}\n- Next steps: ${(summary.nextSteps || []).join(', ') || 'none'}`
     : 'CONVERSATION SUMMARY: (none available)'
 
+  // Build enrichment facts block for pick-from-list
+  let enrichmentBlock = ''
+  if (enrichment) {
+    const parts: string[] = ['FACTS FROM ENRICHMENT (already extracted — use these, do NOT re-extract):']
+
+    if (enrichment.addresses?.length) {
+      parts.push('ADDRESSES found in message:')
+      enrichment.addresses.forEach((addr, i) => parts.push(`  ${i}: ${addr}`))
+    } else {
+      parts.push('ADDRESSES: (none found)')
+    }
+
+    if (enrichment.proposedTimes?.length) {
+      parts.push('PROPOSED TIMES found in message:')
+      enrichment.proposedTimes.forEach((t, i) => {
+        const dateInfo = t.specificDate ? ` (${t.specificDate})` : t.dayOfWeek ? ` (${t.dayOfWeek})` : ''
+        const timeInfo = t.timeOfDay ? ` at ${t.timeOfDay}` : ''
+        parts.push(`  ${i}: "${t.original}" → ${t.interpreted}${dateInfo}${timeInfo}`)
+      })
+    } else {
+      parts.push('PROPOSED TIMES: (none found)')
+    }
+
+    if (enrichment.meetingType) {
+      parts.push(`MEETING TYPE: ${enrichment.meetingType}`)
+    }
+
+    if (enrichment.keyNumbers?.price) {
+      parts.push(`DEAL VALUE: ${enrichment.keyNumbers.price}`)
+    }
+
+    if (enrichment.urgency) {
+      parts.push(`URGENCY SIGNAL: "${enrichment.urgency.quote}" [${enrichment.urgency.classification}]`)
+    } else {
+      parts.push('URGENCY SIGNAL: (none found)')
+    }
+
+    enrichmentBlock = parts.join('\n')
+  }
+
   const prompt = `${systemContext}
 
 ${channelNote}
@@ -367,6 +403,8 @@ ROLE IDENTIFICATION:
 - Messages marked [out] are sent BY YOUR BOSS (the email account owner).
 - Messages marked [in] are FROM THE COUNTERPARTY (${cpName}).
 - NEVER confuse who is who.
+
+${enrichmentBlock}
 
 ${summaryBlock}
 
@@ -390,7 +428,7 @@ No action needed NOW, but something is expected on a future date. Examples:
 - CP says "I'll send the contract Monday" → revisit_at: "${nextWeekDate}", revisit_reason: "CP promised to send contract by Monday"
 - CP says "Let me check with my wife this weekend" → revisit_at the Monday after
 - CP says "We'll have the appraisal results in two weeks" → revisit_at 2 weeks from now
-revisit_at = the date AFTER which Mila should check back (when the promise should have been fulfilled). If date is vague ("soon", "next week sometime"), use the last reasonable day. If no date reference, don't set revisit_at.
+revisit_at = the date AFTER which Mila should check back. If date is vague, use the last reasonable day. If no date reference, don't set revisit_at.
 
 OUTCOME 3 — needs_action: true
 CP is making a new request that requires user action. NOT already covered by an existing pending action.
@@ -398,18 +436,6 @@ CP is making a new request that requires user action. NOT already covered by an 
 RULES:
 - confidence below 0.6 → system will discard the proposal
 - secondary_action: ONLY when a TODO is a BLOCKING prerequisite for a SCHEDULE AND the email EXPLICITLY states this requirement (e.g. "bring the ownership certificate to the signing")
-- meeting_venue: WHERE PEOPLE WILL PHYSICALLY MEET, not the property/deal subject. Must include meeting_venue_source quoting the message. Email signature addresses are the sender's company address, not the venue.
-- Urgency scale 1-10:
-  10 = Due within 1 hour, do NOW
-  9 = Due within 8 business hours, do NOW or ASAP
-  8 = Due end of business tomorrow
-  7 = Due in 2 business days
-  6 = Due in 3 business days
-  5 = Due in 5 business days
-  4 = Due next week
-  3 = Due within 2 weeks
-  1 = No time pressure
-  Must include urgency_justification citing evidence from the message.
 - ACTION TYPES:
   REPLY — user needs to send a message NOT related to scheduling
   SCHEDULE — meeting/viewing/appointment/signing/call involved. SCHEDULE ABSORBS REPLY.
@@ -419,10 +445,16 @@ RULES:
   REPLY/SCHEDULE = one sentence, max 20 words
   Must be specific: names, dates, amounts from the conversation.
   Mila CANNOT act autonomously between briefs. NEVER promise to "track", "monitor", "follow up later".
-- proposed_time: ISO 8601 datetime string if a specific time is mentioned, null otherwise. Resolve relative dates using today's date above.
-- dollar_value: estimated deal value in ${settings.typical_deal_size_currency} (0 if unknown, range ${settings.typical_deal_size_min.toLocaleString()}-${settings.typical_deal_size_max.toLocaleString()} as reference)
-- weight: 1-10 immovability (1=easy to reschedule, 10=hard to move). immovable=true only for absolutely immovable events.
 - what_cp_wants: one sentence summarizing what the CP is requesting/expecting
+- weight: 1-10 immovability (1=easy to reschedule, 10=hard to move). immovable=true only for absolutely immovable events.
+- venue_index: Pick which address from the FACTS list is the MEETING VENUE (where people will physically meet). Answer with the index number, or null if none apply or no addresses listed. Do NOT pick a property/deal subject unless the meeting is literally AT that property (e.g. a viewing).
+- time_index: Pick which proposed time from the FACTS list is relevant. Answer with the index number, or null if none apply or no times listed.
+- urgency_category: Based on the URGENCY SIGNAL from enrichment facts above:
+  CRITICAL = Must act within hours. Hard deadline today/tomorrow with stated consequence.
+  TODAY = Must act by end of business today or tomorrow. Hard deadline this week.
+  THIS_WEEK = Must act within the week. Soft deadline or approaching date.
+  SOON = Within 2 weeks, no hard deadline visible.
+  NONE = No time pressure detected.
 
 Respond with ONLY valid JSON:
 {
@@ -435,20 +467,15 @@ Respond with ONLY valid JSON:
     "type": "REPLY" | "SCHEDULE" | "TODO",
     "intent_cs": "...",
     "rationale_cs": "One sentence: why this action is needed now",
-    "urgency": 1-10,
+    "urgency_category": "CRITICAL" | "TODAY" | "THIS_WEEK" | "SOON" | "NONE",
     "urgency_justification": "Evidence from message",
     "what_cp_wants": "What the CP is requesting",
-    "meeting_venue": "address" | null,
-    "meeting_venue_source": "quote from message" | null,
-    "meeting_venue_confidence": "high" | "low" | null,
-    "proposed_time": "ISO datetime" | null,
-    "meeting_type": "address" | "online" | "phone" | null,
-    "dollar_value": 0,
+    "venue_index": 0 | 1 | null,
+    "time_index": 0 | 1 | null,
     "deal_type": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null,
     "weight": 1-10,
     "immovable": false,
-    "missing_info": [{"label": "Full question in ${lang}", "value": null}],
-    "cp_phone": "international phone number" | null
+    "missing_info": [{"label": "Full question in ${lang}", "value": null}]
   },
   "secondary_action": null | { same shape as action }
 }
@@ -498,84 +525,69 @@ CRITICAL: All user-facing text (intent_cs, rationale_cs, what_cp_wants, missing_
 }
 
 function coerceTriageAction(raw: Record<string, unknown>): TriageAction {
+  const validCategories = ['CRITICAL', 'TODAY', 'THIS_WEEK', 'SOON', 'NONE'] as const
+  const rawCat = typeof raw.urgency_category === 'string' ? raw.urgency_category.toUpperCase() : 'NONE'
+  const urgency_category = validCategories.includes(rawCat as typeof validCategories[number])
+    ? (rawCat as typeof validCategories[number])
+    : 'NONE'
+
   return {
     type: (raw.type as ActionType) || 'REPLY',
     intent_cs: typeof raw.intent_cs === 'string' ? raw.intent_cs : '',
     rationale_cs: typeof raw.rationale_cs === 'string' ? raw.rationale_cs : '',
-    urgency: typeof raw.urgency === 'number' ? raw.urgency : 1,
+    urgency_category,
     urgency_justification: typeof raw.urgency_justification === 'string' ? raw.urgency_justification : '',
     what_cp_wants: typeof raw.what_cp_wants === 'string' ? raw.what_cp_wants : '',
-    meeting_venue: typeof raw.meeting_venue === 'string' ? raw.meeting_venue : null,
-    meeting_venue_source: typeof raw.meeting_venue_source === 'string' ? raw.meeting_venue_source : null,
-    meeting_venue_confidence: (raw.meeting_venue_confidence as 'high' | 'low') || null,
-    proposed_time: typeof raw.proposed_time === 'string' ? raw.proposed_time : null,
-    meeting_type: (raw.meeting_type as 'address' | 'online' | 'phone') || null,
-    dollar_value: typeof raw.dollar_value === 'number' ? raw.dollar_value : 0,
+    venue_index: typeof raw.venue_index === 'number' ? raw.venue_index : null,
+    time_index: typeof raw.time_index === 'number' ? raw.time_index : null,
     deal_type: typeof raw.deal_type === 'string' ? (raw.deal_type as DealType) : null,
     weight: typeof raw.weight === 'number' ? raw.weight : 1,
     immovable: raw.immovable === true,
     missing_info: Array.isArray(raw.missing_info) ? raw.missing_info : [],
-    cp_phone: typeof raw.cp_phone === 'string' ? raw.cp_phone : null,
   }
 }
 
 // ─── Triage verification ───────────────────────────────────────────────────
 
 export interface VerifyResult {
-  urgency_ok: boolean
-  venue_ok: boolean | 'not_applicable'
   action_justified: boolean
 }
 
 /**
  * Cross-check triage result against the original message.
- * Three binary questions — cheap, fast, deterministic.
+ * Single question: is this action justified, or is it just an FYI/confirmation?
  * Stage: triage_verify (gemini-2.5-flash-lite → claude-haiku)
  */
 export async function verifyTriage(
   latestInboundText: string,
   triage: TriageResult,
-  settings: UserSettings,
+  _settings: UserSettings,
 ): Promise<VerifyResult> {
   console.log(`[AI:verifyTriage] Running stage 'triage_verify'`)
   const action = triage.action!
 
-  const venueQuestion = action.meeting_venue
-    ? `2. VENUE: Triage says meeting at "${action.meeting_venue}" sourced from "${action.meeting_venue_source}". Is this where people will physically go, NOT a property being discussed or a signature address? (yes/no/not_applicable)`
-    : '2. VENUE: No venue specified. (not_applicable)'
-
-  const prompt = `Cross-check this triage decision against the original message. Answer three questions.
+  const prompt = `Does this message contain a NEW REQUEST requiring user action, or is it just an acknowledgment/FYI/confirmation/thank-you?
 
 ORIGINAL MESSAGE:
 ${latestInboundText.slice(0, 2000)}
 
 TRIAGE DECISION:
-- needs_action: true
 - type: ${action.type}
-- urgency: ${action.urgency} because "${action.urgency_justification}"
 - intent: ${action.intent_cs}
-${action.meeting_venue ? `- venue: ${action.meeting_venue} (source: "${action.meeting_venue_source}")` : ''}
+- what CP wants: ${action.what_cp_wants}
 
-QUESTIONS:
-1. URGENCY: Triage says urgency=${action.urgency} because "${action.urgency_justification}". Does the message actually contain this time pressure? (yes/no)
-${venueQuestion}
-3. ACTION: Triage says needs_action=true, type=${action.type}. Is this a new request requiring action, or just an acknowledgment/FYI/confirmation? (new_request/acknowledgment)
-
-Respond with ONLY valid JSON:
-{"urgency_ok": true/false, "venue_ok": true/false/"not_applicable", "action_justified": true/false}`
+Is this a new request requiring action? Respond with ONLY valid JSON:
+{"action_justified": true/false}`
 
   const raw = await runAITask('triage_verify', prompt)
   const jsonMatch = raw.match(/\{[\s\S]*\}/)
   if (!jsonMatch) {
-    // Verification failed to parse — trust the triage
     console.warn('[Triage:verify] Failed to parse verification, trusting triage as-is')
-    return { urgency_ok: true, venue_ok: 'not_applicable', action_justified: true }
+    return { action_justified: true }
   }
 
   const parsed = JSON.parse(jsonMatch[0])
   return {
-    urgency_ok: parsed.urgency_ok !== false,
-    venue_ok: parsed.venue_ok === 'not_applicable' ? 'not_applicable' : parsed.venue_ok !== false,
     action_justified: parsed.action_justified !== false,
   }
 }

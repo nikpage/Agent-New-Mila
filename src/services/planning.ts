@@ -1,4 +1,4 @@
-import { triageConversation, verifyTriage, type TriageAction, type TriageResult } from '@/lib/ai/gemini'
+import { triageConversation, verifyTriage, parseEnrichedText, type TriageAction, type TriageResult, type EnrichedMessageData } from '@/lib/ai/gemini'
 import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt } from '@/lib/ai/context'
 import {
@@ -25,6 +25,28 @@ import type {
   UserSettings,
 } from '@/lib/supabase/types'
 import { v4 as uuidv4 } from 'uuid'
+
+/**
+ * Map urgency category + enrichment urgency signal to a 1-10 number.
+ * The AI picks a coarse category (5 levels). Code maps to the specific number
+ * using the enrichment's urgency classification as a fine-grained selector.
+ */
+function mapUrgencyToNumber(
+  category: 'CRITICAL' | 'TODAY' | 'THIS_WEEK' | 'SOON' | 'NONE',
+  enrichmentSignal: 'HARD DEADLINE' | 'SOFT REFERENCE' | null
+): number {
+  const ranges: Record<string, [number, number, number]> = {
+    CRITICAL: [9, 9, 10],    // null=9, soft=9, hard=10
+    TODAY:    [7, 7, 8],     // null=7, soft=7, hard=8
+    THIS_WEEK: [5, 5, 6],   // null=5, soft=5, hard=6
+    SOON:    [3, 3, 4],      // null=3, soft=3, hard=4
+    NONE:    [1, 1, 2],      // null=1, soft=1, hard=2
+  }
+  const range = ranges[category] || ranges.NONE
+  if (enrichmentSignal === 'HARD DEADLINE') return range[2]
+  if (enrichmentSignal === 'SOFT REFERENCE') return range[1]
+  return range[0]
+}
 
 /**
  * Validate a meeting location string.
@@ -108,6 +130,11 @@ export async function generateActionProposal(
       ? (latestInboundMsg.cleaned_text || latestInboundMsg.raw_text || '')
       : ''
 
+    // Parse enrichment data from latest inbound message
+    const enrichment: EnrichedMessageData | null = latestInboundMsg?.enriched_text
+      ? parseEnrichedText(latestInboundMsg.enriched_text)
+      : null
+
     // Get existing pending actions for this conversation
     const existingPending = await getPendingActionsByType(conversation.id)
 
@@ -138,6 +165,7 @@ export async function generateActionProposal(
       channel,
       settings,
       journalText,
+      enrichment,
     )
 
     console.log(`[Planning] Triage for ${cp.name || cp.primary_identifier}: needs_action=${triageResult.needs_action}, confidence=${triageResult.confidence}${triageResult.revisit_at ? `, revisit_at=${triageResult.revisit_at}` : ''}`)
@@ -157,24 +185,80 @@ export async function generateActionProposal(
       return []
     }
 
-    // ─── VERIFY: cross-check against source message ─────────────────────
+    // ─── CODE GATES: validate triage output against enrichment ──────────
+    if (triageResult.action) {
+      const ta = triageResult.action
+
+      // Gate 1: Resolve venue_index → validate against enrichment addresses
+      if (ta.venue_index !== null && enrichment?.addresses?.length) {
+        if (ta.venue_index < 0 || ta.venue_index >= enrichment.addresses.length) {
+          console.log(`[Planning] venue_index ${ta.venue_index} out of range (${enrichment.addresses.length} addresses), setting null`)
+          ta.venue_index = null
+        }
+      } else if (ta.venue_index !== null) {
+        ta.venue_index = null
+      }
+
+      // Gate 2: Resolve time_index → validate against enrichment times
+      if (ta.time_index !== null && enrichment?.proposedTimes?.length) {
+        if (ta.time_index < 0 || ta.time_index >= enrichment.proposedTimes.length) {
+          console.log(`[Planning] time_index ${ta.time_index} out of range (${enrichment.proposedTimes.length} times), setting null`)
+          ta.time_index = null
+        }
+      } else if (ta.time_index !== null) {
+        ta.time_index = null
+      }
+
+      // Gate 3: intent_cs word count check
+      if (ta.type === 'REPLY' || ta.type === 'SCHEDULE') {
+        const wordCount = ta.intent_cs.split(/\s+/).length
+        if (wordCount > 25) {
+          ta.intent_cs = ta.intent_cs.split(/\s+/).slice(0, 20).join(' ')
+          console.log(`[Planning] intent_cs truncated from ${wordCount} to 20 words`)
+        }
+      }
+    }
+
+    // Also gate secondary_action if present
+    if (triageResult.secondary_action) {
+      const sa = triageResult.secondary_action
+      if (sa.venue_index !== null) {
+        if (!enrichment?.addresses?.length || sa.venue_index < 0 || sa.venue_index >= enrichment.addresses.length) {
+          sa.venue_index = null
+        }
+      }
+      if (sa.time_index !== null) {
+        if (!enrichment?.proposedTimes?.length || sa.time_index < 0 || sa.time_index >= enrichment.proposedTimes.length) {
+          sa.time_index = null
+        }
+      }
+    }
+
+    // ─── VERIFY: only check action justification (slim AI call) ─────────
     const verifyResult = await verifyTriage(latestInboundText, triageResult, settings)
 
-    // Apply verification corrections
     if (!verifyResult.action_justified) {
       console.log(`[Planning] Verification: action not justified for ${cp.name || cp.primary_identifier}, skipping`)
       return []
     }
-    if (!verifyResult.urgency_ok && triageResult.action) {
-      console.log(`[Planning] Verification: urgency ${triageResult.action.urgency} → clamped to 2`)
-      triageResult.action.urgency = 2
+
+    // ─── Resolve enrichment values for action creation ──────────────────
+    // Parse dollar_value from enrichment
+    let enrichmentDollarValue = 0
+    if (enrichment?.keyNumbers?.price) {
+      const priceStr = enrichment.keyNumbers.price.replace(/[^\d.,]/g, '').replace(',', '.')
+      const parsed = parseFloat(priceStr)
+      if (!isNaN(parsed) && parsed >= 0) {
+        enrichmentDollarValue = parsed
+        if (enrichmentDollarValue > settings.typical_deal_size_max * 10) {
+          console.log(`[Planning] dollar_value ${enrichmentDollarValue} exceeds 10x max, capping`)
+          enrichmentDollarValue = settings.typical_deal_size_max * 10
+        }
+      }
     }
-    if (verifyResult.venue_ok === false && triageResult.action) {
-      console.log(`[Planning] Verification: venue "${triageResult.action.meeting_venue}" rejected`)
-      triageResult.action.meeting_venue = null
-      triageResult.action.meeting_venue_source = null
-      triageResult.action.meeting_venue_confidence = null
-    }
+
+    const enrichmentSignal = (enrichment?.urgency?.classification as 'HARD DEADLINE' | 'SOFT REFERENCE') || null
+    const enrichmentMeetingType = enrichment?.meetingType || null
 
     // ─── Build proposals from triage actions ────────────────────────────
     const triageActions: TriageAction[] = [triageResult.action!]
@@ -208,11 +292,19 @@ export async function generateActionProposal(
       if (seenTypes.has(ta.type)) continue
       seenTypes.add(ta.type)
 
+      // Resolve values from enrichment + triage
+      const resolvedUrgency = mapUrgencyToNumber(ta.urgency_category, enrichmentSignal)
+      const resolvedMeetingVenue = ta.venue_index !== null && enrichment?.addresses
+        ? enrichment.addresses[ta.venue_index] : null
+      const resolvedProposedTime = ta.time_index !== null && enrichment?.proposedTimes
+        ? enrichment.proposedTimes[ta.time_index] : null
+      const resolvedMeetingType = enrichmentMeetingType
+
       // Dedup against existing pending actions
       const existing = existingPending.get(ta.type)
       if (existing) {
         if (existing.id === '__event__') continue // Confirmed event blocks
-        if (ta.urgency > existing.urgency) {
+        if (resolvedUrgency > existing.urgency) {
           updatedActionIds.push(existing.id)
         } else {
           refreshPairs.push({ existingId: existing.id, existingUrgency: existing.urgency, triageAction: ta })
@@ -229,13 +321,15 @@ export async function generateActionProposal(
       // SCHEDULE: geocode venue, build scheduling payload
       let schedulingPayload: Record<string, unknown> = {}
       if (ta.type === 'SCHEDULE') {
-        const proposedMeetingType = ta.meeting_type || 'address'
-        const isRemoteMeeting = proposedMeetingType === 'phone' || proposedMeetingType === 'online'
+        const proposedMeetingTypeStr = resolvedMeetingType || 'address'
+        // Detect remote meetings from enrichment meeting type
+        const isRemoteMeeting = proposedMeetingTypeStr === 'phone' || proposedMeetingTypeStr === 'online'
+          || /online|video|phone|call|teams|zoom|hovor/i.test(proposedMeetingTypeStr)
 
         let meetingLocation: string | undefined
         if (!isRemoteMeeting) {
-          if (ta.meeting_venue) {
-            meetingLocation = ta.meeting_venue
+          if (resolvedMeetingVenue) {
+            meetingLocation = resolvedMeetingVenue
           } else if (cp.locations) {
             const locations = cp.locations as unknown
             if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
@@ -260,11 +354,6 @@ export async function generateActionProposal(
           locationPartial = validated.needsConfirmation
         }
 
-        // Low confidence → flag for user
-        if (ta.meeting_venue_confidence === 'low' && meetingLocation) {
-          locationPartial = true
-        }
-
         // Missing address for in-person meeting
         if (!isRemoteMeeting && !meetingLocation) {
           const hasAddressField = ta.missing_info?.some(f => f.label.toLowerCase().includes('adresa'))
@@ -276,22 +365,38 @@ export async function generateActionProposal(
           }
         }
 
+        // Resolve proposed time to ISO string
+        let suggestedTime: string | null = null
+        if (resolvedProposedTime) {
+          const date = resolvedProposedTime.specificDate || null
+          const time = resolvedProposedTime.timeOfDay || null
+          if (date && time) {
+            suggestedTime = `${date}T${time}:00`
+          } else if (date) {
+            suggestedTime = `${date}T10:00:00`
+          }
+        }
+
+        const meetingTypeForPayload = isRemoteMeeting
+          ? (/online|video|teams|zoom/i.test(proposedMeetingTypeStr) ? 'online' : 'phone')
+          : 'address'
+
         schedulingPayload = {
-          suggestedTime: ta.proposed_time || null,
+          suggestedTime,
           suggestedLocation: meetingLocation || null,
           location_partial: locationPartial,
           cp_availability: null,
           duration: settings.default_meeting_duration,
-          meeting_type: proposedMeetingType,
-          is_online: proposedMeetingType === 'online',
-          cp_phone: ta.cp_phone || null,
+          meeting_type: meetingTypeForPayload,
+          is_online: meetingTypeForPayload === 'online',
+          cp_phone: null,
         }
       }
 
       const weight = ta.immovable ? 100 : (ta.weight || 0)
       const priorityScore = calculatePriorityScore({
-        dollarValue: ta.dollar_value,
-        urgency: ta.urgency,
+        dollarValue: enrichmentDollarValue,
+        urgency: resolvedUrgency,
         daysIgnored,
         sellerMultiplier: offerMultiplier,
         kcHighValue: settings.kc_high_value,
@@ -302,11 +407,11 @@ export async function generateActionProposal(
       const superseded = existingPending.get(ta.type)
       if (superseded && updatedActionIds.includes(superseded.id)) {
         await dismissAction(superseded.id, conversation.user_id)
-        console.log(`[Planning] Superseded ${ta.type} (urgency ${superseded.urgency} → ${ta.urgency}) for ${cp.name || cp.primary_identifier}`)
+        console.log(`[Planning] Superseded ${ta.type} (urgency ${superseded.urgency} → ${resolvedUrgency}) for ${cp.name || cp.primary_identifier}`)
       }
 
-      if (ta.urgency >= 9) {
-        console.log(`[Planning] URGENT action created: urgency=${ta.urgency}, type=${ta.type}, cp=${cp.name || cp.primary_identifier}`)
+      if (resolvedUrgency >= 9) {
+        console.log(`[Planning] URGENT action created: urgency=${resolvedUrgency}, type=${ta.type}, cp=${cp.name || cp.primary_identifier}`)
       }
 
       const action = await createAction({
@@ -320,9 +425,9 @@ export async function generateActionProposal(
         missing_info: ta.missing_info,
         rationale: ta.rationale_cs,
         priority_score: priorityScore,
-        dollar_value: ta.dollar_value,
+        dollar_value: enrichmentDollarValue,
         offer_multiplier: offerMultiplier,
-        urgency: ta.urgency,
+        urgency: resolvedUrgency,
         weight,
         draft_subject: null,
         draft_body_text: null,
@@ -333,12 +438,12 @@ export async function generateActionProposal(
           channel,
           action_metadata: {
             action_type: ta.type,
-            urgency: ta.urgency,
-            dollar_value: ta.dollar_value,
+            urgency: resolvedUrgency,
+            dollar_value: enrichmentDollarValue,
             offer_multiplier: offerMultiplier,
             weight,
             deal_type: dealType,
-            is_high_value: isHighValue || ta.dollar_value > settings.kc_high_value,
+            is_high_value: isHighValue || enrichmentDollarValue > settings.kc_high_value,
           },
           ...schedulingPayload,
         },
@@ -352,20 +457,21 @@ export async function generateActionProposal(
     // Use Math.max to escalate urgency — never lower an existing action's urgency.
     for (const { existingId, existingUrgency, triageAction: ta } of refreshPairs) {
       try {
-        const escalatedUrgency = Math.max(existingUrgency, ta.urgency)
+        const resolvedUrgency = mapUrgencyToNumber(ta.urgency_category, enrichmentSignal)
+        const escalatedUrgency = Math.max(existingUrgency, resolvedUrgency)
         await updateAction(existingId, {
           intent_cs: ta.intent_cs,
           rationale_cs: ta.rationale_cs,
           urgency: escalatedUrgency,
           priority_score: calculatePriorityScore({
-            dollarValue: ta.dollar_value,
+            dollarValue: enrichmentDollarValue,
             urgency: escalatedUrgency,
             daysIgnored,
             sellerMultiplier: offerMultiplier,
             kcHighValue: settings.kc_high_value,
             weight: ta.immovable ? 100 : (ta.weight || 0),
           }),
-          dollar_value: ta.dollar_value,
+          dollar_value: enrichmentDollarValue,
           updated_at: new Date().toISOString(),
         })
         console.log(`[Planning] Refreshed ${ta.type} for ${cp.name || cp.primary_identifier} — urgency ${existingUrgency}→${escalatedUrgency}`)

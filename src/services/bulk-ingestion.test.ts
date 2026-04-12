@@ -48,7 +48,7 @@ vi.mock('@/lib/ai/gemini', () => ({
     revisit_at: null, revisit_reason: null,
   }),
   verifyTriage: vi.fn().mockResolvedValue({
-    urgency_ok: true, venue_ok: 'not_applicable', action_justified: true,
+    action_justified: true,
   }),
 }))
 

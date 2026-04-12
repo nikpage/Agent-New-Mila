@@ -135,25 +135,18 @@ beforeEach(() => {
       type: 'REPLY',
       intent_cs: 'Test intent',
       rationale_cs: 'CP žádá odpověď.',
-      urgency: 5,
+      urgency_category: 'THIS_WEEK',
       urgency_justification: 'Test',
       what_cp_wants: 'Test',
-      meeting_venue: null,
-      meeting_venue_source: null,
-      meeting_venue_confidence: null,
-      proposed_time: null,
-      meeting_type: null,
-      dollar_value: 1000000,
+      venue_index: null,
+      time_index: null,
       deal_type: 'sale',
       weight: 30,
       immovable: false,
       missing_info: [],
-      cp_phone: null,
     },
   })
   vi.mocked(verifyTriage).mockResolvedValue({
-    urgency_ok: true,
-    venue_ok: 'not_applicable',
     action_justified: true,
   })
 })
