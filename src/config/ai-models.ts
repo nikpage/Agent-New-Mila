@@ -68,7 +68,7 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
     fallback2: null,
   },
 
-  // Triage — single-pass conversation decision (Flash primary for urgency detection, Sonnet fallback for Czech)
+  // Triage — single-pass conversation decision (Flash primary for urgency detection, Sonnet fallback)
   triage: {
     primary: 'gemini-2.5-flash',
     fallback1: 'claude-sonnet-4-6',
