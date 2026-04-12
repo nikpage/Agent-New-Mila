@@ -294,8 +294,8 @@ export async function generateActionProposal(
 
       // Resolve values from enrichment + triage
       const resolvedUrgency = mapUrgencyToNumber(ta.urgency_category, enrichmentSignal)
-      const resolvedMeetingVenue = ta.venue_index !== null && enrichment?.addresses
-        ? enrichment.addresses[ta.venue_index] : null
+      const resolvedMeetingVenue = (ta.venue_index !== null && enrichment?.addresses
+        ? enrichment.addresses[ta.venue_index] : null) ?? ta.meeting_venue
       const resolvedProposedTime = ta.time_index !== null && enrichment?.proposedTimes
         ? enrichment.proposedTimes[ta.time_index] : null
       const resolvedMeetingType = enrichmentMeetingType
@@ -368,12 +368,55 @@ export async function generateActionProposal(
         // Resolve proposed time to ISO string
         let suggestedTime: string | null = null
         if (resolvedProposedTime) {
-          const date = resolvedProposedTime.specificDate || null
+          let date = resolvedProposedTime.specificDate || null
           const time = resolvedProposedTime.timeOfDay || null
+
+          // Resolve relative date references when specificDate is missing
+          if (!date && resolvedProposedTime.relativeRef) {
+            const today = new Date()
+            const ref = resolvedProposedTime.relativeRef.toLowerCase()
+            if (ref === 'today') {
+              date = today.toISOString().slice(0, 10)
+            } else if (ref === 'tomorrow') {
+              const d = new Date(today); d.setDate(d.getDate() + 1)
+              date = d.toISOString().slice(0, 10)
+            } else if (ref === 'day_after_tomorrow') {
+              const d = new Date(today); d.setDate(d.getDate() + 2)
+              date = d.toISOString().slice(0, 10)
+            } else if (ref === 'next_week') {
+              const d = new Date(today); d.setDate(d.getDate() + (8 - d.getDay()) % 7 || 7)
+              date = d.toISOString().slice(0, 10)
+            }
+          }
+
+          // Resolve dayOfWeek when no date yet
+          if (!date && resolvedProposedTime.dayOfWeek) {
+            const dayMap: Record<string, number> = {
+              sunday: 0, monday: 1, tuesday: 2, wednesday: 3,
+              thursday: 4, friday: 5, saturday: 6,
+            }
+            const target = dayMap[resolvedProposedTime.dayOfWeek.toLowerCase()]
+            if (target !== undefined) {
+              const today = new Date()
+              let diff = target - today.getDay()
+              if (diff <= 0) diff += 7
+              const d = new Date(today); d.setDate(d.getDate() + diff)
+              date = d.toISOString().slice(0, 10)
+            }
+          }
+
           if (date && time) {
             suggestedTime = `${date}T${time}:00`
           } else if (date) {
             suggestedTime = `${date}T10:00:00`
+          }
+        }
+
+        // Fallback: triage resolved the time directly (relative dates, implied times)
+        if (!suggestedTime && ta.proposed_time) {
+          const parsed = new Date(ta.proposed_time)
+          if (!isNaN(parsed.getTime())) {
+            suggestedTime = ta.proposed_time
           }
         }
 

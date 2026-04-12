@@ -289,7 +289,9 @@ export interface TriageAction {
   urgency_justification: string
   what_cp_wants: string
   venue_index: number | null
+  meeting_venue: string | null
   time_index: number | null
+  proposed_time: string | null
   deal_type: DealType | null
   weight: number
   immovable: boolean
@@ -358,8 +360,6 @@ export async function triageConversation(
     if (enrichment.addresses?.length) {
       parts.push('ADDRESSES found in message:')
       enrichment.addresses.forEach((addr, i) => parts.push(`  ${i}: ${addr}`))
-    } else {
-      parts.push('ADDRESSES: (none found)')
     }
 
     if (enrichment.proposedTimes?.length) {
@@ -369,8 +369,6 @@ export async function triageConversation(
         const timeInfo = t.timeOfDay ? ` at ${t.timeOfDay}` : ''
         parts.push(`  ${i}: "${t.original}" → ${t.interpreted}${dateInfo}${timeInfo}`)
       })
-    } else {
-      parts.push('PROPOSED TIMES: (none found)')
     }
 
     if (enrichment.meetingType) {
@@ -383,11 +381,12 @@ export async function triageConversation(
 
     if (enrichment.urgency) {
       parts.push(`URGENCY SIGNAL: "${enrichment.urgency.quote}" [${enrichment.urgency.classification}]`)
-    } else {
-      parts.push('URGENCY SIGNAL: (none found)')
     }
 
-    enrichmentBlock = parts.join('\n')
+    // Only show enrichment block if it has useful data beyond the header
+    if (parts.length > 1) {
+      enrichmentBlock = parts.join('\n')
+    }
   }
 
   const prompt = `${systemContext}
@@ -448,9 +447,11 @@ RULES:
 - what_cp_wants: one sentence summarizing what the CP is requesting/expecting
 - weight: 1-10 immovability (1=easy to reschedule, 10=hard to move). immovable=true only for absolutely immovable events.
 - venue_index: Pick which address from the FACTS list is the MEETING VENUE (where people will physically meet). Answer with the index number, or null if none apply or no addresses listed. Do NOT pick a property/deal subject unless the meeting is literally AT that property (e.g. a viewing).
+- meeting_venue: If the meeting venue is NOT in the FACTS address list (e.g. "at your office", "u notáře", "at the property on Vinohradská"), write it here as free text. null if venue_index is set or no venue mentioned.
 - time_index: Pick which proposed time from the FACTS list is relevant. Answer with the index number, or null if none apply or no times listed.
+- proposed_time: If the proposed time is NOT in the FACTS time list or only has a relative reference (e.g. "tomorrow at 2pm", "next Tuesday"), resolve it to an ISO datetime string (YYYY-MM-DDTHH:MM:SS) using TODAY'S DATE above. null if time_index is set or no time mentioned.
 - urgency_category: Based on the URGENCY SIGNAL from enrichment facts above:
-  CRITICAL = Must act within hours. Hard deadline today/tomorrow with stated consequence.
+  CRITICAL = Must act within hours. Hard deadline today/tomorrow, or explicit time pressure.
   TODAY = Must act by end of business today or tomorrow. Hard deadline this week.
   THIS_WEEK = Must act within the week. Soft deadline or approaching date.
   SOON = Within 2 weeks, no hard deadline visible.
@@ -471,7 +472,9 @@ Respond with ONLY valid JSON:
     "urgency_justification": "Evidence from message",
     "what_cp_wants": "What the CP is requesting",
     "venue_index": 0 | 1 | null,
+    "meeting_venue": "free text address or null",
     "time_index": 0 | 1 | null,
+    "proposed_time": "YYYY-MM-DDTHH:MM:SS or null",
     "deal_type": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null,
     "weight": 1-10,
     "immovable": false,
@@ -539,7 +542,9 @@ function coerceTriageAction(raw: Record<string, unknown>): TriageAction {
     urgency_justification: typeof raw.urgency_justification === 'string' ? raw.urgency_justification : '',
     what_cp_wants: typeof raw.what_cp_wants === 'string' ? raw.what_cp_wants : '',
     venue_index: typeof raw.venue_index === 'number' ? raw.venue_index : null,
+    meeting_venue: typeof raw.meeting_venue === 'string' ? raw.meeting_venue : null,
     time_index: typeof raw.time_index === 'number' ? raw.time_index : null,
+    proposed_time: typeof raw.proposed_time === 'string' ? raw.proposed_time : null,
     deal_type: typeof raw.deal_type === 'string' ? (raw.deal_type as DealType) : null,
     weight: typeof raw.weight === 'number' ? raw.weight : 1,
     immovable: raw.immovable === true,
