@@ -260,6 +260,34 @@ export async function generateActionProposal(
     const enrichmentSignal = (enrichment?.urgency?.classification as 'HARD DEADLINE' | 'SOFT REFERENCE') || null
     const enrichmentMeetingType = enrichment?.meetingType || null
 
+    // Build cp_availability string from enrichment proposedTimes
+    // The scheduler's filterSlotsByCpAvailability parses day names, morning/afternoon, and "at HH:MM"
+    let cpAvailabilityText: string | null = null
+    if (enrichment?.proposedTimes?.length) {
+      const parts: string[] = []
+      for (const t of enrichment.proposedTimes) {
+        const pieces: string[] = []
+        if (t.dayOfWeek) pieces.push(t.dayOfWeek)
+        else if (t.relativeRef === 'tomorrow') {
+          const d = new Date(); d.setDate(d.getDate() + 1)
+          const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+          pieces.push(dayNames[d.getDay()])
+        } else if (t.relativeRef === 'today') {
+          const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+          pieces.push(dayNames[new Date().getDay()])
+        }
+        if (t.timeOfDay) {
+          pieces.push(`at ${t.timeOfDay}`)
+        } else if (t.eventContext === 'phone_call' || t.eventContext === 'online_meeting') {
+          // no time-of-day constraint for calls without specific time
+        }
+        if (pieces.length > 0) parts.push(pieces.join(' '))
+      }
+      if (parts.length > 0) {
+        cpAvailabilityText = parts.join(' or ')
+      }
+    }
+
     // ─── Build proposals from triage actions ────────────────────────────
     const triageActions: TriageAction[] = [triageResult.action!]
     if (triageResult.secondary_action) {
@@ -326,17 +354,17 @@ export async function generateActionProposal(
         const isRemoteMeeting = proposedMeetingTypeStr === 'phone' || proposedMeetingTypeStr === 'online'
           || /online|video|phone|call|teams|zoom|hovor/i.test(proposedMeetingTypeStr)
 
+        // Always try to find an address — even for phone/online meetings
+        // the user may change meeting type and need it
         let meetingLocation: string | undefined
-        if (!isRemoteMeeting) {
-          if (resolvedMeetingVenue) {
-            meetingLocation = resolvedMeetingVenue
-          } else if (cp.locations) {
-            const locations = cp.locations as unknown
-            if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
-              meetingLocation = locations[0]
-            } else if (typeof locations === 'string') {
-              meetingLocation = locations
-            }
+        if (resolvedMeetingVenue) {
+          meetingLocation = resolvedMeetingVenue
+        } else if (cp.locations) {
+          const locations = cp.locations as unknown
+          if (Array.isArray(locations) && locations.length > 0 && typeof locations[0] === 'string') {
+            meetingLocation = locations[0]
+          } else if (typeof locations === 'string') {
+            meetingLocation = locations
           }
         }
 
@@ -428,7 +456,7 @@ export async function generateActionProposal(
           suggestedTime,
           suggestedLocation: meetingLocation || null,
           location_partial: locationPartial,
-          cp_availability: null,
+          cp_availability: cpAvailabilityText,
           duration: settings.default_meeting_duration,
           meeting_type: meetingTypeForPayload,
           is_online: meetingTypeForPayload === 'online',
@@ -477,6 +505,8 @@ export async function generateActionProposal(
         payload: {
           intent_cs: ta.intent_cs,
           execution_plan: ta.rationale_cs,
+          what_cp_wants: ta.what_cp_wants || null,
+          urgency_justification: ta.urgency_justification || null,
           required_inputs: ta.missing_info,
           channel,
           action_metadata: {

@@ -781,7 +781,7 @@ export async function optimizeScheduleActions(
   const bufferMinutes = settings.meeting_buffer_minutes ?? 15
 
   // Get all free slots for the next 14 days (enough to schedule all meetings)
-  const allSlots = await findBestSlots(userId, settings.default_meeting_duration, 50)
+  let allSlots = await findBestSlots(userId, settings.default_meeting_duration, 50)
 
   // Track booked time ranges INCLUDING travel buffers (respects buffer on both sides)
   const bookedRanges: { start: Date; end: Date }[] = []
@@ -828,22 +828,38 @@ export async function optimizeScheduleActions(
     return (b.urgency ?? 1) - (a.urgency ?? 1)
   })
 
+  // Tear down all existing holds so the batch optimizer can re-optimize from scratch.
+  // Instant-notify creates holds without visibility into other pending actions,
+  // so those holds may conflict. The batch optimizer is the single authority.
   for (const action of sortedActions) {
     const payload = action.payload as Record<string, unknown> | null
-
-    // Already has a hold — don't double-book by creating another one.
-    // This prevents the instant-notify → brief pipeline from booking twice.
     if (payload?.hold_event_id) {
-      console.log(`[optimizer] Action ${action.id} already has hold ${payload.hold_event_id} — skipping`)
-      // Still track the existing hold's time range so subsequent actions don't overlap
-      if (payload.start && payload.end) {
-        bookedRanges.push({
-          start: new Date(payload.start as string),
-          end: new Date(payload.end as string),
-        })
+      const holdId = payload.hold_event_id as string
+      console.log(`[optimizer] Tearing down existing hold ${holdId} for action ${action.id} — will re-optimize`)
+      try {
+        await rejectSlot(userId, holdId)
+        // Clear hold data from action payload so it gets fresh hold data
+        await updateAction(action.id, {
+          payload: {
+            ...payload,
+            hold_event_id: null,
+            gcal_event_id: null,
+            start: null,
+            end: null,
+            conflicts: null,
+          },
+        }, action.user_id)
+      } catch (err) {
+        console.error(`[optimizer] Failed to tear down hold ${holdId}:`, err)
       }
-      continue
     }
+  }
+
+  // Re-fetch free slots after teardown (holds may have freed up slots)
+  allSlots = await findBestSlots(userId, settings.default_meeting_duration, 50)
+
+  for (const action of sortedActions) {
+    const payload = action.payload as Record<string, unknown> | null
 
     const cpAvailability = (payload?.cp_availability as string) || null
     const suggestedTime = (payload?.suggestedTime as string) || null
@@ -1407,7 +1423,12 @@ function filterSlotsByCpAvailability(
     const timeMatch = lower.match(/(?:at|v)\s+(\d{1,2}):?(\d{2})?/)
     if (timeMatch) {
       const targetHour = parseInt(timeMatch[1])
+      const targetMinute = timeMatch[2] ? parseInt(timeMatch[2]) : null
       if (hour !== targetHour) return false
+      if (targetMinute !== null) {
+        const minute = slot.start.getMinutes()
+        if (minute !== targetMinute) return false
+      }
     }
 
     return true
