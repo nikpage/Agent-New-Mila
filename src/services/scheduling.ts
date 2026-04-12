@@ -1419,16 +1419,23 @@ function filterSlotsByCpAvailability(
       if (!isMorning) return false
     }
 
-    // Check specific time match (e.g. "at 10:00" or "v 10:00")
-    const timeMatch = lower.match(/(?:at|v)\s+(\d{1,2}):?(\d{2})?/)
-    if (timeMatch) {
-      const targetHour = parseInt(timeMatch[1])
-      const targetMinute = timeMatch[2] ? parseInt(timeMatch[2]) : null
-      if (hour !== targetHour) return false
-      if (targetMinute !== null) {
-        const minute = slot.start.getMinutes()
-        if (minute !== targetMinute) return false
+    // Check specific time match — supports multiple times (e.g. "9 or 10", "v 9 nebo 10", "at 9:00 or 10:00")
+    const allTimes: { hour: number; minute: number | null }[] = []
+    const timeRegex = /(\d{1,2}):?(\d{2})?/g
+    let match: RegExpExecArray | null
+    while ((match = timeRegex.exec(lower)) !== null) {
+      const h = parseInt(match[1])
+      if (h >= 0 && h <= 23) {
+        allTimes.push({ hour: h, minute: match[2] ? parseInt(match[2]) : null })
       }
+    }
+    if (allTimes.length > 0) {
+      const matchesAny = allTimes.some(t => {
+        if (hour !== t.hour) return false
+        if (t.minute !== null && slot.start.getMinutes() !== t.minute) return false
+        return true
+      })
+      if (!matchesAny) return false
     }
 
     return true

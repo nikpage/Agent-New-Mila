@@ -433,6 +433,7 @@ OUTCOME 3 — needs_action: true
 CP is making a new request that requires user action. NOT already covered by an existing pending action.
 
 RULES:
+- ONLY propose actions that directly respond to what the CP EXPLICITLY asked or stated in this conversation. Do NOT invent actions involving third parties (lawyers, notaries, banks) unless the CP's message explicitly mentions them. Your business context is for understanding references, NOT for generating proactive tasks.
 - confidence below 0.6 → system will discard the proposal
 - secondary_action: ONLY when a TODO is a BLOCKING prerequisite for a SCHEDULE AND the email EXPLICITLY states this requirement (e.g. "bring the ownership certificate to the signing")
 - ACTION TYPES:
