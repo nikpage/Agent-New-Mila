@@ -35,17 +35,18 @@ function mapUrgencyToNumber(
   category: 'CRITICAL' | 'TODAY' | 'THIS_WEEK' | 'SOON' | 'NONE',
   enrichmentSignal: 'HARD DEADLINE' | 'SOFT REFERENCE' | null
 ): number {
-  const ranges: Record<string, [number, number, number]> = {
-    CRITICAL: [9, 9, 10],    // null=9, soft=9, hard=10
-    TODAY:    [7, 7, 8],     // null=7, soft=7, hard=8
-    THIS_WEEK: [5, 5, 6],   // null=5, soft=5, hard=6
-    SOON:    [3, 3, 4],      // null=3, soft=3, hard=4
-    NONE:    [1, 1, 2],      // null=1, soft=1, hard=2
+  if (enrichmentSignal === 'HARD DEADLINE') return 10
+  if (enrichmentSignal === 'SOFT REFERENCE') {
+    const ranges: Record<string, number> = {
+      CRITICAL: 9, TODAY: 7, THIS_WEEK: 7, SOON: 7, NONE: 7,
+    }
+    return Math.max(7, ranges[category] || 7)
   }
-  const range = ranges[category] || ranges.NONE
-  if (enrichmentSignal === 'HARD DEADLINE') return range[2]
-  if (enrichmentSignal === 'SOFT REFERENCE') return range[1]
-  return range[0]
+
+  const ranges: Record<string, number> = {
+    CRITICAL: 9, TODAY: 7, THIS_WEEK: 5, SOON: 3, NONE: 1,
+  }
+  return ranges[category] || 1
 }
 
 /**
@@ -196,40 +197,31 @@ export async function generateActionProposal(
         }))
       }
     }
-    if (triageResult.secondary_action) {
-      triageResult.secondary_action.venue_index = extraction.confirmed_venue_index
-      triageResult.secondary_action.meeting_venue = extraction.confirmed_venue_freetext
-      triageResult.secondary_action.time_index = extraction.confirmed_time_index
-      triageResult.secondary_action.proposed_time = extraction.confirmed_time_freetext
-    }
+    // ─── DETERMINISTIC SCHEDULE: code creates SCHEDULE from extraction data, not AI ─
+    const triageActions: TriageAction[] = triageResult.action ? [triageResult.action] : []
 
-    // ─── DETERMINISTIC SCHEDULE: if extraction found time+venue, create SCHEDULE in code ─
-    if (triageResult.action && triageResult.action.type !== 'SCHEDULE') {
-      const hasTime = extraction.confirmed_time_index !== null || extraction.confirmed_time_freetext !== null
-      const hasVenue = extraction.confirmed_venue_index !== null || extraction.confirmed_venue_freetext !== null
-      const hasMeetingType = enrichment?.meetingType != null
-
-      if (hasTime && (hasVenue || hasMeetingType)) {
-        if (!triageResult.secondary_action || triageResult.secondary_action.type !== 'SCHEDULE') {
-          console.log(`[Planning] Deterministic SCHEDULE: extraction has time=${hasTime} venue=${hasVenue} meetingType=${hasMeetingType}`)
-          triageResult.secondary_action = {
-            type: 'SCHEDULE',
-            intent_cs: triageResult.action.intent_cs,
-            rationale_cs: triageResult.action.rationale_cs,
-            urgency_category: triageResult.action.urgency_category,
-            urgency_justification: triageResult.action.urgency_justification,
-            what_cp_wants: triageResult.action.what_cp_wants,
-            venue_index: extraction.confirmed_venue_index,
-            meeting_venue: extraction.confirmed_venue_freetext,
-            time_index: extraction.confirmed_time_index,
-            proposed_time: extraction.confirmed_time_freetext,
-            deal_type: triageResult.action.deal_type,
-            weight: triageResult.action.weight,
-            immovable: triageResult.action.immovable,
-            missing_info: [],
-          }
-        }
-      }
+    if (
+      triageResult.action &&
+      triageResult.action.type !== 'SCHEDULE' &&
+      (extraction.confirmed_time_index !== null || extraction.confirmed_venue_index !== null)
+    ) {
+      console.log(`[Planning] Deterministic SCHEDULE: time_index=${extraction.confirmed_time_index}, venue_index=${extraction.confirmed_venue_index}`)
+      triageActions.push({
+        type: 'SCHEDULE',
+        intent_cs: 'Naplánovat schůzku dle požadavku.',
+        rationale_cs: 'Protistrana navrhla čas nebo místo.',
+        urgency_category: triageResult.action.urgency_category,
+        urgency_justification: 'Odvozeno z extrakce.',
+        what_cp_wants: triageResult.action.what_cp_wants,
+        venue_index: extraction.confirmed_venue_index,
+        meeting_venue: extraction.confirmed_venue_freetext,
+        time_index: extraction.confirmed_time_index,
+        proposed_time: extraction.confirmed_time_freetext,
+        deal_type: triageResult.action.deal_type,
+        weight: 7,
+        immovable: false,
+        missing_info: [],
+      })
     }
 
     console.log(`[Planning] Triage for ${cpName}: needs_action=${triageResult.needs_action}, confidence=${triageResult.confidence}${triageResult.revisit_at ? `, revisit_at=${triageResult.revisit_at}` : ''}`)
@@ -279,21 +271,6 @@ export async function generateActionProposal(
         if (wordCount > 25) {
           ta.intent_cs = ta.intent_cs.split(/\s+/).slice(0, 20).join(' ')
           console.log(`[Planning] intent_cs truncated from ${wordCount} to 20 words`)
-        }
-      }
-    }
-
-    // Also gate secondary_action if present
-    if (triageResult.secondary_action) {
-      const sa = triageResult.secondary_action
-      if (sa.venue_index !== null) {
-        if (!enrichment?.addresses?.length || sa.venue_index < 0 || sa.venue_index >= enrichment.addresses.length) {
-          sa.venue_index = null
-        }
-      }
-      if (sa.time_index !== null) {
-        if (!enrichment?.proposedTimes?.length || sa.time_index < 0 || sa.time_index >= enrichment.proposedTimes.length) {
-          sa.time_index = null
         }
       }
     }
@@ -354,11 +331,7 @@ export async function generateActionProposal(
       }
     }
 
-    // ─── Build proposals from triage actions ────────────────────────────
-    const triageActions: TriageAction[] = [triageResult.action!]
-    if (triageResult.secondary_action) {
-      triageActions.push(triageResult.secondary_action)
-    }
+    // ─── Build proposals from triage actions (triageActions built above) ─
 
     // Compute shared scoring inputs
     const latestInbound = await getLatestInboundFromCP(conversation.user_id, cp.id)
@@ -387,10 +360,7 @@ export async function generateActionProposal(
       seenTypes.add(ta.type)
 
       // Resolve values from enrichment + triage
-      const baseUrgency = mapUrgencyToNumber(ta.urgency_category, enrichmentSignal)
-      // Code override: hard deadline with stated consequence forces minimum urgency 9
-      const hasHardDeadlineWithConsequence = extraction.deadlines.some(d => d.is_hard && d.consequence)
-      const resolvedUrgency = hasHardDeadlineWithConsequence ? Math.max(baseUrgency, 9) : baseUrgency
+      const resolvedUrgency = mapUrgencyToNumber(ta.urgency_category, enrichmentSignal)
       const resolvedMeetingVenue = (ta.venue_index !== null && enrichment?.addresses
         ? enrichment.addresses[ta.venue_index] : null) ?? ta.meeting_venue
       const resolvedProposedTime = ta.time_index !== null && enrichment?.proposedTimes

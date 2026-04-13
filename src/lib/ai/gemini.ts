@@ -436,6 +436,7 @@ export interface TriageResult {
   revisit_at: string | null
   revisit_reason: string | null
   action?: TriageAction
+  /** @deprecated — SCHEDULE actions are now created deterministically in planning.ts */
   secondary_action?: TriageAction | null
 }
 
@@ -551,12 +552,12 @@ CP is making a new request that requires user action. NOT already covered by an 
 RULES:
 - ONLY propose actions that directly respond to what the CP EXPLICITLY asked (see "What CP asks for" in the facts). Do NOT invent actions.
 - confidence below 0.6 → system will discard the proposal
-- secondary_action: Use when the facts show TWO distinct actions of different types. Examples: REPLY (confirm deal) + SCHEDULE (book signing). TODO (prepare docs) + SCHEDULE (attend signing). REPLY (confirm attendance) + SCHEDULE (notary appointment). Only when BOTH are explicitly required.
+- Do NOT output secondary_action. Only one action per response.
 - ACTION TYPES:
   REPLY — user needs to send a response (confirmation, decision, answer). If the facts show a HARD DEADLINE for a reply (e.g. "confirm by 5pm or deal is off"), that is REPLY even if a meeting is also mentioned.
   SCHEDULE — meeting/viewing/appointment/signing/call needs to be booked. Use SCHEDULE as primary only when the main ask IS the scheduling itself.
   TODO — user needs to do something that is NOT a message and NOT a meeting
-  When facts show BOTH a reply deadline AND a meeting/call, use REPLY as primary and SCHEDULE as secondary_action.
+  When facts show BOTH a reply deadline AND a meeting/call, use REPLY. The system will create a SCHEDULE action automatically from extraction data.
 - intent_cs: TODO = numbered checklist (max 4 items, max 6 words each). REPLY/SCHEDULE = one sentence, max 20 words. Must reference specific names, dates, amounts from the facts.
 - weight: 1-10 immovability. immovable=true only for absolutely immovable events.
 - deal_type: sale | purchase | rental | lease | consultation | other | null
@@ -585,10 +586,9 @@ Respond with ONLY valid JSON:
     "weight": 1-10,
     "immovable": false
   },
-  "secondary_action": null | { same shape as action }
 }
 
-If needs_action is false, omit the action and secondary_action fields entirely.
+If needs_action is false, omit the action field entirely.
 
 CRITICAL: All user-facing text (intent_cs, rationale_cs, what_cp_wants, reasoning, revisit_reason) must be in ${lang}. Do not output English.`
 
@@ -624,9 +624,7 @@ CRITICAL: All user-facing text (intent_cs, rationale_cs, what_cp_wants, reasonin
 
   if (result.needs_action && parsed.action) {
     result.action = coerceTriageAction(parsed.action)
-    if (parsed.secondary_action && typeof parsed.secondary_action === 'object') {
-      result.secondary_action = coerceTriageAction(parsed.secondary_action)
-    }
+    // secondary_action removed from AI — SCHEDULE is created deterministically in planning.ts
   }
 
   return result

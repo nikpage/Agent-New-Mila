@@ -200,7 +200,7 @@ export async function updateActionStatus(
   const supabase = getSupabaseAdmin()
   let query = supabase
     .from('action_proposals')
-    .update({ status, updated_at: new Date().toISOString() })
+    .update({ status, updated_at: new Date().toISOString(), queued_for_brief: false })
     .eq('id', actionId)
   if (userId) query = query.eq('user_id', userId)
   const { error } = await query
