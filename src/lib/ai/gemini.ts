@@ -480,7 +480,7 @@ Respond with ONLY valid JSON:
     "deal_type": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null,
     "weight": 1-10,
     "immovable": false,
-    "missing_info": [{"label": "Full question in ${lang}", "value": null}]
+    "missing_info": [{"label": "Full question in ${lang}", "value": null}]  // Questions the CP asked that ONLY the user can answer (e.g. "Is financing ready?", "Can you confirm?"). Mila cannot answer these — they become fields for the user to fill in before sending.
   },
   "secondary_action": null | { same shape as action }
 }

@@ -351,8 +351,18 @@ ${intent}
 ${userNotes ? `USER NOTES (Override the plan if needed):
 ${userNotes}` : ''}
 
-${missingInfo && missingInfo.length > 0 ? `SPECIFIC DATA PROVIDED BY USER:
-${JSON.stringify(missingInfo)}` : ''}
+${missingInfo && missingInfo.length > 0 ? (() => {
+    const filled = missingInfo.filter((f: any) => f.value?.trim())
+    const unfilled = missingInfo.filter((f: any) => !f.value?.trim())
+    const parts: string[] = []
+    if (filled.length > 0) {
+      parts.push(`SPECIFIC DATA PROVIDED BY USER:\n${filled.map((f: any) => `- ${f.label}: ${f.value}`).join('\n')}`)
+    }
+    if (unfilled.length > 0) {
+      parts.push(`QUESTIONS THE USER STILL NEEDS TO ANSWER (write [___] as placeholder in the draft — do NOT invent answers):\n${unfilled.map((f: any) => `- ${f.label}`).join('\n')}`)
+    }
+    return parts.join('\n\n')
+  })() : ''}
 
 RECIPIENT: ${cpName || 'The Counterparty'}
 
