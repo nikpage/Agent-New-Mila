@@ -43,6 +43,12 @@ vi.mock('@/lib/ai/gemini', () => ({
     risks: [], confidence: 0.8, confidenceReason: 'Test', dealType: null,
   }),
   shouldJoinConversation: vi.fn().mockResolvedValue(false),
+  extractMessageFacts: vi.fn().mockResolvedValue({
+    what_cp_said: '', what_cp_asks_for: [], deadlines: [],
+    confirmed_venue_index: null, confirmed_venue_freetext: null,
+    confirmed_time_index: null, confirmed_time_freetext: null,
+    questions_for_user: [], cp_commitments: [],
+  }),
   triageConversation: vi.fn().mockResolvedValue({
     needs_action: false, reasoning: 'Test', confidence: 0.9,
     revisit_at: null, revisit_reason: null,

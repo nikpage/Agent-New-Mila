@@ -38,6 +38,12 @@ vi.mock('@/lib/ai/gemini', () => ({
   classifyEmail: vi.fn(),
   filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
+  extractMessageFacts: vi.fn().mockResolvedValue({
+    what_cp_said: '', what_cp_asks_for: [], deadlines: [],
+    confirmed_venue_index: null, confirmed_venue_freetext: null,
+    confirmed_time_index: null, confirmed_time_freetext: null,
+    questions_for_user: [], cp_commitments: [],
+  }),
   triageConversation: vi.fn(),
   verifyTriage: vi.fn(),
   extractTopic: vi.fn(),
@@ -104,7 +110,7 @@ vi.mock('@/lib/google/maps', () => ({
 
 // ─── Static imports (vi.mock hoisted above these) ──────────────────────────
 
-import { triageConversation, verifyTriage, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
+import { extractMessageFacts, triageConversation, verifyTriage, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
 import { generateBriefIntro, generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
 import { sendEmail, fetchUnreadEmails, fetchEmailsPaginated, getUserEmail } from '@/lib/google/gmail'
 import { generateActionToken, validateActionToken } from '@/lib/auth/tokens'

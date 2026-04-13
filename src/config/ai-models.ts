@@ -11,6 +11,7 @@ export type AIStage =
   | 'enrichment'
   | 'threading'
   | 'analysis'
+  | 'triage_extract'
   | 'triage'
   | 'triage_verify'
   | 'drafting'
@@ -68,12 +69,20 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
     fallback2: null,
   },
 
-  // Triage — single-pass conversation decision (Flash primary for urgency detection, Sonnet fallback)
+  // Triage extraction — pure reading comprehension, deterministic
+  triage_extract: {
+    primary: 'gemini-2.5-flash-lite',
+    fallback1: 'claude-haiku-4-5-20251001',
+    fallback2: null,
+    temperature: 0,
+  },
+
+  // Triage — decision-only (receives verified facts from extraction, not raw email)
   triage: {
     primary: 'gemini-2.5-flash',
     fallback1: 'claude-sonnet-4-6',
     fallback2: null,
-    thinkingBudget: 3072,
+    thinkingBudget: 4096,
   },
 
   // Triage verification — cheap cross-check against source message

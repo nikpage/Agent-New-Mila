@@ -31,6 +31,12 @@ vi.mock('@/lib/ai/gemini', () => ({
   classifyEmail: vi.fn(),
   filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
+  extractMessageFacts: vi.fn().mockResolvedValue({
+    what_cp_said: '', what_cp_asks_for: [], deadlines: [],
+    confirmed_venue_index: null, confirmed_venue_freetext: null,
+    confirmed_time_index: null, confirmed_time_freetext: null,
+    questions_for_user: [], cp_commitments: [],
+  }),
   triageConversation: vi.fn(),
   verifyTriage: vi.fn(),
   extractTopic: vi.fn(),
@@ -104,7 +110,7 @@ vi.mock('@/lib/google/maps', () => ({
 // ─── Static imports ─────────────────────────────────────────────────────────
 
 import { fetchUnreadEmails, fetchRecentEmails } from '@/lib/google/gmail'
-import { triageConversation, verifyTriage, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/gemini'
+import { extractMessageFacts, triageConversation, verifyTriage, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/gemini'
 import { runAgentForUser } from './agent'
 
 // ─── Shared setup ──────────────────────────────────────────────────────────

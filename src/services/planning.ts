@@ -1,4 +1,4 @@
-import { triageConversation, verifyTriage, parseEnrichedText, type TriageAction, type TriageResult, type EnrichedMessageData } from '@/lib/ai/gemini'
+import { extractMessageFacts, triageConversation, verifyTriage, parseEnrichedText, type TriageAction, type TriageResult, type EnrichedMessageData } from '@/lib/ai/gemini'
 import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt } from '@/lib/ai/context'
 import {
@@ -155,18 +155,53 @@ export async function generateActionProposal(
       .filter(([, v]) => v.id !== '__event__')
       .map(([type, v]) => ({ type, intent: v.intent_cs || '', urgency: v.urgency }))
 
-    // ─── TRIAGE: single-pass decision ───────────────────────────────────
-    const triageResult = await triageConversation(
+    // ─── EXTRACT: pure reading comprehension ────────────────────────────
+    const cpName = cp.name || cp.primary_identifier || 'Unknown'
+    const extraction = await extractMessageFacts(
       latestInboundText,
+      enrichment,
+      summary,
+      cpName,
+      settings,
+    )
+
+    console.log(`[Planning] Extraction for ${cpName}: asks=${extraction.what_cp_asks_for.length}, deadlines=${extraction.deadlines.length}, questions=${extraction.questions_for_user.length}`)
+
+    // ─── DECIDE: action type, urgency (uses verified facts, not raw email) ─
+    const triageResult = await triageConversation(
+      extraction,
       formattedMessages,
       summary,
       pendingForPrompt,
-      cp.name || cp.primary_identifier || 'Unknown',
+      cpName,
       channel,
       settings,
       journalText,
       enrichment,
     )
+
+    // ─── MERGE: code-copy extraction fields onto triage result ──────────
+    if (triageResult.action) {
+      triageResult.action.venue_index = extraction.confirmed_venue_index
+      triageResult.action.meeting_venue = extraction.confirmed_venue_freetext
+      triageResult.action.time_index = extraction.confirmed_time_index
+      triageResult.action.proposed_time = extraction.confirmed_time_freetext
+      if (extraction.what_cp_asks_for.length > 0) {
+        triageResult.action.what_cp_wants = extraction.what_cp_asks_for[0]
+      }
+      if (extraction.questions_for_user.length > 0) {
+        triageResult.action.missing_info = extraction.questions_for_user.map(q => ({
+          label: q,
+          value: null,
+        }))
+      }
+    }
+    if (triageResult.secondary_action) {
+      triageResult.secondary_action.venue_index = extraction.confirmed_venue_index
+      triageResult.secondary_action.meeting_venue = extraction.confirmed_venue_freetext
+      triageResult.secondary_action.time_index = extraction.confirmed_time_index
+      triageResult.secondary_action.proposed_time = extraction.confirmed_time_freetext
+    }
 
     console.log(`[Planning] Triage for ${cp.name || cp.primary_identifier}: needs_action=${triageResult.needs_action}, confidence=${triageResult.confidence}${triageResult.revisit_at ? `, revisit_at=${triageResult.revisit_at}` : ''}`)
 
