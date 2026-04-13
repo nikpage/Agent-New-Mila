@@ -435,11 +435,12 @@ CP is making a new request that requires user action. NOT already covered by an 
 RULES:
 - ONLY propose actions that directly respond to what the CP EXPLICITLY asked or stated in this conversation. Do NOT invent actions involving third parties (lawyers, notaries, banks) unless the CP's message explicitly mentions them. Your business context is for understanding references, NOT for generating proactive tasks.
 - confidence below 0.6 → system will discard the proposal
-- secondary_action: ONLY when a TODO is a BLOCKING prerequisite for a SCHEDULE AND the email EXPLICITLY states this requirement (e.g. "bring the ownership certificate to the signing")
+- secondary_action: Use when the email requires TWO distinct actions of different types. Examples: REPLY (confirm deal) + SCHEDULE (book signing). TODO (prepare docs) + SCHEDULE (attend signing). Only when BOTH are explicitly required by the email.
 - ACTION TYPES:
-  REPLY — user needs to send a message NOT related to scheduling
-  SCHEDULE — meeting/viewing/appointment/signing/call involved. SCHEDULE ABSORBS REPLY.
+  REPLY — user needs to send a response (confirmation, decision, answer). If the CP demands a reply with its own deadline (e.g. "confirm by 5pm or deal is off"), that is REPLY even if a meeting is also mentioned.
+  SCHEDULE — meeting/viewing/appointment/signing/call needs to be booked. Use SCHEDULE as primary only when the email's main ask IS the scheduling itself.
   TODO — user needs to do something that is NOT a message and NOT a meeting
+  When an email contains BOTH a reply deadline AND a meeting, use REPLY as primary and SCHEDULE as secondary_action.
 - intent_cs formatting:
   TODO = numbered checklist (max 4 items, max 6 words each: verb + object)
   REPLY/SCHEDULE = one sentence, max 20 words

@@ -278,8 +278,10 @@ export async function generateActionProposal(
         }
         if (t.timeOfDay) {
           pieces.push(`at ${t.timeOfDay}`)
-        } else if (t.eventContext === 'phone_call' || t.eventContext === 'online_meeting') {
-          // no time-of-day constraint for calls without specific time
+        } else if (t.original) {
+          // Pass the original text so the scheduler can parse times from it
+          // e.g. "kolem 9 nebo 10" → scheduler extracts 9 and 10
+          pieces.push(t.original)
         }
         if (pieces.length > 0) parts.push(pieces.join(' '))
       }
