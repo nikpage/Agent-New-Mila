@@ -441,13 +441,12 @@ export interface TriageResult {
 }
 
 /**
- * Decision-only triage: given verified extraction facts, decides whether action is needed,
- * what type, urgency, and generates intent/rationale text.
- * Venue, time, questions, and what_cp_wants come from extraction (code-merged in planning.ts).
+ * Triage: decides whether a conversation needs action, what type, urgency, venue, intent.
+ * SCHEDULE actions are created deterministically in planning.ts — AI only outputs one action.
  * Stage: triage (gemini-2.5-flash with thinking → claude-sonnet fallback)
  */
 export async function triageConversation(
-  extraction: ExtractionResult,
+  latestInboundText: string,
   recentMessages: { direction: string; text: string; age: string }[],
   summary: ConversationSummary | null,
   pendingActions: { type: string; intent: string; urgency: number }[],
@@ -465,6 +464,7 @@ export async function triageConversation(
   const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz })
   const isoDate = now.toLocaleDateString('sv-SE', { timeZone: tz })
   const timeStr = now.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', timeZone: tz })
+  const tomorrowDate = new Date(now.getTime() + 86400000).toISOString().split('T')[0]
   const nextWeekDate = new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0]
 
   const lang = settings.ai_language || 'Czech'
@@ -484,56 +484,68 @@ export async function triageConversation(
     ? `CONVERSATION SUMMARY:\n- Current state: ${summary.currentState}\n- Risks: ${(summary.risks || []).join(', ') || 'none'}\n- Next steps: ${(summary.nextSteps || []).join(', ') || 'none'}`
     : 'CONVERSATION SUMMARY: (none available)'
 
-  // Build extraction facts block — verified data from extractMessageFacts
-  const extractionParts: string[] = ['VERIFIED FACTS (extracted from the latest inbound message — these are confirmed, use them as-is):']
-  extractionParts.push(`What CP said: ${extraction.what_cp_said}`)
-  if (extraction.what_cp_asks_for.length > 0) {
-    extractionParts.push(`What CP asks for: ${extraction.what_cp_asks_for.join('; ')}`)
-  }
-  if (extraction.deadlines.length > 0) {
-    extractionParts.push('Deadlines:')
-    extraction.deadlines.forEach(d => {
-      const hard = d.is_hard ? ' [HARD DEADLINE]' : ' [soft]'
-      const date = d.resolved_date ? ` (${d.resolved_date})` : ''
-      const consequence = d.consequence ? ` — consequence: ${d.consequence}` : ''
-      extractionParts.push(`  "${d.text}"${date}${hard}${consequence}`)
-    })
-  }
-  if (extraction.questions_for_user.length > 0) {
-    extractionParts.push(`Questions CP asked that only the user can answer: ${extraction.questions_for_user.join('; ')}`)
-  }
-  if (extraction.cp_commitments.length > 0) {
-    extractionParts.push(`CP commitments (things CP will do): ${extraction.cp_commitments.join('; ')}`)
-  }
+  // Build enrichment facts block for pick-from-list
+  let enrichmentBlock = ''
+  if (enrichment) {
+    const parts: string[] = ['FACTS FROM ENRICHMENT (already extracted — use these, do NOT re-extract):']
 
-  // Enrichment signals still useful for deal value, meeting type, urgency classification
-  const enrichmentSignals: string[] = []
-  if (enrichment?.meetingType) enrichmentSignals.push(`Meeting type: ${enrichment.meetingType}`)
-  if (enrichment?.keyNumbers?.price) enrichmentSignals.push(`Deal value: ${enrichment.keyNumbers.price}`)
-  if (enrichment?.urgency) enrichmentSignals.push(`Urgency signal: "${enrichment.urgency.quote}" [${enrichment.urgency.classification}]`)
+    if (enrichment.addresses?.length) {
+      parts.push('ADDRESSES found in message:')
+      enrichment.addresses.forEach((addr, i) => parts.push(`  ${i}: ${addr}`))
+    }
+
+    if (enrichment.proposedTimes?.length) {
+      parts.push('PROPOSED TIMES found in message:')
+      enrichment.proposedTimes.forEach((t, i) => {
+        const dateInfo = t.specificDate ? ` (${t.specificDate})` : t.dayOfWeek ? ` (${t.dayOfWeek})` : ''
+        const timeInfo = t.timeOfDay ? ` at ${t.timeOfDay}` : ''
+        parts.push(`  ${i}: "${t.original}" → ${t.interpreted}${dateInfo}${timeInfo}`)
+      })
+    }
+
+    if (enrichment.meetingType) {
+      parts.push(`MEETING TYPE: ${enrichment.meetingType}`)
+    }
+
+    if (enrichment.keyNumbers?.price) {
+      parts.push(`DEAL VALUE: ${enrichment.keyNumbers.price}`)
+    }
+
+    if (enrichment.urgency) {
+      parts.push(`URGENCY SIGNAL: "${enrichment.urgency.quote}" [${enrichment.urgency.classification}]`)
+    }
+
+    if (parts.length > 1) {
+      enrichmentBlock = parts.join('\n')
+    }
+  }
 
   const prompt = `${systemContext}
 
 ${channelNote}
 
 TODAY'S DATE: ${todayStr} (${isoDate}), current time: ${timeStr}, timezone: ${tz}
+Use this to resolve relative dates: "tomorrow" = ${tomorrowDate}, "next week" = week of ${nextWeekDate}.
 
-You are Mila, a proactive executive assistant. Based on the verified facts below, decide what action (if any) is needed.
+You are Mila, a proactive executive assistant. Analyze this conversation and decide what to do.
 
 ROLE IDENTIFICATION:
 - Messages marked [out] are sent BY YOUR BOSS (the email account owner).
 - Messages marked [in] are FROM THE COUNTERPARTY (${cpName}).
+- NEVER confuse who is who.
 
-${extractionParts.join('\n')}
-${enrichmentSignals.length > 0 ? '\n' + enrichmentSignals.join('\n') : ''}
+${enrichmentBlock}
 
 ${summaryBlock}
 
 EXISTING PENDING ACTIONS FOR THIS CONVERSATION:
 ${pendingText}
 
-RECENT MESSAGES (for context):
+RECENT MESSAGES:
 ${recentText}
+
+LATEST INBOUND MESSAGE:
+${latestInboundText.slice(0, 3000)}
 ${journalText ? `\nMILA'S NOTES (accumulated beliefs about this CP/deal):\n${journalText}` : ''}
 
 DECIDE one of three outcomes:
@@ -542,31 +554,40 @@ OUTCOME 1 — needs_action: false, no revisit
 Conversation needs nothing. Use when: confirmations, FYIs, thank-yous, messages where a pending action already covers the request, routine updates with no new request.
 
 OUTCOME 2 — needs_action: false, with revisit_at
-No action needed NOW, but something is expected on a future date.
-Use CP COMMITMENTS from the facts above to set revisit_at (the date AFTER which Mila should check back).
-revisit_at = YYYY-MM-DD. If date is vague, use the last reasonable day.
+No action needed NOW, but something is expected on a future date. Examples:
+- CP says "I'll send the contract Monday" → revisit_at: "${nextWeekDate}", revisit_reason: "CP promised to send contract by Monday"
+- CP says "Let me check with my wife this weekend" → revisit_at the Monday after
+- CP says "We'll have the appraisal results in two weeks" → revisit_at 2 weeks from now
+revisit_at = the date AFTER which Mila should check back. If date is vague, use the last reasonable day. If no date reference, don't set revisit_at.
 
 OUTCOME 3 — needs_action: true
 CP is making a new request that requires user action. NOT already covered by an existing pending action.
 
 RULES:
-- ONLY propose actions that directly respond to what the CP EXPLICITLY asked (see "What CP asks for" in the facts). Do NOT invent actions.
+- ONLY propose actions that directly respond to what the CP EXPLICITLY asked or stated in this conversation. Do NOT invent actions involving third parties (lawyers, notaries, banks) unless the CP's message explicitly mentions them.
 - confidence below 0.6 → system will discard the proposal
-- Do NOT output secondary_action. Only one action per response.
+- Do NOT output secondary_action. Only one action per response. The system creates SCHEDULE actions automatically when a time or venue is detected.
 - ACTION TYPES:
-  REPLY — user needs to send a response (confirmation, decision, answer). If the facts show a HARD DEADLINE for a reply (e.g. "confirm by 5pm or deal is off"), that is REPLY even if a meeting is also mentioned.
-  SCHEDULE — meeting/viewing/appointment/signing/call needs to be booked. Use SCHEDULE as primary only when the main ask IS the scheduling itself.
+  REPLY — user needs to send a response (confirmation, decision, answer). If the CP demands a reply with its own deadline (e.g. "confirm by 5pm or deal is off"), that is REPLY even if a meeting is also mentioned.
+  SCHEDULE — meeting/viewing/appointment/signing/call needs to be booked. Use SCHEDULE as primary only when the email's main ask IS the scheduling itself.
   TODO — user needs to do something that is NOT a message and NOT a meeting
-  When facts show BOTH a reply deadline AND a meeting/call, use REPLY. The system will create a SCHEDULE action automatically from extraction data.
-- intent_cs: TODO = numbered checklist (max 4 items, max 6 words each). REPLY/SCHEDULE = one sentence, max 20 words. Must reference specific names, dates, amounts from the facts.
-- weight: 1-10 immovability. immovable=true only for absolutely immovable events.
-- deal_type: sale | purchase | rental | lease | consultation | other | null
-- urgency_category based on deadlines from the facts:
-  CRITICAL = Hard deadline today/tomorrow, explicit consequence if missed.
-  TODAY = Must act by end of business today or tomorrow.
-  THIS_WEEK = Must act within the week.
-  SOON = Within 2 weeks, no hard deadline.
-  NONE = No time pressure.
+- intent_cs formatting:
+  TODO = numbered checklist (max 4 items, max 6 words each: verb + object)
+  REPLY/SCHEDULE = one sentence, max 20 words
+  Must be specific: names, dates, amounts from the conversation.
+- what_cp_wants: one sentence summarizing what the CP is requesting/expecting
+- weight: 1-10 immovability (1=easy to reschedule, 10=hard to move). immovable=true only for absolutely immovable events.
+- venue_index: Pick which address from the FACTS list is the MEETING VENUE (where people will physically meet). Answer with the index number, or null if none apply or no addresses listed. Do NOT pick a property/deal subject unless the meeting is literally AT that property (e.g. a viewing).
+- meeting_venue: If the meeting venue is NOT in the FACTS address list, write it here as free text. null if venue_index is set or no venue mentioned.
+- time_index: Pick which proposed time from the FACTS list is relevant. Answer with the index number, or null if none apply or no times listed.
+- proposed_time: If the proposed time is NOT in the FACTS time list, resolve it to an ISO datetime string (YYYY-MM-DDTHH:MM:SS) using TODAY'S DATE above. null if time_index is set or no time mentioned.
+- urgency_category: Based on the URGENCY SIGNAL from enrichment facts above:
+  CRITICAL = Must act within hours. Hard deadline today/tomorrow, or explicit time pressure.
+  TODAY = Must act by end of business today or tomorrow. Hard deadline this week.
+  THIS_WEEK = Must act within the week. Soft deadline or approaching date.
+  SOON = Within 2 weeks, no hard deadline visible.
+  NONE = No time pressure detected.
+- missing_info: Questions the CP asked that ONLY the user can answer. Copy from the message, do not invent.
 
 Respond with ONLY valid JSON:
 {
@@ -580,17 +601,22 @@ Respond with ONLY valid JSON:
     "intent_cs": "...",
     "rationale_cs": "One sentence: why this action is needed now",
     "urgency_category": "CRITICAL" | "TODAY" | "THIS_WEEK" | "SOON" | "NONE",
-    "urgency_justification": "Evidence from the verified facts",
-    "what_cp_wants": "What the CP is requesting (from the facts)",
+    "urgency_justification": "Evidence from message",
+    "what_cp_wants": "What the CP is requesting",
+    "venue_index": 0 | 1 | null,
+    "meeting_venue": "string" | null,
+    "time_index": 0 | 1 | null,
+    "proposed_time": "ISO datetime" | null,
     "deal_type": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null,
     "weight": 1-10,
-    "immovable": false
-  },
+    "immovable": false,
+    "missing_info": [{"label": "Full question in ${lang}", "value": null}]
+  }
 }
 
 If needs_action is false, omit the action field entirely.
 
-CRITICAL: All user-facing text (intent_cs, rationale_cs, what_cp_wants, reasoning, revisit_reason) must be in ${lang}. Do not output English.`
+CRITICAL: All user-facing text (intent_cs, rationale_cs, what_cp_wants, missing_info labels, reasoning, revisit_reason) must be in ${lang}. Do not output English.`
 
   const raw = await runAITask('triage', prompt)
   const jsonMatch = raw.match(/\{[\s\S]*\}/)

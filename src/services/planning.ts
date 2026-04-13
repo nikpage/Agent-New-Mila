@@ -1,4 +1,4 @@
-import { extractMessageFacts, triageConversation, verifyTriage, parseEnrichedText, type TriageAction, type TriageResult, type EnrichedMessageData } from '@/lib/ai/gemini'
+import { triageConversation, verifyTriage, parseEnrichedText, type TriageAction, type TriageResult, type EnrichedMessageData } from '@/lib/ai/gemini'
 import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt } from '@/lib/ai/context'
 import {
@@ -156,21 +156,10 @@ export async function generateActionProposal(
       .filter(([, v]) => v.id !== '__event__')
       .map(([type, v]) => ({ type, intent: v.intent_cs || '', urgency: v.urgency }))
 
-    // ─── EXTRACT: pure reading comprehension ────────────────────────────
+    // ─── TRIAGE: single-pass decision ───────────────────────────────────
     const cpName = cp.name || cp.primary_identifier || 'Unknown'
-    const extraction = await extractMessageFacts(
-      latestInboundText,
-      enrichment,
-      summary,
-      cpName,
-      settings,
-    )
-
-    console.log(`[Planning] Extraction for ${cpName}: asks=${extraction.what_cp_asks_for.length}, deadlines=${extraction.deadlines.length}, questions=${extraction.questions_for_user.length}`)
-
-    // ─── DECIDE: action type, urgency (uses verified facts, not raw email) ─
     const triageResult = await triageConversation(
-      extraction,
+      latestInboundText,
       formattedMessages,
       summary,
       pendingForPrompt,
@@ -181,42 +170,27 @@ export async function generateActionProposal(
       enrichment,
     )
 
-    // ─── MERGE: code-copy extraction fields onto triage result ──────────
-    if (triageResult.action) {
-      triageResult.action.venue_index = extraction.confirmed_venue_index
-      triageResult.action.meeting_venue = extraction.confirmed_venue_freetext
-      triageResult.action.time_index = extraction.confirmed_time_index
-      triageResult.action.proposed_time = extraction.confirmed_time_freetext
-      if (extraction.what_cp_asks_for.length > 0) {
-        triageResult.action.what_cp_wants = extraction.what_cp_asks_for[0]
-      }
-      if (extraction.questions_for_user.length > 0) {
-        triageResult.action.missing_info = extraction.questions_for_user.map(q => ({
-          label: q,
-          value: null,
-        }))
-      }
-    }
-    // ─── DETERMINISTIC SCHEDULE: code creates SCHEDULE from extraction data, not AI ─
+    // ─── DETERMINISTIC SCHEDULE: code creates from enrichment data, not AI ─
     const triageActions: TriageAction[] = triageResult.action ? [triageResult.action] : []
 
     if (
       triageResult.action &&
       triageResult.action.type !== 'SCHEDULE' &&
-      (extraction.confirmed_time_index !== null || extraction.confirmed_venue_index !== null)
+      (triageResult.action.time_index !== null || triageResult.action.venue_index !== null ||
+       triageResult.action.proposed_time !== null || triageResult.action.meeting_venue !== null)
     ) {
-      console.log(`[Planning] Deterministic SCHEDULE: time_index=${extraction.confirmed_time_index}, venue_index=${extraction.confirmed_venue_index}`)
+      console.log(`[Planning] Deterministic SCHEDULE: time_index=${triageResult.action.time_index}, venue_index=${triageResult.action.venue_index}, proposed_time=${triageResult.action.proposed_time}`)
       triageActions.push({
         type: 'SCHEDULE',
         intent_cs: 'Naplánovat schůzku dle požadavku.',
         rationale_cs: 'Protistrana navrhla čas nebo místo.',
         urgency_category: triageResult.action.urgency_category,
-        urgency_justification: 'Odvozeno z extrakce.',
+        urgency_justification: 'Odvozeno z triage.',
         what_cp_wants: triageResult.action.what_cp_wants,
-        venue_index: extraction.confirmed_venue_index,
-        meeting_venue: extraction.confirmed_venue_freetext,
-        time_index: extraction.confirmed_time_index,
-        proposed_time: extraction.confirmed_time_freetext,
+        venue_index: triageResult.action.venue_index,
+        meeting_venue: triageResult.action.meeting_venue,
+        time_index: triageResult.action.time_index,
+        proposed_time: triageResult.action.proposed_time,
         deal_type: triageResult.action.deal_type,
         weight: 7,
         immovable: false,
