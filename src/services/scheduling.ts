@@ -828,37 +828,26 @@ export async function optimizeScheduleActions(
     return (b.urgency ?? 1) - (a.urgency ?? 1)
   })
 
-  // Tear down all existing holds so the batch optimizer can re-optimize from scratch.
-  // Instant-notify creates holds without visibility into other pending actions,
-  // so those holds may conflict. The batch optimizer is the single authority.
+  // Keep existing holds — don't tear down and rebuild (causes duplicate events + race conditions).
+  // Actions with valid holds are skipped; their time is added to bookedRanges so new actions work around them.
+  const actionsToOptimize: typeof sortedActions = []
   for (const action of sortedActions) {
     const payload = action.payload as Record<string, unknown> | null
-    if (payload?.hold_event_id) {
-      const holdId = payload.hold_event_id as string
-      console.log(`[optimizer] Tearing down existing hold ${holdId} for action ${action.id} — will re-optimize`)
-      try {
-        await rejectSlot(userId, holdId)
-        // Clear hold data from action payload so it gets fresh hold data
-        await updateAction(action.id, {
-          payload: {
-            ...payload,
-            hold_event_id: null,
-            gcal_event_id: null,
-            start: null,
-            end: null,
-            conflicts: null,
-          },
-        }, action.user_id)
-      } catch (err) {
-        console.error(`[optimizer] Failed to tear down hold ${holdId}:`, err)
+    if (payload?.hold_event_id && payload?.start && payload?.end) {
+      const holdStart = new Date(payload.start as string)
+      const holdEnd = new Date(payload.end as string)
+      if (!isNaN(holdStart.getTime()) && !isNaN(holdEnd.getTime())) {
+        console.log(`[optimizer] Keeping existing hold for action ${action.id} (${holdStart.toISOString()} → ${holdEnd.toISOString()})`)
+        bookedRanges.push({ start: holdStart, end: holdEnd })
+        result.optimized++
+        result.holds.push({ id: payload.hold_event_id as string } as any)
+        continue
       }
     }
+    actionsToOptimize.push(action)
   }
 
-  // Re-fetch free slots after teardown (holds may have freed up slots)
-  allSlots = await findBestSlots(userId, settings.default_meeting_duration, 50)
-
-  for (const action of sortedActions) {
+  for (const action of actionsToOptimize) {
     const payload = action.payload as Record<string, unknown> | null
 
     const cpAvailability = (payload?.cp_availability as string) || null
@@ -1204,7 +1193,8 @@ async function enrichConflictData(
     let altSlotStart: string | null = null
     let altSlotEnd: string | null = null
     try {
-      const altSlots = await findBestSlots(userId, eventDuration, 1)
+      const conflictDate = new Date(existing.start_time)
+      const altSlots = await findBestSlots(userId, eventDuration, 1, conflictDate)
       if (altSlots.length > 0) {
         altSlotStart = altSlots[0].start.toISOString()
         altSlotEnd = altSlots[0].end.toISOString()

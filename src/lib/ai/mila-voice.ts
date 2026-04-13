@@ -26,7 +26,8 @@ export async function generateSchedulingIntent(
   rationale: string,
   dollarValue: number,
   recentContext: string,
-  settings: UserSettings
+  settings: UserSettings,
+  existingMissingInfo?: { label: string; value: null }[],
 ): Promise<{ intent_cs: string; missingInfo: { label: string; value: null }[] }> {
   const prompt = `You are Mila, a proactive executive assistant. Write an intent_cs for a SCHEDULE action card that will appear in the user's morning brief email.
 
@@ -57,10 +58,14 @@ RULES:
 - Address user as "vy" (you). Never "uživatel".
 - intent_cs: Combine the business stakes with the scheduling details. A human assistant wouldn't just say "I blocked a slot" — she'd say "Novotný needs signature by 5pm or the deal falls through. I blocked 9:00 at the notary."
 - Do NOT include the slot date/time separately (no "Termín: ..." line). The time is displayed by the card template. You can reference the time naturally in the narrative (e.g. "Rezervovala jsem hovor v 9:30") but do NOT repeat it as a standalone line.
-- missingInfo: array of questions. Each has "label" (full question in ${settings.ai_language || 'Czech'}) and "value": null.
-${scheduling.locationStatus === 'missing' ? '- Location is missing — include a question about meeting location.' : ''}
-${scheduling.locationStatus === 'partial' ? '- Location unverified — include a question to clarify.' : ''}
-${!scheduling.hasHold ? '- No slot found — include a question asking for preferred time.' : ''}
+- missingInfo: ONLY return the questions listed below. Do NOT invent new questions.
+EXISTING QUESTIONS TO FORMAT:
+${[
+  ...(existingMissingInfo || []).map((q: { label: string }) => `- ${q.label}`),
+  ...(scheduling.locationStatus === 'missing' ? ['- Kde se schůzka koná?'] : []),
+  ...(scheduling.locationStatus === 'partial' ? [`- Můžete upřesnit místo schůzky? (${scheduling.locationText})`] : []),
+  ...(!scheduling.hasHold ? ['- Jaký čas vám vyhovuje?'] : []),
+].join('\n') || '(none — return empty missingInfo array)'}
 
 Respond with ONLY valid JSON:
 {
