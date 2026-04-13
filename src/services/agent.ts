@@ -10,11 +10,12 @@ import { ingestCalendarEvents } from './calendar-ingestion'
 import { trackLeadsForUser } from './lead-tracking'
 import { runReflection } from './reflection'
 import { getUnassignedTimelineEntries } from '@/lib/db/timeline'
-import { getConversationsForUser } from '@/lib/db/conversations'
+import { getConversationsForUser, getRecentMessages } from '@/lib/db/conversations'
 import { getUserById, updateUserSettings, updateUserHistoryId } from '@/lib/db/users'
 import { getCurrentHistoryId } from '@/lib/google/gmail'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
 import { getActiveJournalEntries, expireTemporalEntries } from '@/lib/db/journal'
+import { tryAcquireUserLock, releaseUserLock } from '@/lib/db/locks'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import type { ActionProposal, JournalEntry } from '@/lib/supabase/types'
 
@@ -70,6 +71,31 @@ export function createLogCollector(): { logs: string[]; capture: () => () => voi
 export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
   const { logs, capture } = createLogCollector()
   const restore = capture()
+
+  // Acquire DB lock — prevents concurrent agent runs for same user
+  const lockAcquired = await tryAcquireUserLock(userId)
+  if (!lockAcquired) {
+    console.log(`[Agent] Skipping — another agent run is active for user ${userId}`)
+    restore()
+    return {
+      success: false,
+      emailsIngested: 0,
+      whatsappMessagesProcessed: 0,
+      calendarEventsSynced: 0,
+      calendarInvitationsDetected: 0,
+      messagesProcessed: 0,
+      conversationsUpdated: 0,
+      actionsGenerated: 0,
+      followUpsGenerated: 0,
+      coolingLeads: 0,
+      coldLeads: 0,
+      reflectionObservations: 0,
+      replyDraftsGenerated: 0,
+      actions: [],
+      errors: ['Agent run already in progress'],
+      logs,
+    }
+  }
 
   const result: AgentRunResult = {
     success: false,
@@ -184,6 +210,9 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       console.error('[Agent] Failed to save Gmail historyId:', historyErr instanceof Error ? historyErr.message : historyErr)
     }
 
+    // Tracks which conversation IDs were processed in Step 5 so Step 5.5 skips them
+    const processedConvIds = new Set<string>()
+
     // Step 3: Get all unprocessed messages (including newly ingested + WhatsApp)
     // Steps 3-5 depend on each other but are isolated from steps 2/2.5/6
     try {
@@ -216,6 +245,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
         // Step 5: Generate action proposals for updated conversations
         const conversationIds = Array.from(conversations.keys())
+        conversationIds.forEach(id => processedConvIds.add(id))
 
         // Also pick up conversations flagged via backfill report "Přidat do Mila"
         const flagged = await getConversationsForUser(userId, { state: 'needs_proposals' })
@@ -261,6 +291,48 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       result.errors.push(`Processing: ${processingError instanceof Error ? processingError.message : 'Unknown error'}`)
     }
 
+    // Step 5.5: Re-evaluate conversations with unanswered inbound messages
+    // Catches the dead zone between "new message arrived" and lead-tracking threshold (1-5 days)
+    try {
+      const allConversations = await getConversationsForUser(userId)
+      const staleConvIds: string[] = []
+
+      for (const conv of allConversations) {
+        // Skip if already processed in Step 5
+        if (processedConvIds.has(conv.id)) continue
+        // Skip snoozed
+        if (conv.snooze_until && new Date() < new Date(conv.snooze_until)) continue
+
+        const recentMsgs = await getRecentMessages(conv.id, 3)
+        if (recentMsgs.length === 0) continue
+
+        // Check if latest message is inbound and unanswered (no outbound after it)
+        const latest = recentMsgs[recentMsgs.length - 1]
+        if (latest.direction !== 'inbound') continue
+
+        // Check if there's already a pending action
+        const { hasPendingAction } = await import('@/lib/db/actions')
+        if (await hasPendingAction(conv.id)) continue
+
+        // Message is 1-5 days old (too new for lead tracking, too old for Step 5)
+        const msgAge = (Date.now() - new Date(latest.occurred_at || latest.timestamp).getTime()) / 86_400_000
+        if (msgAge >= 1 && msgAge <= 5) {
+          staleConvIds.push(conv.id)
+        }
+      }
+
+      if (staleConvIds.length > 0) {
+        console.log(`[Agent] Step 5.5: Re-evaluating ${staleConvIds.length} conversations with unanswered inbound (1-5 days old)`)
+        const staleActions = await generateActionsForConversations(staleConvIds)
+        result.actionsGenerated += staleActions.length
+        result.actions.push(...staleActions)
+        console.log(`[Agent] Step 5.5: Generated ${staleActions.length} actions from re-evaluation`)
+      }
+    } catch (err) {
+      console.error('[Agent] Step 5.5 failed:', err)
+      // Non-fatal
+    }
+
     // Step 6: Lead tracking — detect cooling/cold leads, create follow-up actions
     try {
       console.log(`[Agent] Step 6: Tracking leads`)
@@ -296,6 +368,9 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     console.error('[Agent] Error:', error)
     result.errors.push(error instanceof Error ? error.message : 'Unknown error')
   } finally {
+    await releaseUserLock(userId).catch(err =>
+      console.error('[Agent] Failed to release lock:', err)
+    )
     restore()
   }
 

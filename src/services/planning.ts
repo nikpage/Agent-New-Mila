@@ -1,4 +1,4 @@
-import { triageConversation, verifyTriage, parseEnrichedText, type TriageAction, type TriageResult, type EnrichedMessageData } from '@/lib/ai/gemini'
+import { triageConversation, verifyTriage, parseEnrichedText, extractMessageFacts, type TriageAction, type TriageResult, type EnrichedMessageData } from '@/lib/ai/gemini'
 import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt } from '@/lib/ai/context'
 import {
@@ -35,18 +35,20 @@ function mapUrgencyToNumber(
   category: 'CRITICAL' | 'TODAY' | 'THIS_WEEK' | 'SOON' | 'NONE',
   enrichmentSignal: 'HARD DEADLINE' | 'SOFT REFERENCE' | null
 ): number {
-  if (enrichmentSignal === 'HARD DEADLINE') return 10
-  if (enrichmentSignal === 'SOFT REFERENCE') {
-    const ranges: Record<string, number> = {
-      CRITICAL: 9, TODAY: 7, THIS_WEEK: 7, SOON: 7, NONE: 7,
-    }
-    return Math.max(7, ranges[category] || 7)
-  }
-
-  const ranges: Record<string, number> = {
+  // Base mapping from AI's urgency category
+  const baseMap: Record<string, number> = {
     CRITICAL: 9, TODAY: 7, THIS_WEEK: 5, SOON: 3, NONE: 1,
   }
-  return ranges[category] || 1
+  const base = baseMap[category] || 1
+
+  // Enrichment adjusts: hard deadline bumps up, soft reference bumps +1
+  if (enrichmentSignal === 'HARD DEADLINE') {
+    return Math.min(10, Math.max(base, 9))  // at least 9, cap at 10
+  }
+  if (enrichmentSignal === 'SOFT REFERENCE') {
+    return Math.min(10, base + 1)  // gentle bump, e.g. THIS_WEEK 5 -> 6
+  }
+  return base
 }
 
 /**
@@ -156,8 +158,19 @@ export async function generateActionProposal(
       .filter(([, v]) => v.id !== '__event__')
       .map(([type, v]) => ({ type, intent: v.intent_cs || '', urgency: v.urgency }))
 
-    // ─── TRIAGE: single-pass decision ───────────────────────────────────
+    // ─── EXTRACT: dedicated reading comprehension (triage_extract stage) ───
+    // Runs at temp 0 — more reliable for structured venue/time/questions fields.
+    // Only runs when enrichment is available (needs the addresses/times reference lists).
     const cpName = cp.name || cp.primary_identifier || 'Unknown'
+    const extraction = enrichment ? await extractMessageFacts(
+      latestInboundText,
+      enrichment,
+      summary,
+      cpName,
+      settings,
+    ) : null
+
+    // ─── TRIAGE: single-pass decision ───────────────────────────────────
     const triageResult = await triageConversation(
       latestInboundText,
       formattedMessages,
@@ -172,6 +185,34 @@ export async function generateActionProposal(
 
     // ─── DETERMINISTIC SCHEDULE: code creates from enrichment data, not AI ─
     const triageActions: TriageAction[] = triageResult.action ? [triageResult.action] : []
+
+    // ─── EXTRACTION MERGE: override triage AI's venue/time with dedicated extraction ─
+    // extractMessageFacts runs at temp 0 — more reliable for structured fields.
+    // Runs before code gates so the validated values flow through normally.
+    if (extraction && triageResult.action) {
+      if (extraction.confirmed_venue_index !== null) {
+        triageResult.action.venue_index = extraction.confirmed_venue_index
+        triageResult.action.meeting_venue = null // index takes priority
+      } else if (extraction.confirmed_venue_freetext) {
+        triageResult.action.meeting_venue = extraction.confirmed_venue_freetext
+        triageResult.action.venue_index = null
+      }
+      if (extraction.confirmed_time_index !== null) {
+        triageResult.action.time_index = extraction.confirmed_time_index
+        triageResult.action.proposed_time = null
+      } else if (extraction.confirmed_time_freetext) {
+        triageResult.action.proposed_time = extraction.confirmed_time_freetext
+        triageResult.action.time_index = null
+      }
+      // Merge CP questions into missing_info if triage didn't capture them
+      if (extraction.questions_for_user.length > 0 && triageResult.action.missing_info.length === 0) {
+        triageResult.action.missing_info = extraction.questions_for_user.map(q => ({ label: q, value: null }))
+      }
+      // what_cp_said is extraction's summary of CP intent — use as what_cp_wants fallback
+      if (!triageResult.action.what_cp_wants && extraction.what_cp_said) {
+        triageResult.action.what_cp_wants = extraction.what_cp_said
+      }
+    }
 
     if (
       triageResult.action &&

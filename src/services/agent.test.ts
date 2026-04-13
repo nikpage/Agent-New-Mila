@@ -63,6 +63,12 @@ vi.mock('@/lib/db/users', () => ({
 
 vi.mock('@/lib/db/conversations', () => ({
   getConversationsForUser: vi.fn().mockResolvedValue([]),
+  getRecentMessages: vi.fn().mockResolvedValue([]),
+}))
+
+vi.mock('@/lib/db/locks', () => ({
+  tryAcquireUserLock: vi.fn().mockResolvedValue(true),
+  releaseUserLock: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/lib/supabase/client', () => ({
