@@ -551,12 +551,12 @@ CP is making a new request that requires user action. NOT already covered by an 
 RULES:
 - ONLY propose actions that directly respond to what the CP EXPLICITLY asked (see "What CP asks for" in the facts). Do NOT invent actions.
 - confidence below 0.6 → system will discard the proposal
-- secondary_action: Use when the facts show TWO distinct action types needed. Only when BOTH are explicitly required.
+- secondary_action: Use when the facts show TWO distinct actions of different types. Examples: REPLY (confirm deal) + SCHEDULE (book signing). TODO (prepare docs) + SCHEDULE (attend signing). REPLY (confirm attendance) + SCHEDULE (notary appointment). Only when BOTH are explicitly required.
 - ACTION TYPES:
-  REPLY — user needs to send a response. If the facts show a HARD DEADLINE for a reply (e.g. "confirm by 5pm"), that is REPLY even if a meeting is also mentioned.
-  SCHEDULE — a meeting/viewing/appointment needs to be booked. Use only when the main ask IS the scheduling itself.
+  REPLY — user needs to send a response (confirmation, decision, answer). If the facts show a HARD DEADLINE for a reply (e.g. "confirm by 5pm or deal is off"), that is REPLY even if a meeting is also mentioned.
+  SCHEDULE — meeting/viewing/appointment/signing/call needs to be booked. Use SCHEDULE as primary only when the main ask IS the scheduling itself.
   TODO — user needs to do something that is NOT a message and NOT a meeting
-  When facts show BOTH a reply deadline AND a meeting, use REPLY as primary and SCHEDULE as secondary_action.
+  When facts show BOTH a reply deadline AND a meeting/call, use REPLY as primary and SCHEDULE as secondary_action.
 - intent_cs: TODO = numbered checklist (max 4 items, max 6 words each). REPLY/SCHEDULE = one sentence, max 20 words. Must reference specific names, dates, amounts from the facts.
 - weight: 1-10 immovability. immovable=true only for absolutely immovable events.
 - deal_type: sale | purchase | rental | lease | consultation | other | null

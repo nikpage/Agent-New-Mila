@@ -12,6 +12,8 @@ If logic is flawed: skip/flag minor issues, or halt for critical blockers.
 
 Prioritize architecture. Never introduce tech debt for quick fixes.
 
+Answer questions from what's already in context FIRST. Do NOT launch agents or read files to answer a question when the answer is visible in the conversation. Agents cost tokens — only use them when the information genuinely isn't available.
+
 - NEVER modify expected values in pinning tests (files: `actions.test.ts`, `lead-tracking.test.ts`, `threading.test.ts`, `defaults.test.ts`, `action-card-disable.test.ts`, `instant-notify-grouping.test.ts`, `draft-payload.test.ts`, `address-inference.test.ts`). If a pinning test fails, REPORT the failure and WAIT. Do not update the test to match new output
 
 ## Base URLs & Testing
