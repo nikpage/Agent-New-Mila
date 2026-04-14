@@ -11,7 +11,7 @@ import {
   getUserEmail,
   type EmailMessage,
 } from '@/lib/google/gmail'
-import { filterEmail, classifyEmail, enrichMessage, enrichedTextToString } from '@/lib/ai/gemini'
+import { filterEmail, classifyEmail, enrichMessage, enrichedTextToString } from '@/lib/ai/tasks'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'

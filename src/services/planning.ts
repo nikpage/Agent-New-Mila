@@ -1,4 +1,4 @@
-import { triageConversation, verifyTriage, parseEnrichedText, extractMessageFacts, type TriageAction, type TriageResult, type EnrichedMessageData } from '@/lib/ai/gemini'
+import { triageConversation, verifyTriage, parseEnrichedText, extractMessageFacts, type TriageAction, type TriageResult, type EnrichedMessageData } from '@/lib/ai/tasks'
 import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt } from '@/lib/ai/context'
 import {

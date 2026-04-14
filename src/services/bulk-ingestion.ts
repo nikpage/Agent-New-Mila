@@ -28,7 +28,7 @@ import {
   GMAIL_SKIP_CATEGORIES,
 } from '@/lib/google/gmail'
 import type { EmailMessage } from '@/lib/google/gmail'
-import { filterEmail, classifyEmail, enrichMessage } from '@/lib/ai/gemini'
+import { filterEmail, classifyEmail, enrichMessage } from '@/lib/ai/tasks'
 import { findOrCreateCP, isSameGmailAddress, normalizeGmailAddress, purgeUserAsCp } from '@/lib/db/counterparties'
 import { createMessage, messageExists, getUnprocessedMessages, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'

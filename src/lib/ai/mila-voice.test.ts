@@ -185,15 +185,15 @@ describe('lead-tracking.ts — no hardcoded intent templates', () => {
 })
 
 // ─── 5. gemini.ts: generateFinalDraft moved out ─────────────────────────────
-describe('gemini.ts — generateFinalDraft moved to mila-voice', () => {
-  const code = readSrc('src/lib/ai/gemini.ts')
+describe('tasks.ts — generateFinalDraft moved to mila-voice', () => {
+  const code = readSrc('src/lib/ai/tasks.ts')
 
   it('does not export generateFinalDraft', () => {
     // Should not have "export async function generateFinalDraft" or "export function generateFinalDraft"
     const exportPattern = /export\s+(async\s+)?function\s+generateFinalDraft/
     expect(
       exportPattern.test(code),
-      'generateFinalDraft should live in mila-voice.ts, not gemini.ts'
+      'generateFinalDraft should live in mila-voice.ts, not tasks.ts'
     ).toBe(false)
   })
 })

@@ -30,7 +30,7 @@ vi.mock('@/lib/db/counterparties', () => ({
   getCPById: vi.fn(),
 }))
 
-vi.mock('@/lib/ai/gemini', () => ({
+vi.mock('@/lib/ai/tasks', () => ({
   analyzeConversation: vi.fn(),
   extractTopic: vi.fn().mockResolvedValue('Test topic'),
   shouldJoinConversation: vi.fn(),

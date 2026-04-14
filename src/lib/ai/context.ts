@@ -15,7 +15,7 @@ import type { ConversationSummary, DealTimelineEntry, JournalEntry } from '@/lib
 import { getTimelineForConversation } from '@/lib/db/timeline'
 import { getJournalEntriesForContext } from '@/lib/db/journal'
 import { getRecentMessages } from '@/lib/db/conversations'
-import { parseEnrichedText, type EnrichedMessageData } from './gemini'
+import { parseEnrichedText, type EnrichedMessageData } from './tasks'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 

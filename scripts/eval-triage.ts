@@ -12,7 +12,7 @@
  * Run this BEFORE and AFTER any triage prompt change. If pass rate drops, revert.
  */
 
-import { triageConversation, type EnrichedMessageData } from '../src/lib/ai/gemini'
+import { triageConversation, type EnrichedMessageData } from '../src/lib/ai/tasks'
 import type { ConversationSummary, UserSettings } from '../src/lib/supabase/types'
 
 // ─── Minimal settings stub (enough for triage to run) ──────────────────────

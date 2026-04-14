@@ -27,7 +27,7 @@ import {
 
 // ─── Mock ONLY external boundaries ─────────────────────────────────────────
 
-vi.mock('@/lib/ai/gemini', () => ({
+vi.mock('@/lib/ai/tasks', () => ({
   classifyEmail: vi.fn(),
   filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
@@ -104,7 +104,7 @@ vi.mock('@/lib/google/maps', () => ({
 // ─── Static imports ─────────────────────────────────────────────────────────
 
 import { fetchUnreadEmails, fetchRecentEmails } from '@/lib/google/gmail'
-import { triageConversation, verifyTriage, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/gemini'
+import { triageConversation, verifyTriage, enrichMessage, classifyEmail, filterEmail, extractTopic, analyzeConversation } from '@/lib/ai/tasks'
 import { runAgentForUser } from './agent'
 
 // ─── Shared setup ──────────────────────────────────────────────────────────

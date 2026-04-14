@@ -30,7 +30,7 @@ const callOrder: string[] = []
 
 // ─── Mock ONLY external boundaries ─────────────────────────────────────────
 
-vi.mock('@/lib/ai/gemini', () => ({
+vi.mock('@/lib/ai/tasks', () => ({
   filterEmail: vi.fn().mockResolvedValue({ relevant: true }),
   classifyEmail: vi.fn().mockResolvedValue({
     isActionable: true,
@@ -102,7 +102,7 @@ vi.mock('./backfill-report', () => ({
 // ─── Static imports ─────────────────────────────────────────────────────────
 
 import { runBulkIngestion } from './bulk-ingestion'
-import { classifyEmail, enrichMessage } from '@/lib/ai/gemini'
+import { classifyEmail, enrichMessage } from '@/lib/ai/tasks'
 import { generateMessageEmbedding } from '@/lib/embeddings/generate'
 import { generateAndSendBackfillReport } from './backfill-report'
 import { fetchEmailsPaginated } from '@/lib/google/gmail'

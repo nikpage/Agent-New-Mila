@@ -34,7 +34,7 @@ import {
 
 // ─── Mock ONLY external boundaries (7 mocks, NOT 24) ───────────────────────
 
-vi.mock('@/lib/ai/gemini', () => ({
+vi.mock('@/lib/ai/tasks', () => ({
   classifyEmail: vi.fn(),
   filterEmail: vi.fn(),
   enrichMessage: vi.fn(),
@@ -104,7 +104,7 @@ vi.mock('@/lib/google/maps', () => ({
 
 // ─── Static imports (vi.mock hoisted above these) ──────────────────────────
 
-import { triageConversation, verifyTriage, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/gemini'
+import { triageConversation, verifyTriage, classifyEmail, enrichMessage, filterEmail } from '@/lib/ai/tasks'
 import { generateBriefIntro, generateLeadFollowUpIntent } from '@/lib/ai/mila-voice'
 import { sendEmail, fetchUnreadEmails, fetchEmailsPaginated, getUserEmail } from '@/lib/google/gmail'
 import { generateActionToken, validateActionToken } from '@/lib/auth/tokens'
@@ -625,7 +625,7 @@ describe.skipIf(!HAS_DB)('Integration: Ingestion → Threading flow (real DB)', 
 
   it('threading creates new conversation when no match', async () => {
     const { processMessagesForThreading } = await import('./threading')
-    const { extractTopic } = await import('@/lib/ai/gemini')
+    const { extractTopic } = await import('@/lib/ai/tasks')
 
     vi.mocked(extractTopic).mockResolvedValue('New topic')
 

@@ -18,7 +18,7 @@ import {
 } from '@/lib/db/conversations'
 import { updateMessage, getMessageById } from '@/lib/db/messages'
 import { getCPById } from '@/lib/db/counterparties'
-import { analyzeConversation, extractTopic, shouldJoinConversation } from '@/lib/ai/gemini'
+import { analyzeConversation, extractTopic, shouldJoinConversation } from '@/lib/ai/tasks'
 import { getJournalEntriesForContext } from '@/lib/db/journal'
 import { formatJournalForPrompt } from '@/lib/ai/context'
 import { runAITask } from '@/lib/ai/runner'

@@ -158,7 +158,7 @@ vi.mock('@/lib/google/calendar', () => ({
   deleteCalendarEvent: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/ai/gemini', () => ({}))
+vi.mock('@/lib/ai/tasks', () => ({}))
 
 vi.mock('@/lib/ai/mila-voice', () => ({
   generateFinalDraft: vi.fn().mockResolvedValue({ subject: 'Test', body: 'Test body' }),
