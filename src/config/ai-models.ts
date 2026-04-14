@@ -20,6 +20,7 @@ export type AIStage =
   | 'contradiction_analysis'
   | 'contradiction_escalation'
   | 'belief_audit'
+  | 'temporal'
 
 export interface ModelChain {
   primary: string
@@ -138,5 +139,13 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
     fallback1: 'claude-sonnet-4-6',
     fallback2: null,
     thinkingBudget: 8192,
+  },
+
+  // Temporal extraction — LLM generates DSL code from Czech time expressions
+  temporal: {
+    primary: 'gemini-2.5-flash',
+    fallback1: 'claude-haiku-4-5-20251001',
+    fallback2: null,
+    temperature: 0,
   },
 }
