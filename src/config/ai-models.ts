@@ -21,6 +21,8 @@ export type AIStage =
   | 'contradiction_escalation'
   | 'belief_audit'
   | 'temporal'
+  | 'extraction'
+  | 'reconstruction_critic'
 
 export interface ModelChain {
   primary: string
@@ -144,6 +146,22 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
   // Temporal extraction — LLM generates DSL code from Czech time expressions
   temporal: {
     primary: 'gemini-2.5-flash',
+    fallback1: 'claude-haiku-4-5-20251001',
+    fallback2: null,
+    temperature: 0,
+  },
+
+  // Fact & belief extraction — unified enrichment + facts in one scratchpad-first call
+  extraction: {
+    primary: 'gemini-2.5-flash',
+    fallback1: 'claude-sonnet-4-6',
+    fallback2: null,
+    temperature: 0,
+  },
+
+  // Reconstruction critic — QA pass: what did the extractor miss?
+  reconstruction_critic: {
+    primary: 'gemini-2.5-flash-lite',
     fallback1: 'claude-haiku-4-5-20251001',
     fallback2: null,
     temperature: 0,
