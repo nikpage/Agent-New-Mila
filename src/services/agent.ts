@@ -8,6 +8,7 @@ import { processTimelineEntries, rebuildConversationSummary } from './threading'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { runReflection } from './reflection'
 import { walkAllDeals } from './graph-walker'
+import type { WalkerTask } from './graph-walker'
 import { scoreWalkerOutput } from './scoring-engine'
 import { generateCards, insertCardsAsActions } from './card-generator'
 import { tagMessageToDeal } from './deal-tagger'
@@ -18,15 +19,17 @@ import { critiqueExtraction } from './reconstruction-critic'
 import { updateEntityMap } from './entity-map-updater'
 import { updateBeliefLog } from './belief-log-updater'
 import { updateGraph } from './graph-updater'
-import { getUnassignedTimelineEntries } from '@/lib/db/timeline'
+import { getUnassignedTimelineEntries, getTimelineContextForConversations } from '@/lib/db/timeline'
 import { getConversationsForUser } from '@/lib/db/conversations'
 import { getUserById, updateUserSettings, updateUserHistoryId, getUserSettings } from '@/lib/db/users'
 import { getCurrentHistoryId } from '@/lib/google/gmail'
-import { purgeUserAsCp } from '@/lib/db/counterparties'
-import { getActiveJournalEntries, expireTemporalEntries } from '@/lib/db/journal'
+import { purgeUserAsCp, getCPById } from '@/lib/db/counterparties'
+import { getActiveJournalEntries, expireTemporalEntries, getJournalEntriesForContext } from '@/lib/db/journal'
+import { getPendingActionsByType } from '@/lib/db/actions'
+import { triageConversation, verifyTriage, parseEnrichedText } from '@/lib/ai/tasks'
 
 import { getSupabaseAdmin } from '@/lib/supabase/client'
-import type { ActionProposal, JournalEntry, UserSettings } from '@/lib/supabase/types'
+import type { ActionProposal, JournalEntry, UserSettings, ConversationThread, ConversationSummary } from '@/lib/supabase/types'
 import type { DealMessage, DealContext } from './fact-extractor'
 
 export interface AgentRunResult {
@@ -195,6 +198,9 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       console.error('[Agent] Failed to save Gmail historyId:', historyErr instanceof Error ? historyErr.message : historyErr)
     }
 
+    // Conversations that received new inbound messages this run — used by Step 5 triage.
+    let newInboundConversations: Map<string, ConversationThread> | undefined
+
     // Step 3: Get all unprocessed messages (including newly ingested + WhatsApp)
     // Steps 3-5 depend on each other but are isolated from steps 2/2.5/6
     try {
@@ -211,6 +217,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
         console.log(`[Agent] Step 4: Threading messages into conversations`)
         const conversations = await processTimelineEntries(unassignedEntries)
         result.conversationsUpdated = conversations.size
+        newInboundConversations = conversations
         console.log(`[Agent] Step 4: Threaded into ${conversations.size} conversations`)
 
         // Step 4.5: Rebuild summaries for ALL updated conversations before planning.
@@ -315,7 +322,136 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       const plannerSettings = await getUserSettings(userId)
       if (plannerSettings) {
         const walkerOutputs = await walkAllDeals(userId, plannerSettings)
-        const scoredTasks = scoreWalkerOutput(walkerOutputs, plannerSettings)
+
+        // Triage conversations that received new inbound messages this run.
+        // Produces message-level WalkerTasks ranked alongside graph-level walker tasks.
+        const triageTasks: WalkerTask[] = []
+        const triageEntries: Array<{ task: WalkerTask; actionType: string }> = []
+
+        if (newInboundConversations && newInboundConversations.size > 0) {
+          const convIds = [...newInboundConversations.keys()]
+
+          // Fetch timeline context first, then journal with actual cpIds
+          const timelineContext = await getTimelineContextForConversations(convIds, 15)
+
+          const cpIds = new Set<string>()
+          for (const entries of timelineContext.values()) {
+            for (const e of entries) { if (e.cp_id) cpIds.add(e.cp_id) }
+          }
+
+          const journalWithCps = await getJournalEntriesForContext(userId, convIds, [...cpIds])
+
+          const convArray = [...newInboundConversations.entries()]
+          for (let i = 0; i < convArray.length; i += 5) {
+            const batch = convArray.slice(i, i + 5)
+            await Promise.allSettled(batch.map(async ([convId, conv]) => {
+              try {
+                const convEntries = timelineContext.get(convId) ?? []
+                const latestInbound = [...convEntries]
+                  .filter(e => e.direction === 'in')
+                  .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime())[0]
+
+                if (!latestInbound?.content) return
+
+                const now = Date.now()
+                const recentMessages = convEntries.map(e => {
+                  const diffH = Math.floor((now - new Date(e.occurred_at).getTime()) / 3_600_000)
+                  const age = diffH < 24 ? `${diffH}h ago` : `${Math.floor(diffH / 24)}d ago`
+                  return { direction: e.direction ?? 'in', text: e.content ?? '', age }
+                })
+
+                const summary = conv.summary_json as ConversationSummary | null
+
+                const pendingByType = await getPendingActionsByType(convId)
+                const pendingActions = [...pendingByType.entries()].map(([type, a]) => ({
+                  type, intent: a.intent_cs ?? '', urgency: a.urgency,
+                }))
+
+                const cpId = latestInbound.cp_id
+                let cpName = 'Unknown'
+                if (cpId) {
+                  const cp = await getCPById(cpId)
+                  cpName = cp?.name ?? 'Unknown'
+                }
+
+                const channel: 'email' | 'whatsapp' =
+                  latestInbound.event_type === 'whatsapp' ? 'whatsapp' : 'email'
+
+                const convJournalText = journalWithCps
+                  .filter(j =>
+                    j.scope === 'global' ||
+                    j.scope_ref === convId ||
+                    (cpId != null && j.scope_ref === cpId)
+                  )
+                  .map(j => j.content)
+                  .join('\n')
+
+                // enrichment: parse from latest message if available, null otherwise
+                const enrichment = latestInbound.content
+                  ? parseEnrichedText(latestInbound.content)
+                  : null
+
+                const triageResult = await triageConversation(
+                  latestInbound.content,
+                  recentMessages,
+                  summary,
+                  pendingActions,
+                  cpName,
+                  channel,
+                  plannerSettings,
+                  convJournalText,
+                  enrichment,
+                )
+
+                if (!triageResult.needs_action || !triageResult.action) return
+
+                const verify = await verifyTriage(latestInbound.content, triageResult, plannerSettings)
+                if (!verify.action_justified) return
+
+                const urgencyMap: Record<string, number> = {
+                  CRITICAL: 9, TODAY: 8, THIS_WEEK: 6, SOON: 4, NONE: 1,
+                }
+                const task: WalkerTask = {
+                  nodeId: `triage:${convId}`,
+                  dealId: conv.deal_id ?? convId,
+                  taskType: 'triage_action',
+                  deadline: null,
+                  hoursUntilDue: null,
+                  slack: null,
+                  cpId: cpId ?? null,
+                  entityMapSnapshot: {},
+                  beliefSnapshot: [],
+                  triageUrgency: urgencyMap[triageResult.action.urgency_category] ?? 5,
+                }
+
+                triageEntries.push({ task, actionType: triageResult.action.type })
+                triageTasks.push(task)
+                console.log(`[Agent] Step 5: Triage → ${triageResult.action.type} (${triageResult.action.urgency_category}) for conv ${convId}`)
+              } catch (err) {
+                console.warn(`[Agent] Step 5: Triage failed for conversation ${convId}:`, err)
+              }
+            }))
+          }
+        }
+
+        // Dedup: triage has message-level context — it supersedes walker tasks of the same
+        // type family on the same deal. REPLY/TODO → drops 'blocking'; SCHEDULE → drops 'calendar_conflict'.
+        if (triageEntries.length > 0) {
+          const triageRepliesOrTodos = new Set(
+            triageEntries.filter(e => e.actionType !== 'SCHEDULE').map(e => e.task.dealId)
+          )
+          const triageSchedules = new Set(
+            triageEntries.filter(e => e.actionType === 'SCHEDULE').map(e => e.task.dealId)
+          )
+          for (const output of walkerOutputs) {
+            output.tasks = output.tasks.filter(task =>
+              !(task.taskType === 'blocking'          && triageRepliesOrTodos.has(output.deal.id)) &&
+              !(task.taskType === 'calendar_conflict' && triageSchedules.has(output.deal.id))
+            )
+          }
+        }
+
+        const scoredTasks = scoreWalkerOutput(walkerOutputs, plannerSettings, triageTasks)
         const topTasks = scoredTasks.slice(0, 20)
         const cards = await generateCards(topTasks, plannerSettings)
         const newActions = await insertCardsAsActions(userId, cards)

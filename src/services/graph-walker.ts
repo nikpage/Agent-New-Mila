@@ -26,6 +26,7 @@ export type WalkerTaskType =
   | 'lead_cooling'
   | 'lead_cold'
   | 'lead_dead'
+  | 'triage_action'
 
 export interface WalkerTask {
   /** Node ID, or 'deal:lead' for deal-level lead tracking tasks */
@@ -42,6 +43,8 @@ export interface WalkerTask {
   entityMapSnapshot: Record<string, string>
   /** Current deal beliefs — latest content per topic */
   beliefSnapshot: string[]
+  /** Urgency (1–10) from AI triage — only set for taskType='triage_action' */
+  triageUrgency?: number
 }
 
 export interface GraphWalkerOutput {
