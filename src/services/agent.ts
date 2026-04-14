@@ -9,15 +9,24 @@ import { generateActionsForConversations } from './planning'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { trackLeadsForUser } from './lead-tracking'
 import { runReflection } from './reflection'
+import { tagMessageToDeal } from './deal-tagger'
+import { checkBypass } from './bypass-filter'
+import { extractTemporalExpressions } from './temporal-extractor'
+import { extractFactsAndBeliefs } from './fact-extractor'
+import { critiqueExtraction } from './reconstruction-critic'
+import { updateEntityMap } from './entity-map-updater'
+import { updateBeliefLog } from './belief-log-updater'
+import { updateGraph } from './graph-updater'
 import { getUnassignedTimelineEntries } from '@/lib/db/timeline'
 import { getConversationsForUser } from '@/lib/db/conversations'
-import { getUserById, updateUserSettings, updateUserHistoryId } from '@/lib/db/users'
+import { getUserById, updateUserSettings, updateUserHistoryId, getUserSettings } from '@/lib/db/users'
 import { getCurrentHistoryId } from '@/lib/google/gmail'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
 import { getActiveJournalEntries, expireTemporalEntries } from '@/lib/db/journal'
 
 import { getSupabaseAdmin } from '@/lib/supabase/client'
-import type { ActionProposal, JournalEntry } from '@/lib/supabase/types'
+import type { ActionProposal, JournalEntry, UserSettings } from '@/lib/supabase/types'
+import type { DealMessage, DealContext } from './fact-extractor'
 
 export interface AgentRunResult {
   success: boolean
@@ -213,6 +222,80 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
           } catch (err) {
             console.error(`[Agent] Step 4.5: Summary rebuild failed for ${conv.id}:`, err)
           }
+        }
+
+        // Step 4b: Deal pipeline — tag entries to deals + run world model updates
+        // Dual-write: old path (conversations/enriched_text) continues above.
+        // New path writes deal_id + entity_map + belief_log + deal_graph alongside it.
+        try {
+          const userSettings: UserSettings | null = await getUserSettings(userId)
+          if (userSettings) {
+            await Promise.allSettled(
+              unassignedEntries.map(async (entry) => {
+                try {
+                  // 1. Bypass filter — flag genuine same-day emergencies
+                  if (entry.content?.trim()) {
+                    const bypass = await checkBypass(entry.content, entry.event_type, userSettings)
+                    if (bypass.isEmergency) {
+                      const supabase = getSupabaseAdmin()
+                      await supabase
+                        .from('deal_timeline')
+                        .update({ is_emergency: true })
+                        .eq('id', entry.id)
+                      console.log(`[Agent] Step 4b: EMERGENCY entry ${entry.id} — ${bypass.reason}`)
+                    }
+                  }
+
+                  // 2. Tag to deal (skip if already tagged by ingestion)
+                  const dealId = entry.deal_id ?? (await tagMessageToDeal(entry, userId)).id
+
+                  if (!entry.content?.trim()) return
+
+                  // 3. Temporal extraction
+                  const temporalResult = await extractTemporalExpressions(
+                    entry.content,
+                    new Date(entry.occurred_at),
+                    userSettings
+                  )
+
+                  // 4. Fact & belief extraction (single-message batch)
+                  const dealMessage: DealMessage = {
+                    id: entry.id,
+                    direction: entry.direction as DealMessage['direction'],
+                    content: entry.content,
+                    occurred_at: entry.occurred_at,
+                    channel: entry.event_type as DealMessage['channel'],
+                  }
+                  const dealContext: DealContext = {
+                    deal_id: dealId,
+                    deal_title: entry.content.slice(0, 80),
+                    deal_type: 'other',
+                  }
+                  const extraction = await extractFactsAndBeliefs(
+                    [dealMessage], temporalResult, dealContext, userSettings
+                  )
+
+                  // 5. Reconstruction critic (fail-open — gaps logged for future use)
+                  const critique = await critiqueExtraction([entry.content], extraction)
+                  if (!critique.is_complete && critique.gaps.length > 0) {
+                    console.log(`[Agent] Step 4b: Extraction gaps for entry ${entry.id}: ${critique.gaps.join('; ')}`)
+                  }
+
+                  // 6. World model updates (entity map + belief log + dependency graph)
+                  await Promise.allSettled([
+                    updateEntityMap(userId, dealId, extraction.hard_facts),
+                    updateBeliefLog(userId, dealId, extraction.soft_observations, userSettings.ai_language),
+                    updateGraph(userId, dealId, extraction.hard_facts),
+                  ])
+                } catch (entryErr) {
+                  console.warn(`[Agent] Step 4b: Pipeline failed for entry ${entry.id}:`, entryErr)
+                }
+              })
+            )
+          }
+        } catch (step4bErr) {
+          // Non-fatal — old pipeline unaffected
+          console.error('[Agent] Step 4b: Deal pipeline error:', step4bErr)
         }
 
         // Step 5: Generate action proposals for updated conversations
