@@ -353,17 +353,20 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     )
 
     // ─── Order and filter actions for the brief ─────────────────────────────
-    // 1. Group by conversation
-    // 2. Within each conversation: if both TODO (prep) and REPLY/SCHEDULE (CP action) exist,
+    // 1. Group by deal_id (when set) or conversation_id (legacy fallback)
+    //    deal_id grouping ensures all tasks for a deal appear together even if
+    //    they span multiple conversation threads.
+    // 2. Within each group: if both TODO (prep) and REPLY/SCHEDULE (CP action) exist,
     //    show only the TODO unless both are urgent (>= 9). Prep first, then act.
-    // 3. Sort conversations by highest urgency action (most urgent first)
-    // 4. Within a conversation, logical order: TODO before REPLY/SCHEDULE
+    // 3. Sort groups by highest urgency action (most urgent first)
+    // 4. Within a group, logical order: TODO before REPLY/SCHEDULE
     const conversationGroups = new Map<string, BriefAction[]>()
     for (const ba of briefActions) {
-      const convId = ba.action.conversation_id
-      const group = conversationGroups.get(convId) || []
+      // Use deal_id for grouping when available; fall back to conversation_id
+      const groupKey = ba.action.deal_id ?? ba.action.conversation_id
+      const group = conversationGroups.get(groupKey) || []
       group.push(ba)
-      conversationGroups.set(convId, group)
+      conversationGroups.set(groupKey, group)
     }
 
     const orderedBriefActions: BriefAction[] = []

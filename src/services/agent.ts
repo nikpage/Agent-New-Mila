@@ -388,3 +388,157 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
 // runAgentForAllUsers removed — replaced by /api/agent/dispatch endpoint
 // which uses Gmail history.list to check for new mail and fans out via QStash.
+
+// ─── Flow A export (Chunk 9b) ─────────────────────────────────────────────────
+//
+// Flow A = ingestion + world model updates only.
+// No planning, no lead tracking, no reflection.
+// Called by /api/planner/run (Flow B) after ingestion to ensure fresh data.
+// Also called directly by dispatcher for 24/7 ingestion (Chunk 10 cutover).
+
+export interface FlowAResult {
+  success: boolean
+  emailsIngested: number
+  messagesProcessed: number
+  errors: string[]
+}
+
+export async function runFlowA(userId: string): Promise<FlowAResult> {
+  const result: FlowAResult = {
+    success: false,
+    emailsIngested: 0,
+    messagesProcessed: 0,
+    errors: [],
+  }
+
+  try {
+    // Step 1: Verify user exists and has credentials
+    const user = await getUserById(userId)
+    if (!user) {
+      result.errors.push('User not found')
+      return result
+    }
+    if (!user.google_oauth_tokens && !user.encrypted_google_tokens) {
+      result.errors.push('User has no Google credentials')
+      return result
+    }
+
+    // Step 0: Purge user-as-counterparty rows
+    try {
+      await purgeUserAsCp(userId)
+    } catch (err) {
+      result.errors.push(`Purge: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    }
+
+    // Step 0.5: Expire temporal journal entries
+    try {
+      await expireTemporalEntries()
+    } catch (err) {
+      result.errors.push(`Journal expire: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    }
+
+    // Steps 2/2.1/2.5: Ingest emails + calendar in parallel
+    const [inboundResult, outboundResult] = await Promise.allSettled([
+      ingestEmailsForUser(userId),
+      ingestOutboundEmails(userId),
+      ingestCalendarEvents(userId),
+    ])
+
+    if (inboundResult.status === 'fulfilled') {
+      result.emailsIngested += inboundResult.value.length
+    } else {
+      result.errors.push(`Email ingestion: ${inboundResult.reason instanceof Error ? inboundResult.reason.message : 'Unknown error'}`)
+    }
+    if (outboundResult.status === 'fulfilled') {
+      result.emailsIngested += outboundResult.value
+    } else {
+      result.errors.push(`Outbound ingestion: ${outboundResult.reason instanceof Error ? outboundResult.reason.message : 'Unknown error'}`)
+    }
+
+    // Save Gmail historyId
+    try {
+      const historyId = await getCurrentHistoryId(userId)
+      if (historyId) await updateUserHistoryId(userId, historyId)
+    } catch { /* non-fatal */ }
+
+    // Step 3: Get unassigned timeline entries
+    const unassignedEntries = await getUnassignedTimelineEntries(userId)
+    result.messagesProcessed = unassignedEntries.length
+
+    if (unassignedEntries.length > 0) {
+      // Step 4: Thread into conversations (legacy path — kept for backward compat)
+      try {
+        const conversations = await processTimelineEntries(unassignedEntries)
+        for (const conv of conversations.values()) {
+          try {
+            await rebuildConversationSummary(conv)
+          } catch { /* non-fatal */ }
+        }
+      } catch (err) {
+        result.errors.push(`Threading: ${err instanceof Error ? err.message : 'Unknown error'}`)
+      }
+
+      // Step 4b: New deal pipeline (world model updates)
+      try {
+        const userSettings: UserSettings | null = await getUserSettings(userId)
+        if (userSettings) {
+          await Promise.allSettled(
+            unassignedEntries.map(async (entry) => {
+              try {
+                if (entry.content?.trim()) {
+                  const bypass = await checkBypass(entry.content, entry.event_type, userSettings)
+                  if (bypass.isEmergency) {
+                    const supabase = getSupabaseAdmin()
+                    await supabase.from('deal_timeline').update({ is_emergency: true }).eq('id', entry.id)
+                  }
+                }
+
+                const dealId = entry.deal_id ?? (await tagMessageToDeal(entry, userId)).id
+                if (!entry.content?.trim()) return
+
+                const temporalResult = await extractTemporalExpressions(
+                  entry.content, new Date(entry.occurred_at), userSettings
+                )
+
+                const dealMessage: DealMessage = {
+                  id: entry.id,
+                  direction: entry.direction as DealMessage['direction'],
+                  content: entry.content,
+                  occurred_at: entry.occurred_at,
+                  channel: entry.event_type as DealMessage['channel'],
+                }
+                const dealContext: DealContext = {
+                  deal_id: dealId,
+                  deal_title: entry.content.slice(0, 80),
+                  deal_type: 'other',
+                }
+                const extraction = await extractFactsAndBeliefs([dealMessage], temporalResult, dealContext, userSettings)
+
+                const critique = await critiqueExtraction([entry.content], extraction)
+                if (!critique.is_complete && critique.gaps.length > 0) {
+                  console.log(`[FlowA] Extraction gaps for entry ${entry.id}: ${critique.gaps.join('; ')}`)
+                }
+
+                await Promise.allSettled([
+                  updateEntityMap(userId, dealId, extraction.hard_facts),
+                  updateBeliefLog(userId, dealId, extraction.soft_observations, userSettings.ai_language),
+                  updateGraph(userId, dealId, extraction.hard_facts),
+                ])
+              } catch (entryErr) {
+                console.warn(`[FlowA] Pipeline failed for entry ${entry.id}:`, entryErr)
+              }
+            })
+          )
+        }
+      } catch (err) {
+        result.errors.push(`World model: ${err instanceof Error ? err.message : 'Unknown error'}`)
+      }
+    }
+
+    result.success = true
+  } catch (err) {
+    result.errors.push(err instanceof Error ? err.message : 'Unknown error')
+  }
+
+  return result
+}
