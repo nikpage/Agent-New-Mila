@@ -229,6 +229,7 @@ export interface Database {
           snooze_until: string | null
           created_at: string | null
           last_updated: string | null
+          deal_id: string | null
         }
         Insert: {
           id?: string
@@ -247,6 +248,7 @@ export interface Database {
           snooze_until?: string | null
           created_at?: string | null
           last_updated?: string | null
+          deal_id?: string | null
         }
         Update: {
           id?: string
@@ -265,6 +267,7 @@ export interface Database {
           snooze_until?: string | null
           created_at?: string | null
           last_updated?: string | null
+          deal_id?: string | null
         }
       }
       thread_participants: {
@@ -302,7 +305,6 @@ export interface Database {
           priority_score: number
           dollar_value: number
           urgency: number
-
           weight: number | null
           offer_multiplier: number | null
           queued_for_brief: boolean | null
@@ -311,6 +313,7 @@ export interface Database {
           original_intent_cs: string | null
           created_at: string
           updated_at: string
+          deal_id: string | null
         }
         Insert: {
           id?: string
@@ -329,7 +332,6 @@ export interface Database {
           priority_score?: number
           dollar_value?: number
           urgency?: number
-
           weight?: number | null
           offer_multiplier?: number | null
           queued_for_brief?: boolean | null
@@ -338,6 +340,7 @@ export interface Database {
           original_intent_cs?: string | null
           created_at?: string
           updated_at?: string
+          deal_id?: string | null
         }
         Update: {
           id?: string
@@ -356,7 +359,6 @@ export interface Database {
           priority_score?: number
           dollar_value?: number
           urgency?: number
-
           weight?: number | null
           offer_multiplier?: number | null
           queued_for_brief?: boolean | null
@@ -365,6 +367,7 @@ export interface Database {
           original_intent_cs?: string | null
           created_at?: string
           updated_at?: string
+          deal_id?: string | null
         }
       }
       todos: {
@@ -604,6 +607,7 @@ export interface Database {
           is_stale: boolean
           created_at: string
           updated_at: string
+          deal_id: string | null
         }
         Insert: {
           id?: string
@@ -622,6 +626,7 @@ export interface Database {
           is_stale?: boolean
           created_at?: string
           updated_at?: string
+          deal_id?: string | null
         }
         Update: {
           id?: string
@@ -640,6 +645,7 @@ export interface Database {
           is_stale?: boolean
           created_at?: string
           updated_at?: string
+          deal_id?: string | null
         }
       }
       deal_timeline: {
@@ -656,6 +662,9 @@ export interface Database {
           content: string | null
           message_id: string | null
           metadata: Json | null
+          deal_id: string | null
+          temporal_data: Json | null
+          is_emergency: boolean
         }
         Insert: {
           id?: string
@@ -670,6 +679,9 @@ export interface Database {
           content?: string | null
           message_id?: string | null
           metadata?: Json | null
+          deal_id?: string | null
+          temporal_data?: Json | null
+          is_emergency?: boolean
         }
         Update: {
           id?: string
@@ -684,6 +696,222 @@ export interface Database {
           content?: string | null
           message_id?: string | null
           metadata?: Json | null
+          deal_id?: string | null
+          temporal_data?: Json | null
+          is_emergency?: boolean
+        }
+      }
+      deals: {
+        Row: {
+          id: string
+          user_id: string
+          title: string
+          category: string
+          user_role: string
+          deal_type: string | null
+          status: string
+          parent_deal_id: string | null
+          potential_merge_with: string | null
+          anomaly_boost: number
+          last_activity_at: string | null
+          last_processed_at: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          title: string
+          category?: string
+          user_role?: string
+          deal_type?: string | null
+          status?: string
+          parent_deal_id?: string | null
+          potential_merge_with?: string | null
+          anomaly_boost?: number
+          last_activity_at?: string | null
+          last_processed_at?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          title?: string
+          category?: string
+          user_role?: string
+          deal_type?: string | null
+          status?: string
+          parent_deal_id?: string | null
+          potential_merge_with?: string | null
+          anomaly_boost?: number
+          last_activity_at?: string | null
+          last_processed_at?: string | null
+          created_at?: string
+        }
+      }
+      deal_participants: {
+        Row: {
+          id: string
+          deal_id: string
+          cp_id: string
+          role: string | null
+          status: string
+          added_at: string
+          dropped_at: string | null
+        }
+        Insert: {
+          id?: string
+          deal_id: string
+          cp_id: string
+          role?: string | null
+          status?: string
+          added_at?: string
+          dropped_at?: string | null
+        }
+        Update: {
+          id?: string
+          deal_id?: string
+          cp_id?: string
+          role?: string | null
+          status?: string
+          added_at?: string
+          dropped_at?: string | null
+        }
+      }
+      entity_map: {
+        Row: {
+          id: string
+          user_id: string
+          deal_id: string
+          entity_type: string
+          entity_key: string
+          entity_value: string
+          source_message_id: string | null
+          confidence: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          deal_id: string
+          entity_type: string
+          entity_key: string
+          entity_value: string
+          source_message_id?: string | null
+          confidence?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          deal_id?: string
+          entity_type?: string
+          entity_key?: string
+          entity_value?: string
+          source_message_id?: string | null
+          confidence?: number
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      deal_graph_nodes: {
+        Row: {
+          id: string
+          deal_id: string
+          user_id: string
+          cp_id: string | null
+          label: string
+          node_type: string
+          status: string
+          completed_at: string | null
+          deadline: string | null
+          metadata: Json
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          deal_id: string
+          user_id: string
+          cp_id?: string | null
+          label: string
+          node_type: string
+          status?: string
+          completed_at?: string | null
+          deadline?: string | null
+          metadata?: Json
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          deal_id?: string
+          user_id?: string
+          cp_id?: string | null
+          label?: string
+          node_type?: string
+          status?: string
+          completed_at?: string | null
+          deadline?: string | null
+          metadata?: Json
+          created_at?: string
+        }
+      }
+      deal_graph_edges: {
+        Row: {
+          id: string
+          deal_id: string
+          from_node_id: string
+          to_node_id: string
+          edge_type: string
+          source: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          deal_id: string
+          from_node_id: string
+          to_node_id: string
+          edge_type?: string
+          source?: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          deal_id?: string
+          from_node_id?: string
+          to_node_id?: string
+          edge_type?: string
+          source?: string
+          created_at?: string
+        }
+      }
+      extraction_results: {
+        Row: {
+          id: string
+          user_id: string
+          deal_id: string
+          scratchpad: string | null
+          hard_facts: Json
+          soft_observations: Json
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          deal_id: string
+          scratchpad?: string | null
+          hard_facts?: Json
+          soft_observations?: Json
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          deal_id?: string
+          scratchpad?: string | null
+          hard_facts?: Json
+          soft_observations?: Json
+          created_at?: string
         }
       }
     }
@@ -718,6 +946,18 @@ export type DealTimelineEntry = Database['public']['Tables']['deal_timeline']['R
 export type DealTimelineInsert = Database['public']['Tables']['deal_timeline']['Insert']
 export type JournalEntry = Database['public']['Tables']['journal_entries']['Row']
 export type JournalEntryInsert = Database['public']['Tables']['journal_entries']['Insert']
+export type Deal = Database['public']['Tables']['deals']['Row']
+export type DealInsert = Database['public']['Tables']['deals']['Insert']
+export type DealParticipant = Database['public']['Tables']['deal_participants']['Row']
+export type DealParticipantInsert = Database['public']['Tables']['deal_participants']['Insert']
+export type EntityMapEntry = Database['public']['Tables']['entity_map']['Row']
+export type EntityMapEntryInsert = Database['public']['Tables']['entity_map']['Insert']
+export type DealGraphNode = Database['public']['Tables']['deal_graph_nodes']['Row']
+export type DealGraphNodeInsert = Database['public']['Tables']['deal_graph_nodes']['Insert']
+export type DealGraphEdge = Database['public']['Tables']['deal_graph_edges']['Row']
+export type DealGraphEdgeInsert = Database['public']['Tables']['deal_graph_edges']['Insert']
+export type ExtractionResult = Database['public']['Tables']['extraction_results']['Row']
+export type ExtractionResultInsert = Database['public']['Tables']['extraction_results']['Insert']
 
 // Insert types
 export type UserInsert = Database['public']['Tables']['users']['Insert']
