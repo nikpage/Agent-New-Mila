@@ -11,9 +11,13 @@
  * Fails open: LLM errors return a card with safe-default text.
  */
 
+import { v4 as uuidv4 } from 'uuid'
 import { runAITask } from '@/lib/ai/runner'
 import { getCurrentBeliefs } from '@/lib/db/journal'
-import type { UserSettings } from '@/lib/supabase/types'
+import { createAction } from '@/lib/db/actions'
+import { getParticipants } from '@/lib/db/conversations'
+import { getSupabaseAdmin } from '@/lib/supabase/client'
+import type { UserSettings, ActionProposal } from '@/lib/supabase/types'
 import type { ScoredTask, ScoreBreakdown } from './scoring-engine'
 import type { WalkerTaskType } from './graph-walker'
 
@@ -247,6 +251,138 @@ export async function generateCards(
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
+
+// ─── DB insertion ─────────────────────────────────────────────────────────────
+
+/** Parse CZK currency strings: "4 500 000 Kč" → 4500000 */
+function parseCurrencyValue(value: string): number {
+  const cleaned = value.replace(/[^\d.]/g, '')
+  const n = parseFloat(cleaned)
+  return isNaN(n) ? 0 : n
+}
+
+/**
+ * Insert ActionCards as action_proposals in the database.
+ *
+ * Resolution strategy:
+ * 1. Find the most recent conversation for each deal (via conversation_threads.deal_id)
+ *    Falls back to treating deal_id as conversation_id for backfilled 1:1 data.
+ * 2. Get cp_id from card.cpId or from the conversation's first participant.
+ * 3. Dedup: skip if a pending action of the same type already exists for this deal.
+ * 4. Insert via createAction().
+ *
+ * Cards that can't be resolved (no conversation, no cp) are silently skipped.
+ */
+export async function insertCardsAsActions(
+  userId: string,
+  cards: ActionCard[]
+): Promise<ActionProposal[]> {
+  if (cards.length === 0) return []
+
+  const supabase = getSupabaseAdmin()
+  const inserted: ActionProposal[] = []
+
+  // Pre-fetch: which deal+type combos already have a pending action?
+  // Avoids N queries per card.
+  const { data: existingRows } = await supabase
+    .from('action_proposals')
+    .select('deal_id, action_type')
+    .eq('user_id', userId)
+    .eq('status', 'pending')
+    .not('deal_id', 'is', null)
+
+  const existingDealTypes = new Set<string>(
+    (existingRows ?? []).map(r => `${r.deal_id}:${r.action_type}`)
+  )
+
+  for (const card of cards) {
+    try {
+      // Skip if same type is already pending for this deal
+      const dedupeKey = `${card.dealId}:${card.card_type}`
+      if (existingDealTypes.has(dedupeKey)) continue
+
+      // Find conversation: query by deal_id first, fall back to id = dealId
+      let conversationId: string | null = null
+      const { data: byDealId } = await supabase
+        .from('conversation_threads')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('deal_id', card.dealId)
+        .order('last_updated', { ascending: false, nullsFirst: false })
+        .limit(1)
+
+      if (byDealId && byDealId.length > 0) {
+        conversationId = byDealId[0].id
+      } else {
+        // Backfill fallback: for existing data, deal.id = conversation.id
+        const { data: byId } = await supabase
+          .from('conversation_threads')
+          .select('id')
+          .eq('user_id', userId)
+          .eq('id', card.dealId)
+          .limit(1)
+        if (byId && byId.length > 0) {
+          conversationId = byId[0].id
+        }
+      }
+
+      if (!conversationId) continue  // Can't insert without conversation_id
+
+      // Get cp_id: from card first, else from conversation participants
+      let cpId = card.cpId
+      if (!cpId) {
+        const participants = await getParticipants(conversationId)
+        cpId = participants[0]?.cp_id ?? null
+      }
+      if (!cpId) continue  // Can't insert without cp_id
+
+      // Dollar value from entity map
+      const priceStr = card.entityMapSnapshot['price.asking_price']
+        ?? card.entityMapSnapshot['price.sale_price']
+        ?? '0'
+      const dollarValue = parseCurrencyValue(priceStr)
+
+      const action = await createAction({
+        id: uuidv4(),
+        user_id: userId,
+        conversation_id: conversationId,
+        cp_id: cpId,
+        deal_id: card.dealId,
+        action_type: card.card_type,
+        status: 'pending',
+        intent_cs: card.intent_cs,
+        rationale_cs: card.rationale_cs,
+        rationale: card.rationale_cs,  // Czech is fine for internal field
+        missing_info: card.placeholders.length > 0
+          ? card.placeholders.map(p => ({ label: p, value: null }))
+          : null,
+        priority_score: card.score,
+        dollar_value: dollarValue,
+        urgency: card.urgency,
+        weight: card.scoreBreakdown.immovability || null,
+        offer_multiplier: null,
+        draft_subject: null,
+        draft_body_text: null,
+        queued_for_brief: true,
+        payload: {
+          urgency: card.urgency,
+          taskType: card.taskType,
+          channel: 'email',
+          placeholders: card.placeholders,
+          has_draft_skeleton: card.draft_skeleton !== null,
+        },
+      })
+
+      inserted.push(action)
+      // Track inserted for same-run dedup
+      existingDealTypes.add(dedupeKey)
+    } catch (err) {
+      console.warn(`[CardGenerator] Failed to insert card for deal ${card.dealId}:`, err)
+    }
+  }
+
+  return inserted
+}
 
 function buildFallbackCard(
   task: ScoredTask,

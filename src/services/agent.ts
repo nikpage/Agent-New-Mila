@@ -5,10 +5,11 @@
 
 import { ingestEmailsForUser, ingestOutboundEmails } from './ingestion'
 import { processTimelineEntries, rebuildConversationSummary } from './threading'
-import { generateActionsForConversations } from './planning'
 import { ingestCalendarEvents } from './calendar-ingestion'
-import { trackLeadsForUser } from './lead-tracking'
 import { runReflection } from './reflection'
+import { walkAllDeals } from './graph-walker'
+import { scoreWalkerOutput } from './scoring-engine'
+import { generateCards, insertCardsAsActions } from './card-generator'
 import { tagMessageToDeal } from './deal-tagger'
 import { checkBypass } from './bypass-filter'
 import { extractTemporalExpressions } from './temporal-extractor'
@@ -298,68 +299,57 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
           console.error('[Agent] Step 4b: Deal pipeline error:', step4bErr)
         }
 
-        // Step 5: Generate action proposals for updated conversations
-        const conversationIds = Array.from(conversations.keys())
-
-        // Also pick up conversations flagged via backfill report "Přidat do Mila"
-        const flagged = await getConversationsForUser(userId, { state: 'needs_proposals' })
-        for (const fc of flagged) {
-          if (!conversationIds.includes(fc.id)) conversationIds.push(fc.id)
-        }
-
-        console.log(`[Agent] Step 5: Generating action proposals for ${conversationIds.length} conversations (${flagged.length} from backfill)`)
-        const actions = await generateActionsForConversations(conversationIds)
-        result.actionsGenerated += actions.length
-        result.actions = actions
-        console.log(`[Agent] Step 5: Generated ${actions.length} actions`)
-
-        // Clear the flag on processed conversations
-        if (flagged.length > 0) {
-          const supabase = getSupabaseAdmin()
-          await supabase
-            .from('conversation_threads')
-            .update({ state: null })
-            .in('id', flagged.map(f => f.id))
-        }
       } else {
-        // No unprocessed messages, but still check for backfill-flagged conversations
-        const flagged = await getConversationsForUser(userId, { state: 'needs_proposals' })
-        if (flagged.length > 0) {
-          console.log(`[Agent] Step 5: Processing ${flagged.length} backfill-flagged conversations`)
-          const actions = await generateActionsForConversations(flagged.map(f => f.id))
-          result.actionsGenerated += actions.length
-          result.actions = actions
-          console.log(`[Agent] Step 5: Generated ${actions.length} actions from backfill`)
-
-          const supabase = getSupabaseAdmin()
-          await supabase
-            .from('conversation_threads')
-            .update({ state: null })
-            .in('id', flagged.map(f => f.id))
-        } else {
-          console.log(`[Agent] Steps 4-5: Skipped — no unassigned timeline entries`)
-        }
+        console.log(`[Agent] Steps 4-4b: Skipped — no unassigned timeline entries`)
       }
     } catch (processingError) {
-      console.error('[Agent] Steps 3-5 FAILED:', processingError instanceof Error ? processingError.message : processingError)
+      console.error('[Agent] Steps 3-4b FAILED:', processingError instanceof Error ? processingError.message : processingError)
       result.errors.push(`Processing: ${processingError instanceof Error ? processingError.message : 'Unknown error'}`)
     }
 
-    // Step 6: Lead tracking — detect cooling/cold leads, create follow-up actions
+    // Step 5: Batch planner — graph walker → scoring engine → card generator → action_proposals
+    // Replaces: planning.ts (per-conversation AI triage) + lead-tracking.ts (separate lead scan)
+    // Lead detection is now part of the graph walker (lead_cooling / lead_cold / lead_dead tasks).
     try {
-      console.log(`[Agent] Step 6: Tracking leads`)
-      const leadResult = await trackLeadsForUser(userId)
-      result.followUpsGenerated = leadResult.followUpsCreated
-      result.coolingLeads = leadResult.coolingLeads
-      result.coldLeads = leadResult.coldLeads
-      result.actionsGenerated += leadResult.followUpsCreated
-      console.log(`[Agent] Step 6: ${leadResult.coolingLeads} cooling, ${leadResult.coldLeads} cold, ${leadResult.followUpsCreated} follow-ups created`)
-      if (leadResult.errors.length > 0) {
-        result.errors.push(...leadResult.errors)
+      console.log(`[Agent] Step 5: Running batch planner (graph walker → scoring → cards)`)
+      const plannerSettings = await getUserSettings(userId)
+      if (plannerSettings) {
+        const walkerOutputs = await walkAllDeals(userId, plannerSettings)
+        const scoredTasks = scoreWalkerOutput(walkerOutputs, plannerSettings)
+        const topTasks = scoredTasks.slice(0, 20)
+        const cards = await generateCards(topTasks, plannerSettings)
+        const newActions = await insertCardsAsActions(userId, cards)
+        result.actionsGenerated += newActions.length
+        result.actions = newActions
+        result.coolingLeads = walkerOutputs.reduce(
+          (n, o) => n + o.tasks.filter(t => t.taskType === 'lead_cooling').length, 0
+        )
+        result.coldLeads = walkerOutputs.reduce(
+          (n, o) => n + o.tasks.filter(t => t.taskType === 'lead_cold').length, 0
+        )
+        result.followUpsGenerated = result.coolingLeads + result.coldLeads + walkerOutputs.reduce(
+          (n, o) => n + o.tasks.filter(t => t.taskType === 'lead_dead').length, 0
+        )
+        console.log(
+          `[Agent] Step 5: ${walkerOutputs.length} deals, ${scoredTasks.length} tasks, ` +
+          `${cards.length} cards generated, ${newActions.length} inserted, ` +
+          `${result.coolingLeads} cooling, ${result.coldLeads} cold leads`
+        )
+
+        // Clear backfill flags — graph walker finds flagged deals naturally next run
+        const flagged = await getConversationsForUser(userId, { state: 'needs_proposals' })
+        if (flagged.length > 0) {
+          const supabase = getSupabaseAdmin()
+          await supabase
+            .from('conversation_threads')
+            .update({ state: null })
+            .in('id', flagged.map(f => f.id))
+          console.log(`[Agent] Step 5: Cleared ${flagged.length} backfill flags`)
+        }
       }
-    } catch (leadError) {
-      console.error('[Agent] Step 6 FAILED:', leadError instanceof Error ? leadError.message : leadError)
-      result.errors.push(`Lead tracking: ${leadError instanceof Error ? leadError.message : 'Unknown error'}`)
+    } catch (plannerError) {
+      console.error('[Agent] Step 5 FAILED:', plannerError instanceof Error ? plannerError.message : plannerError)
+      result.errors.push(`Planner: ${plannerError instanceof Error ? plannerError.message : 'Unknown error'}`)
     }
 
     // Step 7: Reflection — observe patterns, write to journal

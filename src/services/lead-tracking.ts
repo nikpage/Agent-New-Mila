@@ -1,4 +1,12 @@
 /**
+ * @deprecated — Chunk 10 cutover. Replaced by graph-walker.ts lead task detection:
+ *   lead_cooling / lead_cold / lead_dead tasks are now emitted by walkAllDeals()
+ *   and scored by scoreWalkerOutput(). insertCardsAsActions() writes REPLY cards.
+ *
+ * This file is kept for reference only. Remove after validation period.
+ */
+
+/**
  * Lead Tracking Service
  *
  * The core value proposition: don't drop leads.

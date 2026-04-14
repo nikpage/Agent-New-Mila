@@ -11,10 +11,6 @@ vi.mock('./threading', () => ({
   rebuildConversationSummary: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('./planning', () => ({
-  generateActionsForConversations: vi.fn().mockResolvedValue([]),
-}))
-
 vi.mock('./calendar-ingestion', () => ({
   ingestCalendarEvents: vi.fn().mockResolvedValue({
     eventsSynced: 0,
@@ -24,15 +20,17 @@ vi.mock('./calendar-ingestion', () => ({
   }),
 }))
 
-vi.mock('./lead-tracking', () => ({
-  trackLeadsForUser: vi.fn().mockResolvedValue({
-    conversationsScanned: 0,
-    coolingLeads: 0,
-    coldLeads: 0,
-    deadLeads: 0,
-    followUpsCreated: 0,
-    errors: [],
-  }),
+vi.mock('./graph-walker', () => ({
+  walkAllDeals: vi.fn().mockResolvedValue([]),
+}))
+
+vi.mock('./scoring-engine', () => ({
+  scoreWalkerOutput: vi.fn().mockReturnValue([]),
+}))
+
+vi.mock('./card-generator', () => ({
+  generateCards: vi.fn().mockResolvedValue([]),
+  insertCardsAsActions: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('./reflection', () => ({
@@ -58,7 +56,9 @@ vi.mock('@/lib/db/users', () => ({
     email: 'test@test.com',
     google_oauth_tokens: { access_token: 'token' },
   }),
+  getUserSettings: vi.fn().mockResolvedValue({ ai_language: 'Czech', kc_high_value: 5_000_000 }),
   updateUserSettings: vi.fn().mockResolvedValue(undefined),
+  updateUserHistoryId: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/lib/db/conversations', () => ({
@@ -80,7 +80,7 @@ vi.mock('@/lib/supabase/client', () => ({
 import { runAgentForUser } from './agent'
 import { ingestEmailsForUser, ingestOutboundEmails } from './ingestion'
 import { ingestCalendarEvents } from './calendar-ingestion'
-import { trackLeadsForUser } from './lead-tracking'
+import { walkAllDeals } from './graph-walker'
 import { getUserById } from '@/lib/db/users'
 beforeEach(() => {
   vi.clearAllMocks()
@@ -161,16 +161,17 @@ describe('runAgentForUser', () => {
       const result = await runAgentForUser('user-1')
 
       expect(result.success).toBe(true)
+      // 3 ingestion errors; planner is mocked to succeed so no 4th error
       expect(result.errors).toHaveLength(3)
     })
 
-    it('continues when lead tracking fails', async () => {
-      vi.mocked(trackLeadsForUser).mockRejectedValue(new Error('lead tracking crash'))
+    it('continues when planner fails', async () => {
+      vi.mocked(walkAllDeals).mockRejectedValue(new Error('graph walker crash'))
 
       const result = await runAgentForUser('user-1')
 
       expect(result.success).toBe(true)
-      expect(result.errors.some(e => e.includes('Lead tracking'))).toBe(true)
+      expect(result.errors.some(e => e.includes('Planner'))).toBe(true)
     })
   })
 })

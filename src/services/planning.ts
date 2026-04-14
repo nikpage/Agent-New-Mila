@@ -1,3 +1,13 @@
+/**
+ * @deprecated — Chunk 10 cutover. Replaced by:
+ *   graph-walker.ts   (walkAllDeals — deterministic task generation)
+ *   scoring-engine.ts (scoreWalkerOutput — pure business rule scoring)
+ *   card-generator.ts (generateCards — LLM card text + insertCardsAsActions)
+ *
+ * This file is kept only for bulk-ingestion backfill compatibility.
+ * Do not add new callers. Remove once bulk-ingestion is migrated.
+ */
+
 import { triageConversation, verifyTriage, parseEnrichedText, extractMessageFacts, type TriageAction, type TriageResult, type EnrichedMessageData } from '@/lib/ai/tasks'
 import { generateFinalDraft } from '@/lib/ai/mila-voice'
 import { buildMilaContext, formatTimelineForPrompt, formatJournalForPrompt } from '@/lib/ai/context'
