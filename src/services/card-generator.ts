@@ -301,8 +301,11 @@ export async function insertCardsAsActions(
       const dedupeKey = `${card.dealId}:${card.card_type}`
       if (existingDealTypes.has(dedupeKey)) continue
 
-      // Find conversation: query by deal_id first, fall back to id = dealId
+      // Find conversation: query by deal_id first, fall back to id = dealId.
+      // resolvedDealId tracks whether card.dealId is a real deal UUID or a conversation UUID
+      // used as a fallback — the latter must not be written to action_proposals.deal_id.
       let conversationId: string | null = null
+      let resolvedDealId: string | null = card.dealId
       const { data: byDealId } = await supabase
         .from('conversation_threads')
         .select('id')
@@ -314,7 +317,7 @@ export async function insertCardsAsActions(
       if (byDealId && byDealId.length > 0) {
         conversationId = byDealId[0].id
       } else {
-        // Backfill fallback: for existing data, deal.id = conversation.id
+        // Fallback: card.dealId is a conversation UUID (e.g. triage tasks where conv.deal_id is null)
         const { data: byId } = await supabase
           .from('conversation_threads')
           .select('id')
@@ -323,6 +326,7 @@ export async function insertCardsAsActions(
           .limit(1)
         if (byId && byId.length > 0) {
           conversationId = byId[0].id
+          resolvedDealId = null  // conversation UUID ≠ deal UUID — don't store as FK
         }
       }
 
@@ -347,7 +351,7 @@ export async function insertCardsAsActions(
         user_id: userId,
         conversation_id: conversationId,
         cp_id: cpId,
-        deal_id: card.dealId,
+        deal_id: resolvedDealId,
         action_type: card.card_type,
         status: 'pending',
         intent_cs: card.intent_cs,
