@@ -25,6 +25,7 @@ export type AIStage =
   | 'reconstruction_critic'
   | 'graph_proposal'
   | 'bypass'
+  | 'anomaly'
 
 export interface ModelChain {
   primary: string
@@ -178,6 +179,14 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
 
   // Bypass filter — emergency detection, cheapest+fastest possible
   bypass: {
+    primary: 'gemini-2.5-flash-lite',
+    fallback1: 'claude-haiku-4-5-20251001',
+    fallback2: null,
+    temperature: 0,
+  },
+
+  // Anomaly detector — high-stakes risk detection, cheapest possible
+  anomaly: {
     primary: 'gemini-2.5-flash-lite',
     fallback1: 'claude-haiku-4-5-20251001',
     fallback2: null,

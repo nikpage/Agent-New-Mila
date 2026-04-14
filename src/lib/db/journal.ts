@@ -352,6 +352,36 @@ export async function deleteJournalEntry(entryId: string): Promise<void> {
 }
 
 /**
+ * Get current best-guess beliefs for a deal.
+ * Returns the latest non-stale entry per topic, ordered by weight desc.
+ * This is the "current view" used by the graph walker and card generator.
+ */
+export async function getCurrentBeliefs(dealId: string): Promise<JournalEntry[]> {
+  const supabase = getSupabaseAdmin()
+
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('*')
+    .eq('deal_id', dealId)
+    .eq('is_stale', false)
+    .order('weight', { ascending: false })
+    .order('updated_at', { ascending: false })
+
+  if (error) throw new Error(`Failed to get current beliefs: ${error.message}`)
+
+  // Deduplicate by topic — keep highest-weight entry per topic
+  const seen = new Set<string>()
+  const result: JournalEntry[] = []
+  for (const entry of data ?? []) {
+    if (!seen.has(entry.topic)) {
+      seen.add(entry.topic)
+      result.push(entry)
+    }
+  }
+  return result
+}
+
+/**
  * Bulk insert journal entries (onboarding seed).
  */
 export async function createJournalEntries(entries: JournalEntryInsert[]): Promise<JournalEntry[]> {
