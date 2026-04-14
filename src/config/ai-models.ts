@@ -23,6 +23,7 @@ export type AIStage =
   | 'temporal'
   | 'extraction'
   | 'reconstruction_critic'
+  | 'graph_proposal'
 
 export interface ModelChain {
   primary: string
@@ -165,5 +166,12 @@ export const AI_TASK_MODELS: Record<AIStage, ModelChain> = {
     fallback1: 'claude-haiku-4-5-20251001',
     fallback2: null,
     temperature: 0,
+  },
+
+  // Graph proposal — novel edge inference for unmatched facts (rare, needs reasoning)
+  graph_proposal: {
+    primary: 'claude-sonnet-4-6',
+    fallback1: 'gemini-2.5-flash',
+    fallback2: null,
   },
 }
