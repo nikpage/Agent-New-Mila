@@ -510,11 +510,12 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                 // Venue resolution must happen before the primary task is built so SCHEDULE
                 // tasks (primary or auto) carry the correct location into the payload,
                 // enabling travel buffer creation in the optimizer.
-                // Priority: extraction freetext → extraction index → triage index → triage freetext
+                // Priority: extraction index → extraction freetext → triage index → triage freetext
+                // Index-first because freetext from extraction can be a description ("u notáře") not an address.
                 const ta = triageResult.action
                 const resolvedVenue =
-                  extraction?.confirmed_venue_freetext
-                  ?? (extraction?.confirmed_venue_index != null ? enrichment?.addresses?.[extraction.confirmed_venue_index] ?? null : null)
+                  (extraction?.confirmed_venue_index != null ? enrichment?.addresses?.[extraction.confirmed_venue_index] ?? null : null)
+                  ?? extraction?.confirmed_venue_freetext
                   ?? (ta.venue_index != null ? enrichment?.addresses?.[ta.venue_index] ?? null : null)
                   ?? ta.meeting_venue
                   ?? null
@@ -573,6 +574,10 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                       triageActionType: 'SCHEDULE',
                       triageMeetingVenue: resolvedVenue,
                       triageProposedTime: resolvedTime,
+                      // Set intent so card-generator skips the LLM (avoids {{ placeholder }} in output).
+                      // generateSchedulingIntent() will overwrite this with proper details at brief time.
+                      triageIntentCs: 'Naplánovat schůzku dle požadavku.',
+                      triageRationaleCs: ta.rationale_cs || 'Protistrana navrhla čas nebo místo.',
                     }
                     triageEntries.push({ task: scheduleTask, actionType: 'SCHEDULE' })
                     triageTasks.push(scheduleTask)
