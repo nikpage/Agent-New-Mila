@@ -27,7 +27,7 @@
 CREATE TABLE journal_entries (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id         uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  scope           text NOT NULL CHECK (scope IN ('global', 'cp_id', 'conversation_id', 'temporal')),
+  scope           text NOT NULL CHECK (scope IN ('global', 'cp_id', 'conversation_id', 'deal_id', 'temporal')),
   scope_ref       uuid,
   type            text NOT NULL CHECK (type IN ('observation', 'belief', 'volatile')),
   topic           text NOT NULL,

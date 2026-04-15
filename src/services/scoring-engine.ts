@@ -112,11 +112,15 @@ export function scoreWalkerOutput(
     }
   }
 
-  // Score triage tasks — no deal context available, use stub values.
-  // daysIgnored=1 so urgency contributes its full value via the ^1.5 curve.
+  // Score triage tasks — no deal context available, use stub deal values.
+  // daysIgnored is derived from urgency_category so CRITICAL/TODAY tasks rank above
+  // lead tracking tasks (which use actual staleness days). This reflects that a CRITICAL
+  // email deadline is more pressing than a cold lead ignored for weeks.
   for (const task of triageTasks) {
     const urgency = deriveUrgency(task)
-    const timePressure = urgency * Math.pow(1, 1.5) // = urgency * 1
+    // Map urgency to effective daysIgnored: CRITICAL=15, TODAY=10, THIS_WEEK=5, SOON=2, NONE=0.5
+    const effectiveDays = urgency >= 9 ? 15 : urgency >= 8 ? 10 : urgency >= 6 ? 5 : urgency >= 4 ? 2 : 0.5
+    const timePressure = urgency * Math.pow(effectiveDays, 1.5)
     const score = 1 + timePressure // dealImportance stub=1, immovability=0, anomalyBoost=0
     scored.push({
       ...task,

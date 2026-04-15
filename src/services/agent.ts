@@ -269,6 +269,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                   // 4. Fact & belief extraction (single-message batch)
                   const dealMessage: DealMessage = {
                     id: entry.id,
+                    messageId: entry.message_id,
                     direction: entry.direction as DealMessage['direction'],
                     content: entry.content,
                     occurred_at: entry.occurred_at,
@@ -628,6 +629,7 @@ export async function runFlowA(userId: string): Promise<FlowAResult> {
 
                 const dealMessage: DealMessage = {
                   id: entry.id,
+                  messageId: entry.message_id,
                   direction: entry.direction as DealMessage['direction'],
                   content: entry.content,
                   occurred_at: entry.occurred_at,

@@ -17,6 +17,8 @@ import type { UserSettings } from '@/lib/supabase/types'
 
 export interface DealMessage {
   id: string
+  /** FK to messages.id — null for call logs / voice notes that have no messages row */
+  messageId?: string | null
   direction: 'in' | 'out' | 'internal'
   content: string
   occurred_at: string   // ISO-8601
@@ -48,7 +50,7 @@ export interface HardFact {
   type: HardFactType
   key: string             // e.g. "asking_price", "notary_address", "financing_deadline"
   value: string           // the fact value as a string
-  source_message_id: string
+  source_message_id: string | null  // FK to messages.id — null for timeline entries without a messages row
   confidence: number      // 0.0–1.0
 }
 
@@ -56,7 +58,7 @@ export interface SoftObservation {
   topic: string           // e.g. "buyer_urgency", "seller_flexibility", "deal_momentum"
   content: string         // the observation
   confidence: number
-  source_message_id: string
+  source_message_id: string | null  // FK to messages.id — null for timeline entries without a messages row
 }
 
 export interface ExtractionOutput {
@@ -206,7 +208,7 @@ function parseExtractionResponse(
       type: f.type as HardFactType,
       key: f.key,
       value: f.value,
-      source_message_id: msg.id,
+      source_message_id: msg.messageId ?? null,
       confidence: typeof f.confidence === 'number' ? Math.max(0, Math.min(1, f.confidence)) : 0.8,
     })
   }
@@ -221,7 +223,7 @@ function parseExtractionResponse(
       topic: o.topic,
       content: o.content,
       confidence: typeof o.confidence === 'number' ? Math.max(0, Math.min(1, o.confidence)) : 0.7,
-      source_message_id: msg.id,
+      source_message_id: msg.messageId ?? null,
     })
   }
 
