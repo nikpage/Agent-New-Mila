@@ -34,6 +34,10 @@ export interface ActionCard {
   entityMapSnapshot: Record<string, string>
   beliefSnapshot: string[]
 
+  // Triage venue/time — only set for auto-SCHEDULE cards
+  triageMeetingVenue?: string | null
+  triageProposedTime?: string | null
+
   // Generated card fields
   card_type: 'REPLY' | 'SCHEDULE' | 'TODO'
   intent_cs: string
@@ -45,7 +49,10 @@ export interface ActionCard {
 
 // ─── Card type derivation ─────────────────────────────────────────────────────
 
-export function deriveCardType(taskType: WalkerTaskType): 'REPLY' | 'SCHEDULE' | 'TODO' {
+export function deriveCardType(taskType: WalkerTaskType, triageActionType?: 'REPLY' | 'SCHEDULE' | 'TODO'): 'REPLY' | 'SCHEDULE' | 'TODO' {
+  if (taskType === 'triage_action') {
+    return triageActionType ?? 'REPLY'
+  }
   if (taskType === 'lead_cooling' || taskType === 'lead_cold' || taskType === 'lead_dead') {
     return 'REPLY'
   }
@@ -57,7 +64,8 @@ export function deriveCardType(taskType: WalkerTaskType): 'REPLY' | 'SCHEDULE' |
 
 // ─── Urgency mapping (mirrors scoring-engine) ─────────────────────────────────
 
-function deriveUrgency(taskType: WalkerTaskType, hoursUntilDue: number | null): number {
+function deriveUrgency(taskType: WalkerTaskType, hoursUntilDue: number | null, triageUrgency?: number): number {
+  if (taskType === 'triage_action') return triageUrgency ?? 5
   switch (taskType) {
     case 'overdue':          return 10
     case 'due_soon':
@@ -187,8 +195,8 @@ export async function generateCards(
   // Process all tasks in parallel — each is independent
   const results = await Promise.allSettled(
     scoredTasks.map(async (task): Promise<ActionCard> => {
-      const cardType = deriveCardType(task.taskType)
-      const urgency = deriveUrgency(task.taskType, task.hoursUntilDue)
+      const cardType = deriveCardType(task.taskType, task.triageActionType)
+      const urgency = deriveUrgency(task.taskType, task.hoursUntilDue, task.triageUrgency)
 
       // Load current beliefs for tone tailoring
       let beliefs: string[] = task.beliefSnapshot ?? []
@@ -230,6 +238,8 @@ export async function generateCards(
           cpId:                task.cpId,
           entityMapSnapshot:   task.entityMapSnapshot,
           beliefSnapshot:      beliefs,
+          triageMeetingVenue:  task.triageMeetingVenue,
+          triageProposedTime:  task.triageProposedTime,
           card_type:           cardType,
           intent_cs:           (parsed.intent_cs ?? defaultIntentCs(task.taskType)).slice(0, 200),
           rationale_cs:        parsed.rationale_cs ?? defaultRationaleCs(task.taskType),
@@ -374,6 +384,10 @@ export async function insertCardsAsActions(
           channel: 'email',
           placeholders: card.placeholders,
           has_draft_skeleton: card.draft_skeleton !== null,
+          ...(card.card_type === 'SCHEDULE' && (card.triageMeetingVenue || card.triageProposedTime) ? {
+            suggestedLocation: card.triageMeetingVenue ?? undefined,
+            proposed_time: card.triageProposedTime ?? undefined,
+          } : {}),
         },
       })
 
@@ -395,15 +409,17 @@ function buildFallbackCard(
   beliefs: string[]
 ): ActionCard {
   return {
-    nodeId:            task.nodeId,
-    dealId:            task.dealId,
-    taskType:          task.taskType,
-    score:             task.score,
-    scoreBreakdown:    task.scoreBreakdown,
-    cpId:              task.cpId,
-    entityMapSnapshot: task.entityMapSnapshot,
-    beliefSnapshot:    beliefs,
-    card_type:         cardType,
+    nodeId:              task.nodeId,
+    dealId:              task.dealId,
+    taskType:            task.taskType,
+    score:               task.score,
+    scoreBreakdown:      task.scoreBreakdown,
+    cpId:                task.cpId,
+    entityMapSnapshot:   task.entityMapSnapshot,
+    beliefSnapshot:      beliefs,
+    triageMeetingVenue:  task.triageMeetingVenue,
+    triageProposedTime:  task.triageProposedTime,
+    card_type:           cardType,
     intent_cs:         defaultIntentCs(task.taskType),
     rationale_cs:      defaultRationaleCs(task.taskType),
     draft_skeleton:    null,

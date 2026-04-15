@@ -26,6 +26,7 @@ import { getCurrentHistoryId } from '@/lib/google/gmail'
 import { purgeUserAsCp, getCPById } from '@/lib/db/counterparties'
 import { getActiveJournalEntries, expireTemporalEntries, getJournalEntriesForContext } from '@/lib/db/journal'
 import { getPendingActionsByType } from '@/lib/db/actions'
+import { getEntitiesForDeal } from '@/lib/db/entity-map'
 import { triageConversation, verifyTriage, parseEnrichedText } from '@/lib/ai/tasks'
 
 import { getSupabaseAdmin } from '@/lib/supabase/client'
@@ -415,22 +416,78 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                 const urgencyMap: Record<string, number> = {
                   CRITICAL: 9, TODAY: 8, THIS_WEEK: 6, SOON: 4, NONE: 1,
                 }
+
+                // Load entity map from DB for this deal
+                const dealIdForTask = conv.deal_id ?? convId
+                let entityMapSnapshot: Record<string, string> = {}
+                try {
+                  const entities = await getEntitiesForDeal(dealIdForTask)
+                  entityMapSnapshot = entities.reduce((acc, e) => ({
+                    ...acc,
+                    [`${e.entity_type}.${e.entity_key}`]: e.entity_value,
+                  }), {} as Record<string, string>)
+                } catch {
+                  // fail open — empty snapshot is fine
+                }
+
                 const task: WalkerTask = {
                   nodeId: `triage:${convId}`,
-                  dealId: conv.deal_id ?? convId,
+                  dealId: dealIdForTask,
                   taskType: 'triage_action',
                   deadline: null,
                   hoursUntilDue: null,
                   slack: null,
                   cpId: cpId ?? null,
-                  entityMapSnapshot: {},
+                  entityMapSnapshot,
                   beliefSnapshot: [],
                   triageUrgency: urgencyMap[triageResult.action.urgency_category] ?? 5,
+                  triageActionType: triageResult.action.type as 'REPLY' | 'SCHEDULE' | 'TODO',
                 }
 
                 triageEntries.push({ task, actionType: triageResult.action.type })
                 triageTasks.push(task)
                 console.log(`[Agent] Step 5: Triage → ${triageResult.action.type} (${triageResult.action.urgency_category}) for conv ${convId}`)
+
+                // Auto-SCHEDULE: if primary action is REPLY/TODO and triage detected venue/time,
+                // create a secondary SCHEDULE task (same logic as old planning.ts code gate)
+                const ta = triageResult.action
+                if (ta.type !== 'SCHEDULE') {
+                  const resolvedVenue =
+                    ta.venue_index !== null
+                      ? (enrichment?.addresses?.[ta.venue_index] ?? null)
+                      : (ta.meeting_venue ?? null)
+                  const resolvedTime =
+                    ta.time_index !== null
+                      ? (() => {
+                          const pt = enrichment?.proposedTimes?.[ta.time_index]
+                          if (!pt) return null
+                          if (pt.specificDate && pt.timeOfDay) return `${pt.specificDate}T${pt.timeOfDay}:00`
+                          if (pt.specificDate) return `${pt.specificDate}T09:00:00`
+                          return null
+                        })()
+                      : (ta.proposed_time ?? null)
+
+                  if (resolvedVenue || resolvedTime) {
+                    const scheduleTask: WalkerTask = {
+                      nodeId: `triage:schedule:${convId}`,
+                      dealId: dealIdForTask,
+                      taskType: 'triage_action',
+                      deadline: resolvedTime,
+                      hoursUntilDue: null,
+                      slack: null,
+                      cpId: cpId ?? null,
+                      entityMapSnapshot,
+                      beliefSnapshot: [],
+                      triageUrgency: urgencyMap[ta.urgency_category] ?? 5,
+                      triageActionType: 'SCHEDULE',
+                      triageMeetingVenue: resolvedVenue,
+                      triageProposedTime: resolvedTime,
+                    }
+                    triageEntries.push({ task: scheduleTask, actionType: 'SCHEDULE' })
+                    triageTasks.push(scheduleTask)
+                    console.log(`[Agent] Step 5: Auto-SCHEDULE for conv ${convId} (venue: ${resolvedVenue ?? 'none'}, time: ${resolvedTime ?? 'none'})`)
+                  }
+                }
               } catch (err) {
                 console.warn(`[Agent] Step 5: Triage failed for conversation ${convId}:`, err)
               }

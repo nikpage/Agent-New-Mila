@@ -584,12 +584,13 @@ RULES:
 - meeting_venue: If the meeting venue is NOT in the FACTS address list, write it here as free text. null if venue_index is set or no venue mentioned.
 - time_index: Pick which proposed time from the FACTS list is relevant. Answer with the index number, or null if none apply or no times listed.
 - proposed_time: If the proposed time is NOT in the FACTS time list, resolve it to an ISO datetime string (YYYY-MM-DDTHH:MM:SS) using TODAY'S DATE above. null if time_index is set or no time mentioned.
-- urgency_category: Based on the URGENCY SIGNAL from enrichment facts above:
-  CRITICAL = Must act within hours. Hard deadline today/tomorrow, or explicit time pressure.
-  TODAY = Must act by end of business today or tomorrow. Hard deadline this week.
-  THIS_WEEK = Must act within the week. Soft deadline or approaching date.
-  SOON = Within 2 weeks, no hard deadline visible.
-  NONE = No time pressure detected.
+- urgency_category: How urgently must THE USER RESPOND (not how hard the underlying deal deadline is):
+  CRITICAL = User must reply TODAY within hours. CP has explicitly demanded a reply by a specific time today (e.g. "confirm by 5pm or deal is off", "I need your answer this morning"). Also use when a meeting is physically happening TOMORROW MORNING and confirmation is needed now. A deal closing deadline weeks away is NOT CRITICAL.
+  TODAY = User should reply today or tomorrow. Real consequence if delayed beyond this week.
+  THIS_WEEK = User should act within the week. Underlying deadline is weeks away but reply expected soon.
+  SOON = No same-day demand. Deadline is weeks or months away.
+  NONE = No time pressure at all.
+  NOTE: A "HARD DEADLINE" label in the urgency signal means the deadline itself is firm — it does NOT mean the user must reply immediately. Judge CRITICAL only by explicit same-day CP demands.
 - missing_info: Questions the CP asked that ONLY the user can answer. Copy from the message, do not invent.
 
 Respond with ONLY valid JSON:

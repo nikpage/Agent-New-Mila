@@ -45,6 +45,12 @@ export interface WalkerTask {
   beliefSnapshot: string[]
   /** Urgency (1–10) from AI triage — only set for taskType='triage_action' */
   triageUrgency?: number
+  /** Action type from triage — only set for taskType='triage_action' */
+  triageActionType?: 'REPLY' | 'SCHEDULE' | 'TODO'
+  /** Meeting venue resolved from triage — only set for SCHEDULE triage_action tasks */
+  triageMeetingVenue?: string | null
+  /** Proposed meeting time (ISO) resolved from triage — only set for SCHEDULE triage_action tasks */
+  triageProposedTime?: string | null
 }
 
 export interface GraphWalkerOutput {
