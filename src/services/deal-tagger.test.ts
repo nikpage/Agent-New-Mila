@@ -57,6 +57,11 @@ const DEAL = (id: string, title: string): Deal => ({
   status: 'active',
   category: 'business',
   deal_type: 'purchase',
+  user_role: 'seller',
+  parent_deal_id: null,
+  potential_merge_with: null,
+  anomaly_boost: 0,
+  last_processed_at: null,
   created_at: '2026-01-01T00:00:00Z',
   last_activity_at: '2026-04-13T10:00:00Z',
 })

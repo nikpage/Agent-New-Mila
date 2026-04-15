@@ -140,6 +140,8 @@ beforeEach(() => {
       what_cp_wants: 'Test',
       venue_index: null,
       time_index: null,
+      meeting_venue: null,
+      proposed_time: null,
       deal_type: 'sale',
       weight: 30,
       immovable: false,

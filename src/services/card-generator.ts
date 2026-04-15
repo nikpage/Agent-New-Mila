@@ -211,6 +211,29 @@ export async function generateCards(
         // Use beliefSnapshot from walker output if DB call fails
       }
 
+      // triage_action tasks already have correct text from the triage pipeline.
+      // Skip the LLM call entirely — use the carried fields directly.
+      if (task.taskType === 'triage_action' && task.triageIntentCs) {
+        return {
+          nodeId:              task.nodeId,
+          dealId:              task.dealId,
+          taskType:            task.taskType,
+          score:               task.score,
+          scoreBreakdown:      task.scoreBreakdown,
+          cpId:                task.cpId,
+          entityMapSnapshot:   task.entityMapSnapshot,
+          beliefSnapshot:      beliefs,
+          triageMeetingVenue:  task.triageMeetingVenue,
+          triageProposedTime:  task.triageProposedTime,
+          card_type:           cardType,
+          intent_cs:           task.triageIntentCs,
+          rationale_cs:        task.triageRationaleCs ?? defaultRationaleCs(task.taskType),
+          draft_skeleton:      null,  // generated on-demand at execution time
+          placeholders:        (task.triageMissingInfo ?? []).map(m => m.label),
+          urgency,
+        }
+      }
+
       const prompt = buildCardPrompt(task, cardType, beliefs, language)
 
       try {

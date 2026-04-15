@@ -430,6 +430,26 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                   // fail open — empty snapshot is fine
                 }
 
+                // Resolve venue and time from triage result for ALL action types.
+                // Venue resolution must happen before the primary task is built so SCHEDULE
+                // tasks (primary or auto) carry the correct location into the payload,
+                // enabling travel buffer creation in the optimizer.
+                const ta = triageResult.action
+                const resolvedVenue =
+                  ta.venue_index !== null && ta.venue_index !== undefined
+                    ? (enrichment?.addresses?.[ta.venue_index] ?? null)
+                    : (ta.meeting_venue ?? null)
+                const resolvedTime =
+                  ta.time_index !== null && ta.time_index !== undefined
+                    ? (() => {
+                        const pt = enrichment?.proposedTimes?.[ta.time_index]
+                        if (!pt) return null
+                        if (pt.specificDate && pt.timeOfDay) return `${pt.specificDate}T${pt.timeOfDay}:00`
+                        if (pt.specificDate) return `${pt.specificDate}T09:00:00`
+                        return null
+                      })()
+                    : (ta.proposed_time ?? null)
+
                 const task: WalkerTask = {
                   nodeId: `triage:${convId}`,
                   dealId: dealIdForTask,
@@ -442,6 +462,16 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                   beliefSnapshot: [],
                   triageUrgency: urgencyMap[triageResult.action.urgency_category] ?? 5,
                   triageActionType: triageResult.action.type as 'REPLY' | 'SCHEDULE' | 'TODO',
+                  triageIntentCs: triageResult.action.intent_cs,
+                  triageRationaleCs: triageResult.action.rationale_cs,
+                  triageWhatCpWants: triageResult.action.what_cp_wants,
+                  triageMissingInfo: triageResult.action.missing_info ?? [],
+                  triageCpName: cpName,
+                  // Set venue/time on primary task when it IS the SCHEDULE action
+                  ...(triageResult.action.type === 'SCHEDULE' ? {
+                    triageMeetingVenue: resolvedVenue,
+                    triageProposedTime: resolvedTime,
+                  } : {}),
                 }
 
                 triageEntries.push({ task, actionType: triageResult.action.type })
@@ -450,23 +480,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
                 // Auto-SCHEDULE: if primary action is REPLY/TODO and triage detected venue/time,
                 // create a secondary SCHEDULE task (same logic as old planning.ts code gate)
-                const ta = triageResult.action
                 if (ta.type !== 'SCHEDULE') {
-                  const resolvedVenue =
-                    ta.venue_index !== null
-                      ? (enrichment?.addresses?.[ta.venue_index] ?? null)
-                      : (ta.meeting_venue ?? null)
-                  const resolvedTime =
-                    ta.time_index !== null
-                      ? (() => {
-                          const pt = enrichment?.proposedTimes?.[ta.time_index]
-                          if (!pt) return null
-                          if (pt.specificDate && pt.timeOfDay) return `${pt.specificDate}T${pt.timeOfDay}:00`
-                          if (pt.specificDate) return `${pt.specificDate}T09:00:00`
-                          return null
-                        })()
-                      : (ta.proposed_time ?? null)
-
                   if (resolvedVenue || resolvedTime) {
                     const scheduleTask: WalkerTask = {
                       nodeId: `triage:schedule:${convId}`,

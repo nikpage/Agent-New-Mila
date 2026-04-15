@@ -51,6 +51,12 @@ export interface WalkerTask {
   triageMeetingVenue?: string | null
   /** Proposed meeting time (ISO) resolved from triage — only set for SCHEDULE triage_action tasks */
   triageProposedTime?: string | null
+  /** Triage-generated card text — carried directly, no second LLM call needed */
+  triageIntentCs?: string
+  triageRationaleCs?: string
+  triageWhatCpWants?: string
+  triageMissingInfo?: { label: string; value: null }[]
+  triageCpName?: string
 }
 
 export interface GraphWalkerOutput {
