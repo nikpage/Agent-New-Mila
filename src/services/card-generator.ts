@@ -37,6 +37,8 @@ export interface ActionCard {
   // Triage venue/time — only set for auto-SCHEDULE cards
   triageMeetingVenue?: string | null
   triageProposedTime?: string | null
+  // Triage weight — written to action_proposals.weight
+  triageWeight?: number
 
   // Generated card fields
   card_type: 'REPLY' | 'SCHEDULE' | 'TODO'
@@ -225,6 +227,7 @@ export async function generateCards(
           beliefSnapshot:      beliefs,
           triageMeetingVenue:  task.triageMeetingVenue,
           triageProposedTime:  task.triageProposedTime,
+          triageWeight:        task.triageWeight,
           card_type:           cardType,
           intent_cs:           task.triageIntentCs,
           rationale_cs:        task.triageRationaleCs ?? defaultRationaleCs(task.taskType),
@@ -263,6 +266,7 @@ export async function generateCards(
           beliefSnapshot:      beliefs,
           triageMeetingVenue:  task.triageMeetingVenue,
           triageProposedTime:  task.triageProposedTime,
+          triageWeight:        task.triageWeight,
           card_type:           cardType,
           intent_cs:           (parsed.intent_cs ?? defaultIntentCs(task.taskType)).slice(0, 200),
           rationale_cs:        parsed.rationale_cs ?? defaultRationaleCs(task.taskType),
@@ -396,7 +400,7 @@ export async function insertCardsAsActions(
         priority_score: card.score,
         dollar_value: dollarValue,
         urgency: card.urgency,
-        weight: card.scoreBreakdown.immovability || null,
+        weight: card.triageWeight ?? (card.scoreBreakdown.immovability || null),
         offer_multiplier: null,
         draft_subject: null,
         draft_body_text: null,
@@ -407,9 +411,12 @@ export async function insertCardsAsActions(
           channel: 'email',
           placeholders: card.placeholders,
           has_draft_skeleton: card.draft_skeleton !== null,
-          ...(card.card_type === 'SCHEDULE' && (card.triageMeetingVenue || card.triageProposedTime) ? {
+          ...(card.card_type === 'SCHEDULE' ? {
+            // Use 'suggestedTime' — the key the optimizer reads (not 'proposed_time')
+            suggestedTime: card.triageProposedTime ?? undefined,
             suggestedLocation: card.triageMeetingVenue ?? undefined,
-            proposed_time: card.triageProposedTime ?? undefined,
+            // meeting_type: triage doesn't classify phone/online yet — default 'address'
+            meeting_type: 'address',
           } : {}),
         },
       })
@@ -442,6 +449,7 @@ function buildFallbackCard(
     beliefSnapshot:      beliefs,
     triageMeetingVenue:  task.triageMeetingVenue,
     triageProposedTime:  task.triageProposedTime,
+    triageWeight:        task.triageWeight,
     card_type:           cardType,
     intent_cs:         defaultIntentCs(task.taskType),
     rationale_cs:      defaultRationaleCs(task.taskType),

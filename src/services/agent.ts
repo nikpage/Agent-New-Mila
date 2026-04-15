@@ -20,7 +20,7 @@ import { updateEntityMap } from './entity-map-updater'
 import { updateBeliefLog } from './belief-log-updater'
 import { updateGraph } from './graph-updater'
 import { getUnassignedTimelineEntries, getTimelineContextForConversations } from '@/lib/db/timeline'
-import { getConversationsForUser } from '@/lib/db/conversations'
+import { getConversationsForUser, updateConversation } from '@/lib/db/conversations'
 import { getUserById, updateUserSettings, updateUserHistoryId, getUserSettings } from '@/lib/db/users'
 import { getCurrentHistoryId } from '@/lib/google/gmail'
 import { purgeUserAsCp, getCPById } from '@/lib/db/counterparties'
@@ -408,6 +408,13 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                   enrichment,
                 )
 
+                // Snooze: triage says come back later — update conversation and skip action creation
+                if (!triageResult.needs_action && triageResult.revisit_at) {
+                  await updateConversation(convId, { snooze_until: triageResult.revisit_at })
+                  console.log(`[Agent] Step 5: Snoozed conv ${convId} until ${triageResult.revisit_at}: ${triageResult.revisit_reason ?? ''}`)
+                  return
+                }
+
                 if (!triageResult.needs_action || !triageResult.action) return
 
                 const verify = await verifyTriage(latestInbound.content, triageResult, plannerSettings)
@@ -467,6 +474,8 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                   triageWhatCpWants: triageResult.action.what_cp_wants,
                   triageMissingInfo: triageResult.action.missing_info ?? [],
                   triageCpName: cpName,
+                  triageWeight: triageResult.action.immovable ? 100 : triageResult.action.weight,
+                  triageImmovable: triageResult.action.immovable,
                   // Set venue/time on primary task when it IS the SCHEDULE action
                   ...(triageResult.action.type === 'SCHEDULE' ? {
                     triageMeetingVenue: resolvedVenue,

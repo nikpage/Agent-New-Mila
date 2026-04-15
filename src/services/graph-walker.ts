@@ -57,6 +57,10 @@ export interface WalkerTask {
   triageWhatCpWants?: string
   triageMissingInfo?: { label: string; value: null }[]
   triageCpName?: string
+  /** Scheduling weight (1-10 or 100) from triage — written to action_proposals.weight */
+  triageWeight?: number
+  /** If true, weight becomes 100 (immovable) */
+  triageImmovable?: boolean
 }
 
 export interface GraphWalkerOutput {
