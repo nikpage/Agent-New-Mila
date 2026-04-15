@@ -285,6 +285,9 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                   )
 
                   // 5. Reconstruction critic (fail-open — gaps logged for future use)
+                  if (extraction.scratchpad) {
+                    console.log(`[Agent] Step 4b: Scratchpad for entry ${entry.id}:\n${extraction.scratchpad}`)
+                  }
                   const critique = await critiqueExtraction([entry.content], extraction)
                   if (!critique.is_complete && critique.gaps.length > 0) {
                     console.log(`[Agent] Step 4b: Extraction gaps for entry ${entry.id}: ${critique.gaps.join('; ')}`)
@@ -642,6 +645,9 @@ export async function runFlowA(userId: string): Promise<FlowAResult> {
                 }
                 const extraction = await extractFactsAndBeliefs([dealMessage], temporalResult, dealContext, userSettings)
 
+                if (extraction.scratchpad) {
+                  console.log(`[FlowA] Scratchpad for entry ${entry.id}:\n${extraction.scratchpad}`)
+                }
                 const critique = await critiqueExtraction([entry.content], extraction)
                 if (!critique.is_complete && critique.gaps.length > 0) {
                   console.log(`[FlowA] Extraction gaps for entry ${entry.id}: ${critique.gaps.join('; ')}`)
