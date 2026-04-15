@@ -383,28 +383,19 @@ export async function sendMorningBrief(userId: string, briefType: BriefType = 'm
     })
 
     for (const [, group] of conversationEntries) {
-      // Sort within group: TODO first, then REPLY/SCHEDULE (logical dependency order)
+      // Sort within group: REPLY first (act now), SCHEDULE second (block calendar), TODO last (prep work).
+      // Within each type, sort by urgency descending.
+      // Never hide anything — err on the side of showing too much, not hiding vital actions.
       group.sort((a, b) => {
-        const typeOrder = (t: string) => t === 'TODO' ? 0 : t === 'REPLY' ? 1 : t === 'SCHEDULE' ? 2 : 3
-        return typeOrder(a.action.action_type) - typeOrder(b.action.action_type)
+        const typeOrder = (t: string) => t === 'REPLY' ? 0 : t === 'SCHEDULE' ? 1 : t === 'TODO' ? 2 : 3
+        const typeDiff = typeOrder(a.action.action_type) - typeOrder(b.action.action_type)
+        if (typeDiff !== 0) return typeDiff
+        return (b.action.urgency ?? 0) - (a.action.urgency ?? 0)
       })
 
-      const hasTodo = group.some(ba => ba.action.action_type === 'TODO')
-      const hasCpAction = group.some(ba => ba.action.action_type === 'REPLY' || ba.action.action_type === 'SCHEDULE')
-      const allUrgent = group.every(ba => (ba.action.urgency ?? 0) >= 9)
-
-      if (hasTodo && hasCpAction && !allUrgent) {
-        // Show only the TODO — CP action waits until prep is done
-        for (const ba of group) {
-          if (ba.action.action_type === 'TODO') {
-            orderedBriefActions.push(ba)
-          }
-        }
-      } else {
-        // Show all actions in the group
-        for (const ba of group) {
-          orderedBriefActions.push(ba)
-        }
+      // Show all actions — hiding vital items is worse than showing too many
+      for (const ba of group) {
+        orderedBriefActions.push(ba)
       }
     }
 

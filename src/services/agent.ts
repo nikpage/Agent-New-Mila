@@ -27,7 +27,8 @@ import { purgeUserAsCp, getCPById } from '@/lib/db/counterparties'
 import { getActiveJournalEntries, expireTemporalEntries, getJournalEntriesForContext } from '@/lib/db/journal'
 import { getPendingActionsByType } from '@/lib/db/actions'
 import { getEntitiesForDeal } from '@/lib/db/entity-map'
-import { triageConversation, verifyTriage, parseEnrichedText } from '@/lib/ai/tasks'
+import { triageConversation, verifyTriage, parseEnrichedText, extractMessageFacts } from '@/lib/ai/tasks'
+import type { ExtractionResult } from '@/lib/ai/tasks'
 
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import type { ActionProposal, JournalEntry, UserSettings, ConversationThread, ConversationSummary } from '@/lib/supabase/types'
@@ -468,25 +469,51 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                   // fail open — empty snapshot is fine
                 }
 
+                // extractMessageFacts: dedicated venue/time extraction stage (triage_extract).
+                // Always runs — triage is unreliable for physical venue (picks property address
+                // instead of meeting venue). Extraction uses the message text directly and
+                // resolves "tomorrow at 9" to ISO datetime. Used as primary source below.
+                let extraction: ExtractionResult | null = null
+                try {
+                  extraction = await extractMessageFacts(
+                    latestInbound.content,
+                    enrichment,
+                    summary,
+                    cpName,
+                    plannerSettings,
+                  )
+                } catch (err) {
+                  console.warn(`[Agent] Step 5: extractMessageFacts failed for conv ${convId}:`, err)
+                }
+
+                // Helper: resolve a proposedTime index to ISO string
+                const resolveTimeIndex = (index: number | null | undefined): string | null => {
+                  if (index == null) return null
+                  const pt = enrichment?.proposedTimes?.[index]
+                  if (!pt) return null
+                  if (pt.specificDate && pt.timeOfDay) return `${pt.specificDate}T${pt.timeOfDay}:00`
+                  if (pt.specificDate) return `${pt.specificDate}T09:00:00`
+                  return null
+                }
+
                 // Resolve venue and time from triage result for ALL action types.
                 // Venue resolution must happen before the primary task is built so SCHEDULE
                 // tasks (primary or auto) carry the correct location into the payload,
                 // enabling travel buffer creation in the optimizer.
+                // Priority: extraction freetext → extraction index → triage index → triage freetext
                 const ta = triageResult.action
                 const resolvedVenue =
-                  ta.venue_index !== null && ta.venue_index !== undefined
-                    ? (enrichment?.addresses?.[ta.venue_index] ?? null)
-                    : (ta.meeting_venue ?? null)
+                  extraction?.confirmed_venue_freetext
+                  ?? (extraction?.confirmed_venue_index != null ? enrichment?.addresses?.[extraction.confirmed_venue_index] ?? null : null)
+                  ?? (ta.venue_index != null ? enrichment?.addresses?.[ta.venue_index] ?? null : null)
+                  ?? ta.meeting_venue
+                  ?? null
                 const resolvedTime =
-                  ta.time_index !== null && ta.time_index !== undefined
-                    ? (() => {
-                        const pt = enrichment?.proposedTimes?.[ta.time_index]
-                        if (!pt) return null
-                        if (pt.specificDate && pt.timeOfDay) return `${pt.specificDate}T${pt.timeOfDay}:00`
-                        if (pt.specificDate) return `${pt.specificDate}T09:00:00`
-                        return null
-                      })()
-                    : (ta.proposed_time ?? null)
+                  extraction?.confirmed_time_freetext
+                  ?? resolveTimeIndex(extraction?.confirmed_time_index)
+                  ?? resolveTimeIndex(ta.time_index)
+                  ?? ta.proposed_time
+                  ?? null
 
                 const task: WalkerTask = {
                   nodeId: `triage:${convId}`,

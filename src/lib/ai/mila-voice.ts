@@ -357,7 +357,7 @@ ${missingInfo && missingInfo.length > 0 ? (() => {
       parts.push(`SPECIFIC DATA PROVIDED BY USER:\n${filled.map((f: any) => `- ${f.label}: ${f.value}`).join('\n')}`)
     }
     if (unfilled.length > 0) {
-      parts.push(`QUESTIONS THE USER STILL NEEDS TO ANSWER (write [___] as placeholder in the draft — do NOT invent answers):\n${unfilled.map((f: any) => `- ${f.label}`).join('\n')}`)
+      parts.push(`INFORMATION NOT YET AVAILABLE — user will fill these in before sending (write [___] placeholder where this belongs in the draft — do NOT ask the CP for this, do NOT invent it, do NOT turn these into questions in the email body):\n${unfilled.map((f: any) => `- ${f.label}`).join('\n')}`)
     }
     return parts.join('\n\n')
   })() : ''}
