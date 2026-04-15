@@ -346,6 +346,30 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
           const journalWithCps = await getJournalEntriesForContext(userId, convIds, [...cpIds])
 
+          // Pre-fetch enriched_text from messages for the latest inbound per conversation.
+          // deal_timeline.content is plain cleaned text — enrichment JSON lives in messages.enriched_text.
+          // Without this, parseEnrichedText always returns null and venue/time resolution never works.
+          const enrichedTextByConv = new Map<string, string>()
+          {
+            const messageIdToConv = new Map<string, string>()
+            for (const [convId, entries] of timelineContext) {
+              const latestIn = [...entries]
+                .filter(e => e.direction === 'in' && e.message_id)
+                .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime())[0]
+              if (latestIn?.message_id) messageIdToConv.set(latestIn.message_id, convId)
+            }
+            if (messageIdToConv.size > 0) {
+              const { data: msgRows } = await getSupabaseAdmin()
+                .from('messages')
+                .select('id, enriched_text')
+                .in('id', [...messageIdToConv.keys()])
+              for (const row of msgRows ?? []) {
+                const convId = messageIdToConv.get(row.id)
+                if (convId && row.enriched_text) enrichedTextByConv.set(convId, row.enriched_text)
+              }
+            }
+          }
+
           const convArray = [...newInboundConversations.entries()]
           for (let i = 0; i < convArray.length; i += 5) {
             const batch = convArray.slice(i, i + 5)
@@ -391,10 +415,9 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                   .map(j => j.content)
                   .join('\n')
 
-                // enrichment: parse from latest message if available, null otherwise
-                const enrichment = latestInbound.content
-                  ? parseEnrichedText(latestInbound.content)
-                  : null
+                // Enrichment: use messages.enriched_text (JSON), not timeline content (plain text).
+                const enrichedText = enrichedTextByConv.get(convId) ?? null
+                const enrichment = enrichedText ? parseEnrichedText(enrichedText) : null
 
                 const triageResult = await triageConversation(
                   latestInbound.content,
@@ -418,7 +441,15 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                 if (!triageResult.needs_action || !triageResult.action) return
 
                 const verify = await verifyTriage(latestInbound.content, triageResult, plannerSettings)
-                if (!verify.action_justified) return
+                if (!verify.action_justified) {
+                  if (triageResult.action.urgency_category === 'CRITICAL') {
+                    // CRITICAL urgency: trust triage, don't let verify kill it
+                    console.log(`[Agent] Step 5: verifyTriage veto overridden for CRITICAL — conv ${convId}`)
+                  } else {
+                    console.log(`[Agent] Step 5: verifyTriage VETO — conv ${convId} (${triageResult.action.urgency_category}) action dropped`)
+                    return
+                  }
+                }
 
                 const urgencyMap: Record<string, number> = {
                   CRITICAL: 9, TODAY: 8, THIS_WEEK: 6, SOON: 4, NONE: 1,

@@ -13,7 +13,7 @@ import { getDealsForUser } from '@/lib/db/deals'
 import { getDAG, getBlockingNodes } from '@/lib/db/deal-graph'
 import { getEntitiesForDeal } from '@/lib/db/entity-map'
 import { getCurrentBeliefs } from '@/lib/db/journal'
-import type { UserSettings, Deal, DealGraphNode } from '@/lib/supabase/types'
+import type { UserSettings, Deal, DealGraphNode, DealGraphEdge } from '@/lib/supabase/types'
 
 // ─── Output types ─────────────────────────────────────────────────────────────
 
@@ -128,7 +128,7 @@ async function walkOneDeal(
   // ── Graph-based tasks ────────────────────────────────────────────────────────
   const dag = await getDAG(deal.id)
   if (dag.nodes.length > 0) {
-    const graphTasks = classifyNodes(deal.id, dag.nodes, entityMapSnapshot, beliefSnapshot, now)
+    const graphTasks = classifyNodes(deal.id, dag.nodes, dag.edges, entityMapSnapshot, beliefSnapshot, now)
     tasks.push(...graphTasks)
   }
 
@@ -144,6 +144,7 @@ async function walkOneDeal(
 function classifyNodes(
   dealId: string,
   nodes: DealGraphNode[],
+  edges: DealGraphEdge[],
   entityMapSnapshot: Record<string, string>,
   beliefSnapshot: string[],
   now: Date
@@ -168,11 +169,8 @@ function classifyNodes(
     } else if (deadline && hoursUntilDue !== null && hoursUntilDue <= DUE_SOON_HOURS) {
       taskType = 'due_soon'
     } else {
-      // Check if this node is blocking (all upstream complete)
-      // We recompute here rather than calling getBlockingNodes() to avoid N+1 queries
-      const isBlocking = isNodeUnblocked(node, nodes, completedIds)
-
-      if (!isBlocking) continue  // blocked — skip for now
+      // Check if this node is blocking (all upstream depends_on edges are satisfied)
+      if (!isNodeUnblocked(node, edges, completedIds)) continue
 
       if (hoursUntilDue !== null && hoursUntilDue > HAS_SLACK_HOURS) {
         taskType = 'has_slack'
@@ -199,22 +197,17 @@ function classifyNodes(
 
 /**
  * Returns true if the node is pending and all its upstream depends_on edges are satisfied.
- * Nodes with no upstream edges are always unblocked.
+ * Nodes with no upstream edges are always unblocked (nothing is blocking them).
  */
 function isNodeUnblocked(
   node: DealGraphNode,
-  allNodes: DealGraphNode[],
+  edges: DealGraphEdge[],
   completedIds: Set<string>
 ): boolean {
   if (node.status !== 'pending') return false
 
-  // We don't have edges here — use a heuristic: node is the first in creation order
-  // that is still pending. This is approximate; the full check uses edges in getBlockingNodes().
-  // For the walker, we treat all pending nodes as potentially blocking — the scoring engine
-  // will further rank them. Skipped/completed nodes are already filtered above.
-  void allNodes  // used by completedIds above
-  void completedIds
-  return true
+  const upstreamEdges = edges.filter(e => e.to_node_id === node.id && e.edge_type === 'depends_on')
+  return upstreamEdges.every(e => completedIds.has(e.from_node_id))
 }
 
 function computeSlack(hoursUntilDue: number | null): number | null {
