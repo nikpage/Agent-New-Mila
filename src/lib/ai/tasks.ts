@@ -84,8 +84,11 @@ export async function filterEmail(
   console.log(`[AI:filterEmail] Running stage 'filter'`)
   const prompt = `Is this email from a real person requiring human attention? Answer ONLY with valid JSON: {"relevant": true} or {"relevant": false}
 
-Relevant: Business inquiry, question, meeting proposal, follow-up, negotiation, personal message, deal-related.
-NOT relevant: Newsletter, automated notification, marketing, social media alert, system notification, spam, promotional, transactional receipt.
+Relevant (return true): Business inquiry, deal negotiation, meeting proposal, follow-up, time-sensitive request, document coordination, urgent deadline, property transaction, personal message, any email where a human is asking for a response or action.
+NOT relevant (return false): Newsletter, automated notification, marketing, social media alert, system notification, spam, promotional offer, transactional receipt, no-reply sender, OOO auto-reply.
+
+IMPORTANT: Subject line prefixes in brackets (e.g. [URGENT], [RE:], [FWD:], [TAG]) do NOT indicate an automated email — they are normal human email conventions. Judge by content, not by subject formatting.
+IMPORTANT: When in doubt, return {"relevant": true}. It is better to let a borderline email through than to silently discard a real business communication.
 
 FROM: ${from}
 SUBJECT: ${subject}
@@ -93,11 +96,11 @@ BODY: ${body.slice(0, 500)}`
 
   const text = await runAITask('filter', prompt)
   const jsonMatch = text.match(/\{[\s\S]*\}/)
-  if (!jsonMatch) return { relevant: false }
+  if (!jsonMatch) return { relevant: true }  // fail-open: malformed response → let through
   try {
     return JSON.parse(jsonMatch[0])
   } catch {
-    return { relevant: false }
+    return { relevant: true }  // fail-open: parse error → let through
   }
 }
 
