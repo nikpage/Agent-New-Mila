@@ -537,7 +537,21 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
         const scoredTasks = scoreWalkerOutput(walkerOutputs, plannerSettings, triageTasks)
         const topTasks = scoredTasks.slice(0, 20)
-        const cards = await generateCards(topTasks, plannerSettings)
+
+        // Pre-fetch existing pending actions to skip redundant LLM card generation.
+        // generateCards only calls the LLM for cards that don't already exist in the DB.
+        const supabaseForDedup = getSupabaseAdmin()
+        const { data: existingPending } = await supabaseForDedup
+          .from('action_proposals')
+          .select('deal_id, action_type')
+          .eq('user_id', userId)
+          .eq('status', 'pending')
+          .not('deal_id', 'is', null)
+        const existingDealTypes = new Set<string>(
+          (existingPending ?? []).map(r => `${r.deal_id}:${r.action_type}`)
+        )
+
+        const cards = await generateCards(topTasks, plannerSettings, existingDealTypes)
         const newActions = await insertCardsAsActions(userId, cards)
         result.actionsGenerated += newActions.length
         result.actions = newActions

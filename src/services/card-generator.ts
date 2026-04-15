@@ -183,12 +183,16 @@ CRITICAL: Return only valid JSON, no markdown fences.`
  * Generate action cards from scored tasks.
  * One LLM call per task. Fails open on error.
  *
- * @param scoredTasks  Output from scoreWalkerOutput(), top-N for the brief
- * @param settings     User settings (language, tone)
+ * @param scoredTasks       Output from scoreWalkerOutput(), top-N for the brief
+ * @param settings          User settings (language, tone)
+ * @param existingDealTypes Set of "dealId:cardType" keys for deals that already have a pending
+ *                          action — skips the LLM call for those, since insertCardsAsActions
+ *                          would discard them anyway.
  */
 export async function generateCards(
   scoredTasks: ScoredTask[],
-  settings: UserSettings
+  settings: UserSettings,
+  existingDealTypes?: Set<string>
 ): Promise<ActionCard[]> {
   if (scoredTasks.length === 0) return []
 
@@ -196,9 +200,13 @@ export async function generateCards(
 
   // Process all tasks in parallel — each is independent
   const results = await Promise.allSettled(
-    scoredTasks.map(async (task): Promise<ActionCard> => {
+    scoredTasks.map(async (task): Promise<ActionCard | null> => {
       const cardType = deriveCardType(task.taskType, task.triageActionType)
       const urgency = deriveUrgency(task.taskType, task.hoursUntilDue, task.triageUrgency)
+
+      // Skip LLM if a pending action already exists for this deal+type.
+      // insertCardsAsActions would discard it anyway — no point generating text.
+      if (existingDealTypes?.has(`${task.dealId}:${cardType}`)) return null
 
       // Load current beliefs for tone tailoring
       let beliefs: string[] = task.beliefSnapshot ?? []
@@ -281,10 +289,10 @@ export async function generateCards(
     })
   )
 
-  // Collect fulfilled cards — failed tasks are silently dropped (fail-open)
+  // Collect fulfilled cards — failed tasks and skipped (null) cards are dropped
   return results
-    .filter((r): r is PromiseFulfilledResult<ActionCard> => r.status === 'fulfilled')
-    .map(r => r.value)
+    .filter((r): r is PromiseFulfilledResult<ActionCard> => r.status === 'fulfilled' && r.value !== null)
+    .map(r => r.value as ActionCard)
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
