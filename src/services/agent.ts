@@ -486,13 +486,23 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                   console.warn(`[Agent] Step 5: extractMessageFacts failed for conv ${convId}:`, err)
                 }
 
-                // Helper: resolve a proposedTime index to ISO string
+                // Helper: resolve a proposedTime index to ISO string.
+                // Handles both explicit dates (specificDate) and relative references
+                // (relativeRef: "tomorrow", "today") — the latter is common for urgent meetings.
+                const tz = plannerSettings?.timezone || 'Europe/Prague'
+                const nowForDates = new Date()
+                const todayIso = nowForDates.toLocaleDateString('sv-SE', { timeZone: tz })
+                const tomorrowIso = new Date(nowForDates.getTime() + 86400000).toLocaleDateString('sv-SE', { timeZone: tz })
                 const resolveTimeIndex = (index: number | null | undefined): string | null => {
                   if (index == null) return null
                   const pt = enrichment?.proposedTimes?.[index]
                   if (!pt) return null
                   if (pt.specificDate && pt.timeOfDay) return `${pt.specificDate}T${pt.timeOfDay}:00`
                   if (pt.specificDate) return `${pt.specificDate}T09:00:00`
+                  if (pt.relativeRef === 'tomorrow' && pt.timeOfDay) return `${tomorrowIso}T${pt.timeOfDay}:00`
+                  if (pt.relativeRef === 'tomorrow') return `${tomorrowIso}T09:00:00`
+                  if (pt.relativeRef === 'today' && pt.timeOfDay) return `${todayIso}T${pt.timeOfDay}:00`
+                  if (pt.relativeRef === 'today') return `${todayIso}T09:00:00`
                   return null
                 }
 

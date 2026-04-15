@@ -577,7 +577,7 @@ RULES:
 - intent_cs formatting:
   TODO = numbered checklist (max 4 items, max 6 words each: verb + object)
   REPLY/SCHEDULE = one sentence, max 20 words
-  Must be specific: names, dates, amounts from the conversation.
+  Must reference the specific question, request, or topic from the CP's latest message — not generic deal topics. Include names, dates, amounts. Describe what to SEND or DO, not what to apologize for or investigate.
 - what_cp_wants: one sentence summarizing what the CP is requesting/expecting
 - weight: 1-10 immovability (1=easy to reschedule, 10=hard to move). immovable=true only for absolutely immovable events.
 - venue_index: Pick which address from the FACTS list is the MEETING VENUE (where people will physically meet). Answer with the index number, or null if none apply or no addresses listed. Do NOT pick a property/deal subject unless the meeting is literally AT that property (e.g. a viewing).
@@ -591,7 +591,7 @@ RULES:
   SOON = No same-day demand. Deadline is weeks or months away.
   NONE = No time pressure at all.
   NOTE: A "HARD DEADLINE" label in the urgency signal means the deadline itself is firm — it does NOT mean the user must reply immediately. Judge CRITICAL only by explicit same-day CP demands.
-- missing_info: Questions the CP asked that ONLY the user can answer. Copy from the message, do not invent.
+- missing_info: ONLY questions the CP explicitly asked in their message that the user must answer personally. Copy the question verbatim from the CP's text. If the CP asked no questions, return []. NEVER invent questions based on the deal situation or what you think is missing.
 
 Respond with ONLY valid JSON:
 {
