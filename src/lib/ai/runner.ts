@@ -114,7 +114,7 @@ export async function runAITask(stage: AIStage, prompt: string): Promise<string>
         const tokOut = result.usage?.outputTokens ?? 0
         const cost = calcCost(models[i], tokIn, tokOut)
         trackUsage(stage, models[i], tokIn, tokOut)
-        console.log(`[AI] ${stage} → ${models[i]} (${tokIn}→${tokOut} tok, $${cost.toFixed(4)})${fp ? `\n  ${fp}` : ''}`)
+        console.log(`[AI] ${stage} → ${models[i]} (${tokIn}→${tokOut} tok, $${cost.toFixed(6)})${fp ? `\n  ${fp}` : ''}`)
         return result.text
       } catch (error) {
         if (isRetryableError(error) && retry < MAX_RETRIES) {
