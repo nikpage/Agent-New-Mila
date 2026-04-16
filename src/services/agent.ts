@@ -11,7 +11,6 @@ import { processTimelineEntries, rebuildConversationSummary } from './threading'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { runReflection } from './reflection'
 import { walkAllDeals } from './graph-walker'
-import type { WalkerTask } from './graph-walker'
 import { scoreWalkerOutput } from './scoring-engine'
 import { generateCards, insertCardsAsActions } from './card-generator'
 import { tagMessageToDeal } from './deal-tagger'
@@ -22,19 +21,15 @@ import { critiqueExtraction } from './reconstruction-critic'
 import { updateEntityMap } from './entity-map-updater'
 import { updateBeliefLog } from './belief-log-updater'
 import { updateGraph } from './graph-updater'
-import { getUnassignedTimelineEntries, getTimelineContextForConversations } from '@/lib/db/timeline'
+import { getUnassignedTimelineEntries } from '@/lib/db/timeline'
 import { getConversationsForUser, updateConversation } from '@/lib/db/conversations'
 import { getUserById, updateUserSettings, updateUserHistoryId, getUserSettings } from '@/lib/db/users'
 import { getCurrentHistoryId } from '@/lib/google/gmail'
-import { purgeUserAsCp, getCPById } from '@/lib/db/counterparties'
-import { getActiveJournalEntries, expireTemporalEntries, getJournalEntriesForContext } from '@/lib/db/journal'
-import { getPendingActionsByType } from '@/lib/db/actions'
-import { getEntitiesForDeal } from '@/lib/db/entity-map'
-import { triageConversation, verifyTriage, parseEnrichedText, extractMessageFacts } from '@/lib/ai/tasks'
-import type { ExtractionResult } from '@/lib/ai/tasks'
+import { purgeUserAsCp } from '@/lib/db/counterparties'
+import { getActiveJournalEntries, expireTemporalEntries } from '@/lib/db/journal'
 
 import { getSupabaseAdmin } from '@/lib/supabase/client'
-import type { ActionProposal, JournalEntry, UserSettings, ConversationThread, ConversationSummary } from '@/lib/supabase/types'
+import type { ActionProposal, JournalEntry, UserSettings, ConversationThread } from '@/lib/supabase/types'
 import type { DealMessage, DealContext } from './fact-extractor'
 import { resetAIUsage, getAIUsageSummary, formatAIUsageTable, type AIStageUsage } from '@/lib/ai/runner'
 import { insertAIUsage, type AIUsageRow } from '@/lib/db/ai-usage'
@@ -345,341 +340,29 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     }
 
     // Step 5: Batch planner — graph walker → scoring engine → card generator → action_proposals
-    // Replaces: planning.ts (per-conversation AI triage) + lead-tracking.ts (separate lead scan)
-    // Lead detection is now part of the graph walker (lead_cooling / lead_cold / lead_dead tasks).
+    // Walker-only pipeline: walks deal DAGs, scores tasks deterministically, generates cards via LLM.
+    // Lead detection is part of the graph walker (lead_cooling / lead_cold / lead_dead tasks).
+    // Triage was removed — step 4b (fact extraction + graph update) provides all context the walker needs.
     try {
       console.log(`[Agent] Step 5: Running batch planner (graph walker → scoring → cards)`)
       const plannerSettings = await getUserSettings(userId)
       if (plannerSettings) {
         const walkerOutputs = await walkAllDeals(userId, plannerSettings)
 
-        // Triage conversations that received new inbound messages this run.
-        // Produces message-level WalkerTasks ranked alongside graph-level walker tasks.
-        const triageTasks: WalkerTask[] = []
-        const triageEntries: Array<{ task: WalkerTask; actionType: string }> = []
-
-        if (newInboundConversations && newInboundConversations.size > 0) {
-          const convIds = [...newInboundConversations.keys()]
-
-          // Fetch timeline context first, then journal with actual cpIds
-          const timelineContext = await getTimelineContextForConversations(convIds, 15)
-
-          const cpIds = new Set<string>()
-          for (const entries of timelineContext.values()) {
-            for (const e of entries) { if (e.cp_id) cpIds.add(e.cp_id) }
-          }
-
-          const journalWithCps = await getJournalEntriesForContext(userId, convIds, [...cpIds])
-
-          // Pre-fetch enriched_text from messages for the latest inbound per conversation.
-          // deal_timeline.content is plain cleaned text — enrichment JSON lives in messages.enriched_text.
-          // Without this, parseEnrichedText always returns null and venue/time resolution never works.
-          const enrichedTextByConv = new Map<string, string>()
-          {
-            const messageIdToConv = new Map<string, string>()
-            for (const [convId, entries] of timelineContext) {
-              const latestIn = [...entries]
-                .filter(e => e.direction === 'in' && e.message_id)
-                .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime())[0]
-              if (latestIn?.message_id) messageIdToConv.set(latestIn.message_id, convId)
-            }
-            if (messageIdToConv.size > 0) {
-              const { data: msgRows } = await getSupabaseAdmin()
-                .from('messages')
-                .select('id, enriched_text')
-                .in('id', [...messageIdToConv.keys()])
-              for (const row of msgRows ?? []) {
-                const convId = messageIdToConv.get(row.id)
-                if (convId && row.enriched_text) enrichedTextByConv.set(convId, row.enriched_text)
-              }
-            }
-          }
-
-          const convArray = [...newInboundConversations.entries()]
-          for (let i = 0; i < convArray.length; i += 5) {
-            const batch = convArray.slice(i, i + 5)
-            await Promise.allSettled(batch.map(async ([convId, conv]) => {
-              try {
-                const convEntries = timelineContext.get(convId) ?? []
-                const latestInbound = [...convEntries]
-                  .filter(e => e.direction === 'in')
-                  .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime())[0]
-
-                if (!latestInbound?.content) return
-
-                const now = Date.now()
-                const recentMessages = convEntries.map(e => {
-                  const diffH = Math.floor((now - new Date(e.occurred_at).getTime()) / 3_600_000)
-                  const age = diffH < 24 ? `${diffH}h ago` : `${Math.floor(diffH / 24)}d ago`
-                  return { direction: e.direction ?? 'in', text: e.content ?? '', age }
-                })
-
-                const summary = conv.summary_json as ConversationSummary | null
-
-                const pendingByType = await getPendingActionsByType(convId)
-                const pendingActions = [...pendingByType.entries()].map(([type, a]) => ({
-                  type, intent: a.intent_cs ?? '', urgency: a.urgency,
-                }))
-
-                const cpId = latestInbound.cp_id
-                let cpName = 'Unknown'
-                if (cpId) {
-                  const cp = await getCPById(cpId)
-                  cpName = cp?.name ?? 'Unknown'
-                }
-
-                const channel: 'email' | 'whatsapp' =
-                  latestInbound.event_type === 'whatsapp' ? 'whatsapp' : 'email'
-
-                const convJournalText = journalWithCps
-                  .filter(j =>
-                    j.scope === 'global' ||
-                    j.scope_ref === convId ||
-                    (cpId != null && j.scope_ref === cpId)
-                  )
-                  .map(j => j.content)
-                  .join('\n')
-
-                // Enrichment: use messages.enriched_text (JSON), not timeline content (plain text).
-                const enrichedText = enrichedTextByConv.get(convId) ?? null
-                const enrichment = enrichedText ? parseEnrichedText(enrichedText) : null
-
-                const triageResult = await triageConversation(
-                  latestInbound.content,
-                  recentMessages,
-                  summary,
-                  pendingActions,
-                  cpName,
-                  channel,
-                  plannerSettings,
-                  convJournalText,
-                  enrichment,
-                )
-
-                // Snooze: triage says come back later — update conversation and skip action creation
-                if (!triageResult.needs_action && triageResult.revisit_at) {
-                  await updateConversation(convId, { snooze_until: triageResult.revisit_at })
-                  console.log(`[Agent] Step 5: Snoozed conv ${convId} until ${triageResult.revisit_at}: ${triageResult.revisit_reason ?? ''}`)
-                  return
-                }
-
-                if (!triageResult.needs_action || !triageResult.action) return
-
-                const verify = await verifyTriage(latestInbound.content, triageResult, plannerSettings)
-                if (!verify.action_justified) {
-                  if (triageResult.action.urgency_category === 'CRITICAL') {
-                    // CRITICAL urgency: trust triage, don't let verify kill it
-                    console.log(`[Agent] Step 5: verifyTriage veto overridden for CRITICAL — conv ${convId}`)
-                  } else {
-                    console.log(`[Agent] Step 5: verifyTriage VETO — conv ${convId} (${triageResult.action.urgency_category}) action dropped`)
-                    return
-                  }
-                }
-
-                const urgencyMap: Record<string, number> = {
-                  CRITICAL: 9, TODAY: 8, THIS_WEEK: 6, SOON: 4, NONE: 1,
-                }
-
-                // Load entity map from DB for this deal.
-                // convDealMap takes priority — it carries the deal ID written in step 4b
-                // for this run. conv.deal_id may be null for conversations created this run.
-                const dealIdForTask = convDealMap.get(convId) ?? conv.deal_id ?? convId
-                let entityMapSnapshot: Record<string, string> = {}
-                try {
-                  const entities = await getEntitiesForDeal(dealIdForTask)
-                  entityMapSnapshot = entities.reduce((acc, e) => ({
-                    ...acc,
-                    [`${e.entity_type}.${e.entity_key}`]: e.entity_value,
-                  }), {} as Record<string, string>)
-                  // Fallback: if entity map has no price but enrichment does, inject it.
-                  // Covers first-run cases where entity_map hasn't been written yet.
-                  if (!entityMapSnapshot['price.asking_price'] && !entityMapSnapshot['price.sale_price']
-                      && enrichment?.keyNumbers?.price) {
-                    entityMapSnapshot['price.asking_price'] = enrichment.keyNumbers.price
-                  }
-                } catch {
-                  // fail open — empty snapshot is fine
-                }
-
-                // extractMessageFacts: dedicated venue/time extraction stage (triage_extract).
-                // Always runs — triage is unreliable for physical venue (picks property address
-                // instead of meeting venue). Extraction uses the message text directly and
-                // resolves "tomorrow at 9" to ISO datetime. Used as primary source below.
-                let extraction: ExtractionResult | null = null
-                try {
-                  extraction = await extractMessageFacts(
-                    latestInbound.content,
-                    enrichment,
-                    summary,
-                    cpName,
-                    plannerSettings,
-                  )
-                } catch (err) {
-                  console.warn(`[Agent] Step 5: extractMessageFacts failed for conv ${convId}:`, err)
-                }
-
-                // Helper: resolve a proposedTime index to ISO string.
-                // Handles both explicit dates (specificDate) and relative references
-                // (relativeRef: "tomorrow", "today") — the latter is common for urgent meetings.
-                const tz = plannerSettings?.timezone || 'Europe/Prague'
-                const nowForDates = new Date()
-                const todayIso = nowForDates.toLocaleDateString('sv-SE', { timeZone: tz })
-                const tomorrowIso = new Date(nowForDates.getTime() + 86400000).toLocaleDateString('sv-SE', { timeZone: tz })
-                const resolveTimeIndex = (index: number | null | undefined): string | null => {
-                  if (index == null) return null
-                  const pt = enrichment?.proposedTimes?.[index]
-                  if (!pt) return null
-                  if (pt.specificDate && pt.timeOfDay) return `${pt.specificDate}T${pt.timeOfDay}:00`
-                  if (pt.specificDate) return `${pt.specificDate}T09:00:00`
-                  if (pt.relativeRef === 'tomorrow' && pt.timeOfDay) return `${tomorrowIso}T${pt.timeOfDay}:00`
-                  if (pt.relativeRef === 'tomorrow') return `${tomorrowIso}T09:00:00`
-                  if (pt.relativeRef === 'today' && pt.timeOfDay) return `${todayIso}T${pt.timeOfDay}:00`
-                  if (pt.relativeRef === 'today') return `${todayIso}T09:00:00`
-                  return null
-                }
-
-                // Resolve venue and time from triage result for ALL action types.
-                // Venue resolution must happen before the primary task is built so SCHEDULE
-                // tasks (primary or auto) carry the correct location into the payload,
-                // enabling travel buffer creation in the optimizer.
-                // Priority: extraction index → extraction freetext → triage index → triage freetext
-                // Index-first because freetext from extraction can be a description ("u notáře") not an address.
-                const ta = triageResult.action
-                const resolvedVenue =
-                  (extraction?.confirmed_venue_index != null ? enrichment?.addresses?.[extraction.confirmed_venue_index] ?? null : null)
-                  ?? extraction?.confirmed_venue_freetext
-                  ?? (ta.venue_index != null ? enrichment?.addresses?.[ta.venue_index] ?? null : null)
-                  ?? ta.meeting_venue
-                  ?? null
-                const resolvedTime =
-                  extraction?.confirmed_time_freetext
-                  ?? resolveTimeIndex(extraction?.confirmed_time_index)
-                  ?? resolveTimeIndex(ta.time_index)
-                  ?? ta.proposed_time
-                  ?? null
-
-                const task: WalkerTask = {
-                  nodeId: `triage:${convId}`,
-                  dealId: dealIdForTask,
-                  taskType: 'triage_action',
-                  deadline: null,
-                  hoursUntilDue: null,
-                  slack: null,
-                  cpId: cpId ?? null,
-                  entityMapSnapshot,
-                  beliefSnapshot: [],
-                  triageUrgency: urgencyMap[triageResult.action.urgency_category] ?? 5,
-                  triageActionType: triageResult.action.type as 'REPLY' | 'SCHEDULE' | 'TODO',
-                  triageIntentCs: triageResult.action.intent_cs,
-                  triageRationaleCs: triageResult.action.rationale_cs,
-                  triageWhatCpWants: triageResult.action.what_cp_wants,
-                  triageMissingInfo: triageResult.action.missing_info ?? [],
-                  triageCpName: cpName,
-                  triageWeight: triageResult.action.immovable ? 100 : triageResult.action.weight,
-                  triageImmovable: triageResult.action.immovable,
-                  // Set venue/time on primary task when it IS the SCHEDULE action
-                  ...(triageResult.action.type === 'SCHEDULE' ? {
-                    triageMeetingVenue: resolvedVenue,
-                    triageProposedTime: resolvedTime,
-                  } : {}),
-                }
-
-                triageEntries.push({ task, actionType: triageResult.action.type })
-                triageTasks.push(task)
-                console.log(`[Agent] Step 5: Triage → ${triageResult.action.type} (${triageResult.action.urgency_category}) for conv ${convId}`)
-
-                // Auto-SCHEDULE: if primary action is REPLY/TODO and triage detected venue/time,
-                // create a secondary SCHEDULE task (same logic as old planning.ts code gate)
-                if (ta.type !== 'SCHEDULE') {
-                  if (resolvedVenue || resolvedTime) {
-                    const scheduleTask: WalkerTask = {
-                      nodeId: `triage:schedule:${convId}`,
-                      dealId: dealIdForTask,
-                      taskType: 'triage_action',
-                      deadline: resolvedTime,
-                      hoursUntilDue: null,
-                      slack: null,
-                      cpId: cpId ?? null,
-                      entityMapSnapshot,
-                      beliefSnapshot: [],
-                      triageUrgency: urgencyMap[ta.urgency_category] ?? 5,
-                      triageActionType: 'SCHEDULE',
-                      triageMeetingVenue: resolvedVenue,
-                      triageProposedTime: resolvedTime,
-                      // Use CP's stated request as intent base — better context for generateSchedulingIntent().
-                      // Falls back to generic only if what_cp_wants is empty.
-                      triageIntentCs: ta.what_cp_wants
-                        ? `Naplánovat: ${ta.what_cp_wants.slice(0, 80)}.`
-                        : 'Naplánovat schůzku dle požadavku.',
-                      triageRationaleCs: ta.rationale_cs || 'Protistrana navrhla čas nebo místo.',
-                    }
-                    triageEntries.push({ task: scheduleTask, actionType: 'SCHEDULE' })
-                    triageTasks.push(scheduleTask)
-                    console.log(`[Agent] Step 5: Auto-SCHEDULE for conv ${convId} (venue: ${resolvedVenue ?? 'none'}, time: ${resolvedTime ?? 'none'})`)
-                  }
-                }
-              } catch (err) {
-                console.warn(`[Agent] Step 5: Triage failed for conversation ${convId}:`, err)
-              }
-            }))
-          }
-        }
-
-        // Dedup: triage has message-level context — it supersedes walker tasks of the same
-        // type family on the same deal. REPLY/TODO → drops 'blocking'; SCHEDULE → drops 'calendar_conflict'.
-        if (triageEntries.length > 0) {
-          const triageRepliesOrTodos = new Set(
-            triageEntries.filter(e => e.actionType !== 'SCHEDULE').map(e => e.task.dealId)
-          )
-          const triageSchedules = new Set(
-            triageEntries.filter(e => e.actionType === 'SCHEDULE').map(e => e.task.dealId)
-          )
-          for (const output of walkerOutputs) {
-            output.tasks = output.tasks.filter(task =>
-              !(task.taskType === 'blocking'          && triageRepliesOrTodos.has(output.deal.id)) &&
-              !(task.taskType === 'calendar_conflict' && triageSchedules.has(output.deal.id))
-            )
-          }
-        }
-
-        const scoredTasks = scoreWalkerOutput(walkerOutputs, plannerSettings, triageTasks)
+        const scoredTasks = scoreWalkerOutput(walkerOutputs, plannerSettings)
         const topTasks = scoredTasks.slice(0, 20)
 
         // Pre-fetch existing pending actions to skip redundant LLM card generation.
-        // Key by deal_id, conversation_id, AND the conversation's deal_id (for triage-path
-        // actions that were inserted with deal_id=null but whose conversation now has a deal).
-        // Walker tasks use real deal UUIDs, triage-path uses conv UUIDs — all must match.
+        // All cards use real deal UUIDs — simple deal_id:action_type dedup.
         const supabaseForDedup = getSupabaseAdmin()
         const { data: existingPending } = await supabaseForDedup
           .from('action_proposals')
-          .select('deal_id, conversation_id, action_type')
+          .select('deal_id, action_type')
           .eq('user_id', userId)
           .eq('status', 'pending')
         const existingDealTypes = new Set<string>()
-        // Collect conversation IDs that lack a deal_id — we need to resolve their deal
-        const convIdsNeedingDeal: string[] = []
         for (const r of existingPending ?? []) {
           if (r.deal_id) existingDealTypes.add(`${r.deal_id}:${r.action_type}`)
-          if (r.conversation_id) existingDealTypes.add(`${r.conversation_id}:${r.action_type}`)
-          if (!r.deal_id && r.conversation_id) convIdsNeedingDeal.push(r.conversation_id)
-        }
-        // Resolve conversation → deal for triage-path actions missing deal_id.
-        // This ensures walker tasks (keyed by deal UUID) match against triage-inserted actions.
-        if (convIdsNeedingDeal.length > 0) {
-          const { data: convDeals } = await supabaseForDedup
-            .from('conversation_threads')
-            .select('id, deal_id')
-            .in('id', convIdsNeedingDeal)
-          const convToDeal = new Map<string, string>()
-          for (const c of convDeals ?? []) {
-            if (c.deal_id) convToDeal.set(c.id, c.deal_id)
-          }
-          for (const r of existingPending ?? []) {
-            if (!r.deal_id && r.conversation_id) {
-              const dealId = convToDeal.get(r.conversation_id)
-              if (dealId) existingDealTypes.add(`${dealId}:${r.action_type}`)
-            }
-          }
         }
 
         const cards = await generateCards(topTasks, plannerSettings, existingDealTypes)

@@ -26,13 +26,14 @@ export type WalkerTaskType =
   | 'lead_cooling'
   | 'lead_cold'
   | 'lead_dead'
-  | 'triage_action'
 
 export interface WalkerTask {
   /** Node ID, or 'deal:lead' for deal-level lead tracking tasks */
   nodeId: string
   dealId: string
   taskType: WalkerTaskType
+  /** Human-readable label of the graph node (e.g. "Property viewings", "Purchase contract") */
+  nodeLabel: string | null
   deadline: string | null
   /** Hours until deadline — negative means overdue */
   hoursUntilDue: number | null
@@ -43,24 +44,6 @@ export interface WalkerTask {
   entityMapSnapshot: Record<string, string>
   /** Current deal beliefs — latest content per topic */
   beliefSnapshot: string[]
-  /** Urgency (1–10) from AI triage — only set for taskType='triage_action' */
-  triageUrgency?: number
-  /** Action type from triage — only set for taskType='triage_action' */
-  triageActionType?: 'REPLY' | 'SCHEDULE' | 'TODO'
-  /** Meeting venue resolved from triage — only set for SCHEDULE triage_action tasks */
-  triageMeetingVenue?: string | null
-  /** Proposed meeting time (ISO) resolved from triage — only set for SCHEDULE triage_action tasks */
-  triageProposedTime?: string | null
-  /** Triage-generated card text — carried directly, no second LLM call needed */
-  triageIntentCs?: string
-  triageRationaleCs?: string
-  triageWhatCpWants?: string
-  triageMissingInfo?: { label: string; value: null }[]
-  triageCpName?: string
-  /** Scheduling weight (1-10 or 100) from triage — written to action_proposals.weight */
-  triageWeight?: number
-  /** If true, weight becomes 100 (immovable) */
-  triageImmovable?: boolean
 }
 
 export interface GraphWalkerOutput {
@@ -183,6 +166,7 @@ function classifyNodes(
       nodeId: node.id,
       dealId,
       taskType,
+      nodeLabel: node.label,
       deadline: node.deadline,
       hoursUntilDue: hoursUntilDue !== null ? Math.round(hoursUntilDue * 10) / 10 : null,
       slack: computeSlack(hoursUntilDue),
@@ -246,6 +230,7 @@ function classifyLeadStatus(
     nodeId: `deal:${deal.id}:lead`,
     dealId: deal.id,
     taskType,
+    nodeLabel: null,
     deadline: null,
     hoursUntilDue: null,
     slack: null,

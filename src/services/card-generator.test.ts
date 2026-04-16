@@ -19,6 +19,7 @@ const TASK = (overrides?: Partial<ScoredTask>): ScoredTask => ({
   nodeId: 'node-1',
   dealId: 'deal-1',
   taskType: 'blocking',
+  nodeLabel: 'Property viewings',
   deadline: null,
   hoursUntilDue: null,
   slack: null,

@@ -35,6 +35,7 @@ const TASK = (dealId: string, overrides?: Partial<WalkerTask>): WalkerTask => ({
   nodeId: 'node-1',
   dealId,
   taskType: 'blocking',
+  nodeLabel: 'Test node',
   deadline: null,
   hoursUntilDue: null,
   slack: null,

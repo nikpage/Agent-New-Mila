@@ -45,7 +45,6 @@ function deriveUrgency(task: WalkerTask): number {
     case 'lead_cooling':     return 3
     case 'has_slack':        return 2
     case 'calendar_conflict': return 6
-    case 'triage_action':    return task.triageUrgency ?? 5
     default:                 return 1
   }
 }
@@ -56,13 +55,11 @@ function deriveUrgency(task: WalkerTask): number {
  * Score all walker tasks across all deals.
  *
  * @param walkerOutputs  Output from walkAllDeals()
- * @param dealMap        Map<dealId, Deal> — for last_activity_at and anomaly_boost
  * @param settings       User settings (thresholds, multipliers, kcHighValue)
  */
 export function scoreWalkerOutput(
   walkerOutputs: GraphWalkerOutput[],
   settings: UserSettings,
-  triageTasks: WalkerTask[] = []
 ): ScoredTask[] {
   const scored: ScoredTask[] = []
 
@@ -110,29 +107,6 @@ export function scoreWalkerOutput(
         },
       })
     }
-  }
-
-  // Score triage tasks — no deal context available, use stub deal values.
-  // daysIgnored is derived from urgency_category so CRITICAL/TODAY tasks rank above
-  // lead tracking tasks (which use actual staleness days). This reflects that a CRITICAL
-  // email deadline is more pressing than a cold lead ignored for weeks.
-  for (const task of triageTasks) {
-    const urgency = deriveUrgency(task)
-    // Map urgency to effective daysIgnored: CRITICAL=15, TODAY=10, THIS_WEEK=5, SOON=2, NONE=0.5
-    const effectiveDays = urgency >= 9 ? 15 : urgency >= 8 ? 10 : urgency >= 6 ? 5 : urgency >= 4 ? 2 : 0.5
-    const timePressure = urgency * Math.pow(effectiveDays, 1.5)
-    const score = 1 + timePressure // dealImportance stub=1, immovability=0, anomalyBoost=0
-    scored.push({
-      ...task,
-      score: Math.round(score * 100) / 100,
-      scoreBreakdown: {
-        dealImportance: 1,
-        timePressure:   Math.round(timePressure * 100) / 100,
-        graphPressure:  0,
-        immovability:   0,
-        anomalyBoost:   0,
-      },
-    })
   }
 
   // Sort descending by score

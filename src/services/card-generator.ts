@@ -34,11 +34,11 @@ export interface ActionCard {
   entityMapSnapshot: Record<string, string>
   beliefSnapshot: string[]
 
-  // Triage venue/time — only set for auto-SCHEDULE cards
-  triageMeetingVenue?: string | null
-  triageProposedTime?: string | null
-  // Triage weight — written to action_proposals.weight
-  triageWeight?: number
+  // Venue/time — extracted from entity map for SCHEDULE cards
+  meetingVenue: string | null
+  proposedTime: string | null
+  // Weight (immovability) — determined by LLM from deal context
+  weight: number | null
 
   // Generated card fields
   card_type: 'REPLY' | 'SCHEDULE' | 'TODO'
@@ -51,10 +51,8 @@ export interface ActionCard {
 
 // ─── Card type derivation ─────────────────────────────────────────────────────
 
-export function deriveCardType(taskType: WalkerTaskType, triageActionType?: 'REPLY' | 'SCHEDULE' | 'TODO'): 'REPLY' | 'SCHEDULE' | 'TODO' {
-  if (taskType === 'triage_action') {
-    return triageActionType ?? 'REPLY'
-  }
+/** Deterministic fallback card type — used when LLM fails or for task types with obvious mapping. */
+export function deriveCardType(taskType: WalkerTaskType): 'REPLY' | 'SCHEDULE' | 'TODO' {
   if (taskType === 'lead_cooling' || taskType === 'lead_cold' || taskType === 'lead_dead') {
     return 'REPLY'
   }
@@ -66,8 +64,7 @@ export function deriveCardType(taskType: WalkerTaskType, triageActionType?: 'REP
 
 // ─── Urgency mapping (mirrors scoring-engine) ─────────────────────────────────
 
-function deriveUrgency(taskType: WalkerTaskType, hoursUntilDue: number | null, triageUrgency?: number): number {
-  if (taskType === 'triage_action') return triageUrgency ?? 5
+function deriveUrgency(taskType: WalkerTaskType, hoursUntilDue: number | null): number {
   switch (taskType) {
     case 'overdue':          return 10
     case 'due_soon':
@@ -116,7 +113,7 @@ function defaultRationaleCs(taskType: WalkerTaskType): string {
 
 function buildCardPrompt(
   task: ScoredTask,
-  cardType: 'REPLY' | 'SCHEDULE' | 'TODO',
+  fallbackCardType: 'REPLY' | 'SCHEDULE' | 'TODO',
   beliefs: string[],
   language: string
 ): string {
@@ -136,18 +133,11 @@ function buildCardPrompt(
         ? `Hours until due: ${task.hoursUntilDue.toFixed(1)}`
         : 'No deadline set'
 
-  const draftInstructions = cardType === 'REPLY'
-    ? `
-Also generate a "draft_skeleton": a short Czech email/message skeleton (2–3 sentences max).
-Use {{ placeholder }} for any specific detail you don't know (e.g. specific dates, names, prices).
-Keep it natural and warm, not robotic.`
-    : `Set "draft_skeleton" to null.`
-
   return `You are generating an action card for a real estate agent's deal management system.
 
 Deal context:
   Task type: ${task.taskType}
-  Card type: ${cardType}
+  Graph node: ${task.nodeLabel ?? '(no node — lead tracking task)'}
   Score: ${task.score.toFixed(1)}
   ${deadline}
 
@@ -157,20 +147,25 @@ ${entityLines}
 Current beliefs about this counterparty:
 ${beliefLines}
 
-Your task: Generate a concise, actionable card in ${language}.
+Your task: Determine the correct action type AND generate a concise, actionable card in ${language}.
 
 Return a JSON object with these fields:
+- "card_type": one of "REPLY", "SCHEDULE", or "TODO"
+  - "REPLY" = the agent needs to contact the counterparty (email, call, message)
+  - "SCHEDULE" = a meeting or appointment needs to be arranged (look for venue/time in entity map)
+  - "TODO" = an internal task the agent must complete (documents, research, preparation)
 - "intent_cs": one sentence (max 20 words) describing what needs to happen RIGHT NOW
 - "rationale_cs": one sentence explaining WHY this is urgent/important
-- "draft_skeleton": ${cardType === 'REPLY' ? 'a brief message skeleton (2-3 sentences, use {{ placeholder }} for unknowns)' : 'null'}
+- "draft_skeleton": if card_type is REPLY, a brief message skeleton (2-3 sentences, use {{ placeholder }} for unknowns). Otherwise null.
 - "placeholders": array of strings naming each {{ placeholder }} used (empty array if none)
+- "weight": integer 1-10 estimating how hard it would be to reschedule this action (1=trivial, 10=very hard to move). For meetings with external parties or deadlines, use 6-8. For internal tasks, use 2-4. For court dates or notary appointments, use 10.
 
 Rules:
 - Write ALL text in ${language}
 - For intent_cs: use action verbs, be direct (e.g. "Zavolat Novákovi ohledně ceny" not "Je nutné zvážit možnost...")
-- For REPLY cards: the agent needs to reach out to the counterparty
-- For SCHEDULE cards: the agent needs to resolve a calendar conflict
-- For TODO cards: the agent needs to complete an internal task
+- If entity map contains meeting_venue or address AND a deadline/time, card_type should be SCHEDULE
+- If beliefs mention a counterparty request or question, card_type should be REPLY
+- If the graph node is about viewings/meetings/showings AND venue/time data exists, card_type should be SCHEDULE
 - Add {{ placeholder }} only when the specific detail is MISSING from entity map
 - Keep intent_cs under 20 words
 
@@ -201,12 +196,15 @@ export async function generateCards(
   // Process all tasks in parallel — each is independent
   const results = await Promise.allSettled(
     scoredTasks.map(async (task): Promise<ActionCard | null> => {
-      const cardType = deriveCardType(task.taskType, task.triageActionType)
-      const urgency = deriveUrgency(task.taskType, task.hoursUntilDue, task.triageUrgency)
+      const fallbackCardType = deriveCardType(task.taskType)
+      const urgency = deriveUrgency(task.taskType, task.hoursUntilDue)
 
       // Skip LLM if a pending action already exists for this deal+type.
       // insertCardsAsActions would discard it anyway — no point generating text.
-      if (existingDealTypes?.has(`${task.dealId}:${cardType}`)) return null
+      // Check all 3 possible card types since the LLM determines the final type.
+      if (existingDealTypes?.has(`${task.dealId}:REPLY`) &&
+          existingDealTypes?.has(`${task.dealId}:SCHEDULE`) &&
+          existingDealTypes?.has(`${task.dealId}:TODO`)) return null
 
       // Load current beliefs for tone tailoring
       let beliefs: string[] = task.beliefSnapshot ?? []
@@ -221,47 +219,45 @@ export async function generateCards(
         // Use beliefSnapshot from walker output if DB call fails
       }
 
-      // triage_action tasks already have correct text from the triage pipeline.
-      // Skip the LLM call entirely — use the carried fields directly.
-      if (task.taskType === 'triage_action' && task.triageIntentCs) {
-        return {
-          nodeId:              task.nodeId,
-          dealId:              task.dealId,
-          taskType:            task.taskType,
-          score:               task.score,
-          scoreBreakdown:      task.scoreBreakdown,
-          cpId:                task.cpId,
-          entityMapSnapshot:   task.entityMapSnapshot,
-          beliefSnapshot:      beliefs,
-          triageMeetingVenue:  task.triageMeetingVenue,
-          triageProposedTime:  task.triageProposedTime,
-          triageWeight:        task.triageWeight,
-          card_type:           cardType,
-          intent_cs:           task.triageIntentCs,
-          rationale_cs:        task.triageRationaleCs ?? defaultRationaleCs(task.taskType),
-          draft_skeleton:      null,  // generated on-demand at execution time
-          placeholders:        (task.triageMissingInfo ?? []).map(m => m.label),
-          urgency,
-        }
-      }
-
-      const prompt = buildCardPrompt(task, cardType, beliefs, language)
+      const prompt = buildCardPrompt(task, fallbackCardType, beliefs, language)
 
       try {
         const raw = await runAITask('drafting', prompt)
 
         let parsed: {
+          card_type?: string
           intent_cs?: string
           rationale_cs?: string
           draft_skeleton?: string | null
           placeholders?: string[]
+          weight?: number
         }
         try {
-          parsed = JSON.parse(raw)
+          // Take first JSON block — Gemini sometimes wraps in markdown fences
+          const jsonMatch = raw.match(/\{[\s\S]*\}/)
+          parsed = JSON.parse(jsonMatch?.[0] ?? raw)
         } catch {
-          // LLM returned non-JSON — use defaults
-          return buildFallbackCard(task, cardType, urgency, beliefs)
+          return buildFallbackCard(task, fallbackCardType, urgency, beliefs)
         }
+
+        // Validate LLM-determined card type, fall back to deterministic derivation
+        const validTypes = ['REPLY', 'SCHEDULE', 'TODO'] as const
+        const llmCardType = parsed.card_type?.toUpperCase()
+        const cardType: 'REPLY' | 'SCHEDULE' | 'TODO' =
+          validTypes.includes(llmCardType as typeof validTypes[number])
+            ? llmCardType as 'REPLY' | 'SCHEDULE' | 'TODO'
+            : fallbackCardType
+
+        // Skip if this specific deal+type already has a pending action
+        if (existingDealTypes?.has(`${task.dealId}:${cardType}`)) return null
+
+        // Extract venue/time from entity map for SCHEDULE cards
+        const meetingVenue = extractVenueFromEntityMap(task.entityMapSnapshot)
+        const proposedTime = extractTimeFromEntityMap(task.entityMapSnapshot)
+
+        const weight = typeof parsed.weight === 'number'
+          ? Math.min(10, Math.max(1, Math.round(parsed.weight)))
+          : null
 
         return {
           nodeId:              task.nodeId,
@@ -272,9 +268,9 @@ export async function generateCards(
           cpId:                task.cpId,
           entityMapSnapshot:   task.entityMapSnapshot,
           beliefSnapshot:      beliefs,
-          triageMeetingVenue:  task.triageMeetingVenue,
-          triageProposedTime:  task.triageProposedTime,
-          triageWeight:        task.triageWeight,
+          meetingVenue:        cardType === 'SCHEDULE' ? meetingVenue : null,
+          proposedTime:        cardType === 'SCHEDULE' ? proposedTime : null,
+          weight,
           card_type:           cardType,
           intent_cs:           (parsed.intent_cs ?? defaultIntentCs(task.taskType)).slice(0, 200),
           rationale_cs:        parsed.rationale_cs ?? defaultRationaleCs(task.taskType),
@@ -284,7 +280,7 @@ export async function generateCards(
         }
       } catch {
         // LLM unavailable — fail open
-        return buildFallbackCard(task, cardType, urgency, beliefs)
+        return buildFallbackCard(task, fallbackCardType, urgency, beliefs)
       }
     })
   )
@@ -293,6 +289,31 @@ export async function generateCards(
   return results
     .filter((r): r is PromiseFulfilledResult<ActionCard> => r.status === 'fulfilled' && r.value !== null)
     .map(r => r.value as ActionCard)
+}
+
+// ─── Entity map venue/time extraction ────────────────────────────────────────
+
+/** Find a meeting venue from entity map keys (meeting_venue.*, address.*) */
+function extractVenueFromEntityMap(entityMap: Record<string, string>): string | null {
+  // meeting_venue keys take priority (explicitly about where people meet)
+  for (const [key, value] of Object.entries(entityMap)) {
+    if (key.startsWith('meeting_venue.') && value) return value
+  }
+  // Fall back to address keys
+  for (const [key, value] of Object.entries(entityMap)) {
+    if (key.startsWith('address.') && value) return value
+  }
+  return null
+}
+
+/** Find a proposed meeting time from entity map keys (deadline.*meeting*, deadline.*viewing*) */
+function extractTimeFromEntityMap(entityMap: Record<string, string>): string | null {
+  for (const [key, value] of Object.entries(entityMap)) {
+    if (key.startsWith('deadline.') && /meeting|viewing|schůzk|prohlídk/i.test(key) && value) {
+      return value
+    }
+  }
+  return null
 }
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
@@ -328,36 +349,16 @@ export async function insertCardsAsActions(
   const inserted: ActionProposal[] = []
 
   // Pre-fetch: which deal+type combos already have a pending action?
-  // Key by deal_id, conversation_id, AND resolved deal_id for triage-path actions
-  // that were inserted with deal_id=null but whose conversation now has a deal.
+  // All cards now use real deal UUIDs (no more triage-path conv UUID fallback).
   const { data: existingRows } = await supabase
     .from('action_proposals')
-    .select('deal_id, conversation_id, action_type')
+    .select('deal_id, action_type')
     .eq('user_id', userId)
     .eq('status', 'pending')
 
   const existingDealTypes = new Set<string>()
-  const convIdsNeedingDeal: string[] = []
   for (const r of existingRows ?? []) {
     if (r.deal_id) existingDealTypes.add(`${r.deal_id}:${r.action_type}`)
-    if (r.conversation_id) existingDealTypes.add(`${r.conversation_id}:${r.action_type}`)
-    if (!r.deal_id && r.conversation_id) convIdsNeedingDeal.push(r.conversation_id)
-  }
-  if (convIdsNeedingDeal.length > 0) {
-    const { data: convDeals } = await supabase
-      .from('conversation_threads')
-      .select('id, deal_id')
-      .in('id', convIdsNeedingDeal)
-    const convToDeal = new Map<string, string>()
-    for (const c of convDeals ?? []) {
-      if (c.deal_id) convToDeal.set(c.id, c.deal_id)
-    }
-    for (const r of existingRows ?? []) {
-      if (!r.deal_id && r.conversation_id) {
-        const dealId = convToDeal.get(r.conversation_id)
-        if (dealId) existingDealTypes.add(`${dealId}:${r.action_type}`)
-      }
-    }
   }
 
   for (const card of cards) {
@@ -366,11 +367,9 @@ export async function insertCardsAsActions(
       const dedupeKey = `${card.dealId}:${card.card_type}`
       if (existingDealTypes.has(dedupeKey)) continue
 
-      // Find conversation: query by deal_id first, fall back to id = dealId.
-      // resolvedDealId tracks whether card.dealId is a real deal UUID or a conversation UUID
-      // used as a fallback — the latter must not be written to action_proposals.deal_id.
+      // Find conversation for this deal — all cards now use real deal UUIDs.
       let conversationId: string | null = null
-      let resolvedDealId: string | null = card.dealId
+      const resolvedDealId: string = card.dealId
       const { data: byDealId } = await supabase
         .from('conversation_threads')
         .select('id')
@@ -381,18 +380,6 @@ export async function insertCardsAsActions(
 
       if (byDealId && byDealId.length > 0) {
         conversationId = byDealId[0].id
-      } else {
-        // Fallback: card.dealId is a conversation UUID (e.g. triage tasks where conv.deal_id is null)
-        const { data: byId } = await supabase
-          .from('conversation_threads')
-          .select('id')
-          .eq('user_id', userId)
-          .eq('id', card.dealId)
-          .limit(1)
-        if (byId && byId.length > 0) {
-          conversationId = byId[0].id
-          resolvedDealId = null  // conversation UUID ≠ deal UUID — don't store as FK
-        }
       }
 
       if (!conversationId) continue  // Can't insert without conversation_id
@@ -428,7 +415,7 @@ export async function insertCardsAsActions(
         priority_score: card.score,
         dollar_value: dollarValue,
         urgency: card.urgency,
-        weight: card.triageWeight ?? (card.scoreBreakdown.immovability || null),
+        weight: card.weight ?? (card.scoreBreakdown.immovability || null),
         offer_multiplier: null,
         draft_subject: null,
         draft_body_text: null,
@@ -441,9 +428,8 @@ export async function insertCardsAsActions(
           has_draft_skeleton: card.draft_skeleton !== null,
           ...(card.card_type === 'SCHEDULE' ? {
             // Use 'suggestedTime' — the key the optimizer reads (not 'proposed_time')
-            suggestedTime: card.triageProposedTime ?? undefined,
-            suggestedLocation: card.triageMeetingVenue ?? undefined,
-            // meeting_type: triage doesn't classify phone/online yet — default 'address'
+            suggestedTime: card.proposedTime ?? undefined,
+            suggestedLocation: card.meetingVenue ?? undefined,
             meeting_type: 'address',
           } : {}),
         },
@@ -475,9 +461,9 @@ function buildFallbackCard(
     cpId:                task.cpId,
     entityMapSnapshot:   task.entityMapSnapshot,
     beliefSnapshot:      beliefs,
-    triageMeetingVenue:  task.triageMeetingVenue,
-    triageProposedTime:  task.triageProposedTime,
-    triageWeight:        task.triageWeight,
+    meetingVenue:        cardType === 'SCHEDULE' ? extractVenueFromEntityMap(task.entityMapSnapshot) : null,
+    proposedTime:        cardType === 'SCHEDULE' ? extractTimeFromEntityMap(task.entityMapSnapshot) : null,
+    weight:              null,
     card_type:           cardType,
     intent_cs:         defaultIntentCs(task.taskType),
     rationale_cs:      defaultRationaleCs(task.taskType),
