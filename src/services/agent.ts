@@ -11,6 +11,7 @@ import { processTimelineEntries, rebuildConversationSummary } from './threading'
 import { ingestCalendarEvents } from './calendar-ingestion'
 import { runReflection } from './reflection'
 import { walkAllDeals } from './graph-walker'
+import type { WalkerTask, GraphWalkerOutput } from './graph-walker'
 import { scoreWalkerOutput } from './scoring-engine'
 import { generateCards, insertCardsAsActions } from './card-generator'
 import { tagMessageToDeal } from './deal-tagger'
@@ -26,7 +27,9 @@ import { getConversationsForUser, updateConversation } from '@/lib/db/conversati
 import { getUserById, updateUserSettings, updateUserHistoryId, getUserSettings } from '@/lib/db/users'
 import { getCurrentHistoryId } from '@/lib/google/gmail'
 import { purgeUserAsCp } from '@/lib/db/counterparties'
-import { getActiveJournalEntries, expireTemporalEntries } from '@/lib/db/journal'
+import { getActiveJournalEntries, expireTemporalEntries, getCurrentBeliefs } from '@/lib/db/journal'
+import { getEntitiesForDeal } from '@/lib/db/entity-map'
+import { getParticipantsForDeal } from '@/lib/db/deal-participants'
 
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import type { ActionProposal, JournalEntry, UserSettings, ConversationThread } from '@/lib/supabase/types'
@@ -348,6 +351,75 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
       const plannerSettings = await getUserSettings(userId)
       if (plannerSettings) {
         const walkerOutputs = await walkAllDeals(userId, plannerSettings)
+
+        // Inject inbound_reply tasks for conversations that received new messages this run.
+        // These go through the same scoring → card generation pipeline as walker tasks.
+        if (newInboundConversations && newInboundConversations.size > 0) {
+          const walkerDealIndex = new Map<string, GraphWalkerOutput>()
+          for (const wo of walkerOutputs) walkerDealIndex.set(wo.dealId, wo)
+
+          for (const [convId, conv] of newInboundConversations) {
+            const dealId = convDealMap.get(convId) ?? conv.deal_id
+            if (!dealId) continue
+
+            // Build entity map + belief snapshot for this deal
+            let entityMapSnapshot: Record<string, string> = {}
+            let beliefSnapshot: string[] = []
+            let cpId: string | null = null
+
+            // Reuse from existing walker output if available
+            const existing = walkerDealIndex.get(dealId)
+            if (existing && existing.tasks.length > 0) {
+              entityMapSnapshot = existing.tasks[0].entityMapSnapshot
+              beliefSnapshot = existing.tasks[0].beliefSnapshot
+              cpId = existing.tasks[0].cpId
+            } else {
+              try {
+                const entities = await getEntitiesForDeal(dealId)
+                entityMapSnapshot = entities.reduce((acc, e) => ({
+                  ...acc, [`${e.entity_type}.${e.entity_key}`]: e.entity_value,
+                }), {} as Record<string, string>)
+              } catch { /* empty snapshot is fine */ }
+              try {
+                const beliefs = await getCurrentBeliefs(dealId)
+                beliefSnapshot = beliefs.map(b => b.content)
+              } catch { /* empty is fine */ }
+              try {
+                const participants = await getParticipantsForDeal(dealId)
+                cpId = participants[0]?.cp_id ?? null
+              } catch { /* null is fine */ }
+            }
+
+            const task: WalkerTask = {
+              nodeId: `inbound:${convId}`,
+              dealId,
+              taskType: 'inbound_reply',
+              nodeLabel: null,
+              deadline: null,
+              hoursUntilDue: null,
+              slack: null,
+              cpId,
+              entityMapSnapshot,
+              beliefSnapshot,
+            }
+
+            if (existing) {
+              existing.tasks.push(task)
+            } else {
+              // No walker output for this deal — create a minimal one.
+              // The scoring engine needs a Deal object; fetch from DB.
+              const supabase = getSupabaseAdmin()
+              const { data: deal } = await supabase
+                .from('deals')
+                .select('*')
+                .eq('id', dealId)
+                .single()
+              if (deal) {
+                walkerOutputs.push({ dealId, deal, tasks: [task] })
+              }
+            }
+          }
+        }
 
         const scoredTasks = scoreWalkerOutput(walkerOutputs, plannerSettings)
         const topTasks = scoredTasks.slice(0, 20)

@@ -26,6 +26,7 @@ export type WalkerTaskType =
   | 'lead_cooling'
   | 'lead_cold'
   | 'lead_dead'
+  | 'inbound_reply'
 
 export interface WalkerTask {
   /** Node ID, or 'deal:lead' for deal-level lead tracking tasks */

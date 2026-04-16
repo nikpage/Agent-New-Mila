@@ -42,6 +42,7 @@ function deriveUrgency(task: WalkerTask): number {
     case 'blocking':         return 7
     case 'lead_dead':        return 7
     case 'lead_cold':        return 5
+    case 'inbound_reply':    return 8
     case 'lead_cooling':     return 3
     case 'has_slack':        return 2
     case 'calendar_conflict': return 6

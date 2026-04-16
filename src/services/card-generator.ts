@@ -53,7 +53,7 @@ export interface ActionCard {
 
 /** Deterministic fallback card type — used when LLM fails or for task types with obvious mapping. */
 export function deriveCardType(taskType: WalkerTaskType): 'REPLY' | 'SCHEDULE' | 'TODO' {
-  if (taskType === 'lead_cooling' || taskType === 'lead_cold' || taskType === 'lead_dead') {
+  if (taskType === 'inbound_reply' || taskType === 'lead_cooling' || taskType === 'lead_cold' || taskType === 'lead_dead') {
     return 'REPLY'
   }
   if (taskType === 'calendar_conflict') {
@@ -69,6 +69,7 @@ function deriveUrgency(taskType: WalkerTaskType, hoursUntilDue: number | null): 
     case 'overdue':          return 10
     case 'due_soon':
       return (hoursUntilDue !== null && hoursUntilDue < 4) ? 9 : 8
+    case 'inbound_reply':    return 8
     case 'blocking':         return 7
     case 'lead_dead':        return 7
     case 'calendar_conflict': return 6
@@ -83,6 +84,7 @@ function deriveUrgency(taskType: WalkerTaskType, hoursUntilDue: number | null): 
 
 function defaultIntentCs(taskType: WalkerTaskType): string {
   switch (taskType) {
+    case 'inbound_reply': return 'Odpovědět na novou zprávu od {{ jméno_protistrany }}.'
     case 'lead_cooling': return 'Navázat kontakt — klient neodpovídal přes {{ počet_dní }} dní.'
     case 'lead_cold':    return 'Urgentní follow-up — klient je studený, kontaktujte ho co nejdříve.'
     case 'lead_dead':    return 'Poslední pokus o kontakt — deal je téměř ztracen.'
@@ -97,6 +99,7 @@ function defaultIntentCs(taskType: WalkerTaskType): string {
 
 function defaultRationaleCs(taskType: WalkerTaskType): string {
   switch (taskType) {
+    case 'inbound_reply': return 'Přišla nová zpráva vyžadující odpověď.'
     case 'lead_cooling': return 'Klient neprojevil aktivitu v posledních dnech. Vhodný čas pro lehký follow-up.'
     case 'lead_cold':    return 'Klient je neaktivní. Bez kontaktu hrozí ztráta obchodu.'
     case 'lead_dead':    return 'Klient dlouhodobě nereaguje. Jde o poslední šanci zachránit deal.'
