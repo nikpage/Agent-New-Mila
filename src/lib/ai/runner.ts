@@ -83,6 +83,47 @@ export function getAIUsageSummary(): {
   }
 }
 
+/** Format AI usage as an aligned ASCII table for logging. */
+export function formatAIUsageTable(summary: ReturnType<typeof getAIUsageSummary>): string {
+  if (summary.totalCalls === 0) return '[Agent] AI usage: 0 calls'
+
+  const rows = summary.stages.map(s => {
+    const p = MODEL_PRICING[s.model]
+    const costIn = p ? (s.inputTokens / 1_000_000) * p.inputPerM : 0
+    const costOut = p ? (s.outputTokens / 1_000_000) * p.outputPerM : 0
+    return { stage: s.stage, model: s.model, calls: s.calls, tokIn: s.inputTokens, tokOut: s.outputTokens, costIn, costOut, total: s.costUSD }
+  })
+
+  const hdr = { stage: 'Stage', model: 'Model', calls: 'Calls', tokIn: 'Tok In', tokOut: 'Tok Out', costIn: 'Cost In', costOut: 'Cost Out', total: 'Total' }
+  const totalCostIn = rows.reduce((s, r) => s + r.costIn, 0)
+  const totalCostOut = rows.reduce((s, r) => s + r.costOut, 0)
+  const totRow = { stage: 'TOTAL', model: '', calls: summary.totalCalls, tokIn: summary.totalInputTokens, tokOut: summary.totalOutputTokens, costIn: totalCostIn, costOut: totalCostOut, total: summary.totalCostUSD }
+
+  const fmt$ = (n: number) => `$${n.toFixed(4)}`
+  const fmtRow = (r: typeof totRow) => [r.stage, r.model, String(r.calls), String(r.tokIn), String(r.tokOut), fmt$(r.costIn), fmt$(r.costOut), fmt$(r.total)]
+
+  const allRows = [
+    [hdr.stage, hdr.model, hdr.calls, hdr.tokIn, hdr.tokOut, hdr.costIn, hdr.costOut, hdr.total],
+    ...rows.map(fmtRow),
+    fmtRow(totRow),
+  ]
+
+  // Column widths
+  const widths = allRows[0].map((_, i) => Math.max(...allRows.map(r => r[i].length)))
+  const pad = (s: string, w: number, i: number) => i < 2 ? s.padEnd(w) : s.padStart(w)
+  const line = (r: string[]) => r.map((c, i) => pad(c, widths[i], i)).join('  ')
+
+  const sep = '─'.repeat(widths.reduce((s, w) => s + w + 2, -2))
+  const lines = [
+    `[Agent] AI usage: ${summary.totalCalls} calls, ${summary.totalInputTokens} in / ${summary.totalOutputTokens} out — ${fmt$(summary.totalCostUSD)}`,
+    line(allRows[0]),
+    ...rows.map(r => line(fmtRow(r))),
+    sep,
+    line(fmtRow(totRow)),
+  ]
+  return lines.join('\n')
+}
+
 /** Reset accumulated usage. Call at start of each pipeline run. */
 export function resetAIUsage(): void {
   usageMap.clear()

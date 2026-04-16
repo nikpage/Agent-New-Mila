@@ -328,17 +328,19 @@ export async function insertCardsAsActions(
   const inserted: ActionProposal[] = []
 
   // Pre-fetch: which deal+type combos already have a pending action?
-  // Avoids N queries per card.
+  // Key by both deal_id and conversation_id — triage-path actions may have deal_id=null
+  // while card.dealId can be either a deal UUID or a conversation UUID.
   const { data: existingRows } = await supabase
     .from('action_proposals')
-    .select('deal_id, action_type')
+    .select('deal_id, conversation_id, action_type')
     .eq('user_id', userId)
     .eq('status', 'pending')
-    .not('deal_id', 'is', null)
 
-  const existingDealTypes = new Set<string>(
-    (existingRows ?? []).map(r => `${r.deal_id}:${r.action_type}`)
-  )
+  const existingDealTypes = new Set<string>()
+  for (const r of existingRows ?? []) {
+    if (r.deal_id) existingDealTypes.add(`${r.deal_id}:${r.action_type}`)
+    if (r.conversation_id) existingDealTypes.add(`${r.conversation_id}:${r.action_type}`)
+  }
 
   for (const card of cards) {
     try {

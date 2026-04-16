@@ -36,7 +36,7 @@ import type { ExtractionResult } from '@/lib/ai/tasks'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import type { ActionProposal, JournalEntry, UserSettings, ConversationThread, ConversationSummary } from '@/lib/supabase/types'
 import type { DealMessage, DealContext } from './fact-extractor'
-import { resetAIUsage, getAIUsageSummary, type AIStageUsage } from '@/lib/ai/runner'
+import { resetAIUsage, getAIUsageSummary, formatAIUsageTable, type AIStageUsage } from '@/lib/ai/runner'
 
 export interface AgentRunResult {
   success: boolean
@@ -646,16 +646,20 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
         // Pre-fetch existing pending actions to skip redundant LLM card generation.
         // generateCards only calls the LLM for cards that don't already exist in the DB.
+        // Key by BOTH deal_id and conversation_id — triage-path actions may have deal_id=null
+        // (when conversation_threads.deal_id is null), while graph walker tasks use real deal UUIDs.
+        // task.dealId can be either a deal UUID or a conversation UUID (fallback), so both must match.
         const supabaseForDedup = getSupabaseAdmin()
         const { data: existingPending } = await supabaseForDedup
           .from('action_proposals')
-          .select('deal_id, action_type')
+          .select('deal_id, conversation_id, action_type')
           .eq('user_id', userId)
           .eq('status', 'pending')
-          .not('deal_id', 'is', null)
-        const existingDealTypes = new Set<string>(
-          (existingPending ?? []).map(r => `${r.deal_id}:${r.action_type}`)
-        )
+        const existingDealTypes = new Set<string>()
+        for (const r of existingPending ?? []) {
+          if (r.deal_id) existingDealTypes.add(`${r.deal_id}:${r.action_type}`)
+          if (r.conversation_id) existingDealTypes.add(`${r.conversation_id}:${r.action_type}`)
+        }
 
         const cards = await generateCards(topTasks, plannerSettings, existingDealTypes)
         const newActions = await insertCardsAsActions(userId, cards)
@@ -714,10 +718,7 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     const usage = getAIUsageSummary()
     result.aiUsage = usage
     if (usage.totalCalls > 0) {
-      console.log(`[Agent] AI usage: ${usage.totalCalls} calls, ${usage.totalInputTokens} in / ${usage.totalOutputTokens} out tokens — $${usage.totalCostUSD.toFixed(4)}`)
-      for (const s of usage.stages) {
-        console.log(`[Agent]   ${s.stage} → ${s.model}: ${s.calls}× (${s.inputTokens}→${s.outputTokens} tok) $${s.costUSD.toFixed(4)}`)
-      }
+      console.log(formatAIUsageTable(usage))
     }
     restore()
 
