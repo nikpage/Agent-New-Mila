@@ -328,8 +328,8 @@ export async function insertCardsAsActions(
   const inserted: ActionProposal[] = []
 
   // Pre-fetch: which deal+type combos already have a pending action?
-  // Key by both deal_id and conversation_id — triage-path actions may have deal_id=null
-  // while card.dealId can be either a deal UUID or a conversation UUID.
+  // Key by deal_id, conversation_id, AND resolved deal_id for triage-path actions
+  // that were inserted with deal_id=null but whose conversation now has a deal.
   const { data: existingRows } = await supabase
     .from('action_proposals')
     .select('deal_id, conversation_id, action_type')
@@ -337,9 +337,27 @@ export async function insertCardsAsActions(
     .eq('status', 'pending')
 
   const existingDealTypes = new Set<string>()
+  const convIdsNeedingDeal: string[] = []
   for (const r of existingRows ?? []) {
     if (r.deal_id) existingDealTypes.add(`${r.deal_id}:${r.action_type}`)
     if (r.conversation_id) existingDealTypes.add(`${r.conversation_id}:${r.action_type}`)
+    if (!r.deal_id && r.conversation_id) convIdsNeedingDeal.push(r.conversation_id)
+  }
+  if (convIdsNeedingDeal.length > 0) {
+    const { data: convDeals } = await supabase
+      .from('conversation_threads')
+      .select('id, deal_id')
+      .in('id', convIdsNeedingDeal)
+    const convToDeal = new Map<string, string>()
+    for (const c of convDeals ?? []) {
+      if (c.deal_id) convToDeal.set(c.id, c.deal_id)
+    }
+    for (const r of existingRows ?? []) {
+      if (!r.deal_id && r.conversation_id) {
+        const dealId = convToDeal.get(r.conversation_id)
+        if (dealId) existingDealTypes.add(`${dealId}:${r.action_type}`)
+      }
+    }
   }
 
   for (const card of cards) {

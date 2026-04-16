@@ -646,10 +646,9 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
         const topTasks = scoredTasks.slice(0, 20)
 
         // Pre-fetch existing pending actions to skip redundant LLM card generation.
-        // generateCards only calls the LLM for cards that don't already exist in the DB.
-        // Key by BOTH deal_id and conversation_id — triage-path actions may have deal_id=null
-        // (when conversation_threads.deal_id is null), while graph walker tasks use real deal UUIDs.
-        // task.dealId can be either a deal UUID or a conversation UUID (fallback), so both must match.
+        // Key by deal_id, conversation_id, AND the conversation's deal_id (for triage-path
+        // actions that were inserted with deal_id=null but whose conversation now has a deal).
+        // Walker tasks use real deal UUIDs, triage-path uses conv UUIDs — all must match.
         const supabaseForDedup = getSupabaseAdmin()
         const { data: existingPending } = await supabaseForDedup
           .from('action_proposals')
@@ -657,9 +656,30 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
           .eq('user_id', userId)
           .eq('status', 'pending')
         const existingDealTypes = new Set<string>()
+        // Collect conversation IDs that lack a deal_id — we need to resolve their deal
+        const convIdsNeedingDeal: string[] = []
         for (const r of existingPending ?? []) {
           if (r.deal_id) existingDealTypes.add(`${r.deal_id}:${r.action_type}`)
           if (r.conversation_id) existingDealTypes.add(`${r.conversation_id}:${r.action_type}`)
+          if (!r.deal_id && r.conversation_id) convIdsNeedingDeal.push(r.conversation_id)
+        }
+        // Resolve conversation → deal for triage-path actions missing deal_id.
+        // This ensures walker tasks (keyed by deal UUID) match against triage-inserted actions.
+        if (convIdsNeedingDeal.length > 0) {
+          const { data: convDeals } = await supabaseForDedup
+            .from('conversation_threads')
+            .select('id, deal_id')
+            .in('id', convIdsNeedingDeal)
+          const convToDeal = new Map<string, string>()
+          for (const c of convDeals ?? []) {
+            if (c.deal_id) convToDeal.set(c.id, c.deal_id)
+          }
+          for (const r of existingPending ?? []) {
+            if (!r.deal_id && r.conversation_id) {
+              const dealId = convToDeal.get(r.conversation_id)
+              if (dealId) existingDealTypes.add(`${dealId}:${r.action_type}`)
+            }
+          }
         }
 
         const cards = await generateCards(topTasks, plannerSettings, existingDealTypes)
