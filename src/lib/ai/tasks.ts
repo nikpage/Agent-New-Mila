@@ -476,7 +476,7 @@ export async function triageConversation(
     : 'CHANNEL: Email — standard professional format.'
 
   const recentText = recentMessages
-    .map(m => `[${m.direction === 'outbound' ? 'out' : 'in'} ${m.age}] ${m.text}`)
+    .map(m => `[${m.direction === 'out' || m.direction === 'outbound' ? 'out' : 'in'} ${m.age}] ${m.text}`)
     .join('\n\n')
 
   const pendingText = pendingActions.length > 0

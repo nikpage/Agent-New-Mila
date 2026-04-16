@@ -202,6 +202,8 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
     // Conversations that received new inbound messages this run — used by Step 5 triage.
     let newInboundConversations: Map<string, ConversationThread> | undefined
+    // Maps conversationId → dealId from step 4b — used by step 5 entity map lookup.
+    const convDealMap = new Map<string, string>()
 
     // Step 3: Get all unprocessed messages (including newly ingested + WhatsApp)
     // Steps 3-5 depend on each other but are isolated from steps 2/2.5/6
@@ -258,6 +260,14 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
 
                   // 2. Tag to deal (skip if already tagged by ingestion)
                   const dealId = entry.deal_id ?? (await tagMessageToDeal(entry, userId)).id
+                  // Record conv → deal mapping so step 5 can look up entities correctly.
+                  if (entry.conversation_id) convDealMap.set(entry.conversation_id, dealId)
+                  // Persist to DB for future runs (conversation_threads.deal_id).
+                  if (entry.conversation_id && !entry.deal_id) {
+                    updateConversation(entry.conversation_id, { deal_id: dealId }).catch(() => {
+                      // Non-fatal — convDealMap already covers this run
+                    })
+                  }
 
                   if (!entry.content?.trim()) return
 
@@ -456,8 +466,10 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                   CRITICAL: 9, TODAY: 8, THIS_WEEK: 6, SOON: 4, NONE: 1,
                 }
 
-                // Load entity map from DB for this deal
-                const dealIdForTask = conv.deal_id ?? convId
+                // Load entity map from DB for this deal.
+                // convDealMap takes priority — it carries the deal ID written in step 4b
+                // for this run. conv.deal_id may be null for conversations created this run.
+                const dealIdForTask = convDealMap.get(convId) ?? conv.deal_id ?? convId
                 let entityMapSnapshot: Record<string, string> = {}
                 try {
                   const entities = await getEntitiesForDeal(dealIdForTask)
@@ -465,6 +477,12 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                     ...acc,
                     [`${e.entity_type}.${e.entity_key}`]: e.entity_value,
                   }), {} as Record<string, string>)
+                  // Fallback: if entity map has no price but enrichment does, inject it.
+                  // Covers first-run cases where entity_map hasn't been written yet.
+                  if (!entityMapSnapshot['price.asking_price'] && !entityMapSnapshot['price.sale_price']
+                      && enrichment?.keyNumbers?.price) {
+                    entityMapSnapshot['price.asking_price'] = enrichment.keyNumbers.price
+                  }
                 } catch {
                   // fail open — empty snapshot is fine
                 }
@@ -574,9 +592,11 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
                       triageActionType: 'SCHEDULE',
                       triageMeetingVenue: resolvedVenue,
                       triageProposedTime: resolvedTime,
-                      // Set intent so card-generator skips the LLM (avoids {{ placeholder }} in output).
-                      // generateSchedulingIntent() will overwrite this with proper details at brief time.
-                      triageIntentCs: 'Naplánovat schůzku dle požadavku.',
+                      // Use CP's stated request as intent base — better context for generateSchedulingIntent().
+                      // Falls back to generic only if what_cp_wants is empty.
+                      triageIntentCs: ta.what_cp_wants
+                        ? `Naplánovat: ${ta.what_cp_wants.slice(0, 80)}.`
+                        : 'Naplánovat schůzku dle požadavku.',
                       triageRationaleCs: ta.rationale_cs || 'Protistrana navrhla čas nebo místo.',
                     }
                     triageEntries.push({ task: scheduleTask, actionType: 'SCHEDULE' })
