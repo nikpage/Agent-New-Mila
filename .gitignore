@@ -28,3 +28,6 @@ Thumbs.db
 .env.sentry-build-plugin
 
 baileys_auth/
+
+# Agent + dev server logs
+logs/

@@ -22,6 +22,7 @@
  *   --single-round    Only run Round 1 + interact, skip Round 2
  *   --cleanup-only    (removed — cleanup never worked reliably)
  *   --prod            Use production URL (https://mila.specialagents.pro)
+ *   --quick           Quick smoke test — 1 email, 1 agent run, basic checks (~30s)
  */
 
 import { config } from 'dotenv'
@@ -31,7 +32,6 @@ import * as readline from 'readline'
 import { google, gmail_v1 } from 'googleapis'
 import { getAuthenticatedClient } from '../src/lib/google/auth'
 import { generateActionToken } from '../src/lib/auth/tokens'
-import { runAITask } from '../src/lib/ai/runner'
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -100,10 +100,9 @@ interface HistoryEmail {
 }
 
 // ─── Eva Negotiation History (Thread 1: Lease negotiation) ───────────────────
-// Realistic back-and-forth about office space at Sokolovská, Karlín.
-// This gives Mila context: the address is Sokolovská 46/51, Praha 8 — NOT
-// Eva's signature address (Ďáblická). The negotiation settled at 450 CZK/m2, 3yr.
-// Outbound emails can't be ingested directly — CP replies reference what user said.
+// Full back-and-forth about office space at Sokolovská, Karlín.
+// Settled at 450 CZK/m2, 3yr with renewal option.
+// User replies use direction: 'outbound' — injected with SENT label, ingested as outbound.
 
 const EVA_EMAIL = 'ainikpage+dvorakova.eva@gmail.com'
 const EVA_FROM = 'Eva Dvorakova <ainikpage+dvorakova.eva@gmail.com>'
@@ -135,7 +134,28 @@ const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Ďáblická, 182 00 Ďáblice, Czechia',
     ].join('\n'),
   },
-  // 2. Eva responds after receiving floor plan + pricing (465 CZK/m2) — counteroffers but warmly
+  // 2. User sends floor plan and pricing
+  {
+    cpKey: 'eva',
+    direction: 'outbound',
+    from: EVA_FROM,
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 27,
+    body: [
+      'Dobrý den Evo,',
+      '',
+      'díky za zájem! Posílám podklady:',
+      '- Půdorys třetího patra (Sokolovská 46/51, Praha 8): 200m2 open plan, 2 zasedačky, kuchyňka',
+      '- Cena: 465 CZK/m2/měsíc, standardní nájemní podmínky (3 nebo 5 let)',
+      '- Budova je po kompletní rekonstrukci, nová klimatizace + výtah',
+      '',
+      'Ohledně prohlídky — jsem k dispozici ve středu nebo ve čtvrtek odpoledne.',
+      'Dejte vědět, co vám víc vyhovuje.',
+      '',
+      's pozdravem',
+    ].join('\n'),
+  },
+  // 3. Eva responds — counteroffers at 420 CZK/m2, wants to view
   {
     cpKey: 'eva',
     direction: 'inbound',
@@ -158,7 +178,24 @@ const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Ďáblická, 182 00 Ďáblice, Czechia',
     ].join('\n'),
   },
-  // 3. Eva after the viewing — loved it, holds her 420 offer but stays positive
+  // 4. User confirms viewing time, holds on price
+  {
+    cpKey: 'eva',
+    direction: 'outbound',
+    from: EVA_FROM,
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 23,
+    body: [
+      'Evo,',
+      '',
+      'prohlídka v pořádku — čtvrtek ve 14h funguje. Uvidíme se přímo',
+      'na místě, Sokolovská 46/51, třetí patro.',
+      '',
+      'K ceně: 420 na 10 let je zajímavé, ale potřebuju to probrat se',
+      'spolumajitelem. Základ bude 465, ale uvidíme co vymyslíme.',
+    ].join('\n'),
+  },
+  // 5. Eva after the viewing — loved it, holds her 420 offer
   {
     cpKey: 'eva',
     direction: 'inbound',
@@ -180,7 +217,26 @@ const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Eva',
     ].join('\n'),
   },
-  // 4. Eva responds to user's counter (450/m2 for 3 years) — proposes middle ground, stays warm
+  // 6. User counters: 450 CZK/m2 for 3 years + renewal option
+  {
+    cpKey: 'eva',
+    direction: 'outbound',
+    from: EVA_FROM,
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 18,
+    body: [
+      'Evo,',
+      '',
+      'mluvil jsem se spolumajitelem. Tady je naše protinabídka:',
+      '450 CZK/m2/měsíc na 3 roky s opcí na prodloužení za tržní cenu platnou ke dni prodloužení.',
+      '',
+      'Kratší závazek pro vás, ale opce vám dá jistotu do budoucna.',
+      'Myslím, že je to fér kompromis pro obě strany.',
+      '',
+      'Dejte vědět do středy?',
+    ].join('\n'),
+  },
+  // 7. Eva proposes middle ground: 440/m2 on 5 years
   {
     cpKey: 'eva',
     direction: 'inbound',
@@ -203,7 +259,27 @@ const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Dvorak & Partners s.r.o.',
     ].join('\n'),
   },
-  // 5. Eva accepts final terms — 450 CZK/m2 for 3 years, genuinely happy
+  // 8. User holds firm: 450/3yr is the final offer
+  {
+    cpKey: 'eva',
+    direction: 'outbound',
+    from: EVA_FROM,
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 13,
+    body: [
+      'Evo,',
+      '',
+      '450 CZK/m2 na 3 roky s opcí je naše finální nabídka — níže nejdeme.',
+      'Ta opce vám zaručí předkupní právo za tržní cenu, takže v praxi',
+      'máte jistotu na mnohem déle než 3 roky.',
+      '',
+      'Bubenská je Smíchov — jiná lokalita, jiný klientský segment.',
+      'Sokolovská vás postaví do středu Karlína. Záleží na tom, jak se chcete prezentovat.',
+      '',
+      'Čekám na vaše rozhodnutí.',
+    ].join('\n'),
+  },
+  // 9. Eva accepts — 450/m2 for 3 years, wants to sign ASAP
   {
     cpKey: 'eva',
     direction: 'inbound',
@@ -227,7 +303,23 @@ const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Eva',
     ].join('\n'),
   },
-  // 6. Eva confirms lawyer review is done — ready to sign, upbeat
+  // 10. User acknowledges, sends draft contract to lawyer
+  {
+    cpKey: 'eva',
+    direction: 'outbound',
+    from: EVA_FROM,
+    subject: `Re: ${EVA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 8,
+    body: [
+      'Evo, výborně!',
+      '',
+      'Pošlu dnes odpoledne návrh nájemní smlouvy na váš právní tým.',
+      'Počítám s nástupem 15. dubna — potřebujeme podpisy nejpozději do 10. dubna.',
+      '',
+      'Dejte mi vědět jakmile právník projde dokument a bude mít připomínky.',
+    ].join('\n'),
+  },
+  // 11. Eva: lawyer reviewed, 2 issues: notice period + parking
   {
     cpKey: 'eva',
     direction: 'inbound',
@@ -253,9 +345,9 @@ const EVA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
 ]
 
 // ─── Novotný Negotiation History (Thread 2: Difficult commercial sale) ───────
-// Hard negotiation over 45M commercial building in Vinohrady.
+// Full back-and-forth over 45M commercial building in Vinohrady.
 // Novotný is aggressive — pushes back on price, changes terms, creates pressure.
-// The history arc: inquiry → lowball → pushback → terms change → deadline pressure → final urgent email.
+// User replies use direction: 'outbound' — injected with SENT label.
 
 const NOVOTNY_EMAIL = 'ainikpage+novotny.jan@gmail.com'
 const NOVOTNY_FROM = 'Jan Novotny <ainikpage+novotny.jan@gmail.com>'
@@ -263,7 +355,7 @@ const NOVOTNY_FROM = 'Jan Novotny <ainikpage+novotny.jan@gmail.com>'
 const NOVOTNY_NEGOTIATION_SUBJECT = `[${RUN_ID}] Komerční budova Vinohrady — nabídka`
 
 const NOVOTNY_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
-  // 1. Novotný's initial inquiry — representing a buyer for the commercial building
+  // 1. Novotný's initial inquiry — representing a buyer
   {
     cpKey: 'urgent',
     direction: 'inbound',
@@ -286,7 +378,31 @@ const NOVOTNY_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Třinecká 672, Praha',
     ].join('\n'),
   },
-  // 2. Novotný responds to pricing (listed at 48M) — lowballs at 38M
+  // 2. User sends property details
+  {
+    cpKey: 'urgent',
+    direction: 'outbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 34,
+    body: [
+      'Dobrý den pane Novotný,',
+      '',
+      'posílám základní informace k budově na Vinohradech:',
+      '- Celková užitná plocha: 1 200 m2 (6 podlaží)',
+      '- Obsazenost: 85% (10 z 12 jednotek pronajato)',
+      '- Průměrný výnos z nájmů: 180 000 Kč/měsíc',
+      '- Stav: dobrý, fasáda plánována na příští rok',
+      '- Požadovaná cena: 48 000 000 Kč',
+      '',
+      'Výtah je aktuálně v revizi — dokončení do konce měsíce.',
+      'Budova je v centru Prahy 2, vynikající lokalita pro investici.',
+      '',
+      'Rád domluvím prohlídku pro vašeho klienta.',
+      's pozdravem',
+    ].join('\n'),
+  },
+  // 3. Novotný lowballs at 38M
   {
     cpKey: 'urgent',
     direction: 'inbound',
@@ -308,7 +424,29 @@ const NOVOTNY_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Prague Commercial',
     ].join('\n'),
   },
-  // 3. Novotný pushes back on user's counter (45M) — tries 41M + conditions
+  // 4. User counters at 45M — explains value
+  {
+    cpKey: 'urgent',
+    direction: 'outbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 29,
+    body: [
+      'Pane Novotný,',
+      '',
+      '38M je hluboko pod tržní cenou pro tuto lokalitu.',
+      '',
+      'Fakta: nájemní výnos 2,16M Kč ročně = hrubý yield 4,5% při 48M.',
+      'Srovnatelné budovy v Praze 2 se prodávají za 42-50M.',
+      'Fasáda je kozmetická záležitost — výtah bude revizí do konce měsíce.',
+      '',
+      'Přistoupím na 45 000 000 Kč — finální cena, žádné další slevy.',
+      'Due diligence samozřejmě možné, přístup k budově domluvíme.',
+      '',
+      'Žižkov není Praha 2. Vaší klient ví proč hledá na Vinohradech.',
+    ].join('\n'),
+  },
+  // 5. Novotný pushes back — 41M + conditions
   {
     cpKey: 'urgent',
     direction: 'inbound',
@@ -330,7 +468,26 @@ const NOVOTNY_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Novotný',
     ].join('\n'),
   },
-  // 4. Novotný after due diligence — found issues, uses them as leverage
+  // 6. User grants due diligence access, holds at 45M
+  {
+    cpKey: 'urgent',
+    direction: 'outbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 23,
+    body: [
+      'Pane Novotný,',
+      '',
+      'due diligence povolím — kontaktujte správce budovy (tel. 602 xxx xxx)',
+      'a domluvte se na přístupu ve středu nebo ve čtvrtek.',
+      '',
+      'Oprava výtahu proběhne — ale cena zůstává 45M.',
+      '41M nepřijmu. Budova generuje ověřitelný výnos a lokalita to ospravedlňuje.',
+      '',
+      'Pokud váš klient Žižkov preferuje, ať jde na Žižkov.',
+    ].join('\n'),
+  },
+  // 7. Novotný after due diligence — found issues, leverages them
   {
     cpKey: 'urgent',
     direction: 'inbound',
@@ -356,7 +513,28 @@ const NOVOTNY_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Prague Commercial',
     ].join('\n'),
   },
-  // 5. Novotný responds to user holding firm at 45M — escalates, creates urgency
+  // 8. User addresses issues, holds at 45M
+  {
+    cpKey: 'urgent',
+    direction: 'outbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 17,
+    body: [
+      'Pane Novotný,',
+      '',
+      'k elektroinstalaci: nechám udělat odborný posudek. Pokud bude',
+      'potřeba revize, náklady si rozdělíme 50/50 — to je rozumný kompromis.',
+      '',
+      'Nájemci s končící smlouvou: to je standardní situace pro každou budovu.',
+      'Zbývajících 8 nájemců má smlouvy na 2-5 let. Výnos je stabilní.',
+      '',
+      'Parkoviště: kolaudace pro komerční využití vyřídím do uzavření.',
+      '',
+      'Cena: 45M. Finálně. Nepohnu se z toho.',
+    ].join('\n'),
+  },
+  // 9. Novotný escalates to 43.5M, creates deadline
   {
     cpKey: 'urgent',
     direction: 'inbound',
@@ -383,7 +561,25 @@ const NOVOTNY_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Třinecká 672, Praha',
     ].join('\n'),
   },
-  // 6. Novotný responds to user accepting 45M (user held firm, buyer relented) — sets up notary
+  // 10. User holds firm: 45M or nothing
+  {
+    cpKey: 'urgent',
+    direction: 'outbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 11,
+    body: [
+      'Pane Novotný,',
+      '',
+      '45M nebo ne. Žádná jiná varianta neexistuje.',
+      '',
+      'Vaší klient má schválené financování — 1,5M Kč navíc při ceně 45M',
+      'je přesně ta marže, kvůli které se vyplatí mít schválenou hypotéku.',
+      '',
+      'Pokud jde na Žižkov, jde na Žižkov. Budovu prodám jinému zájemci.',
+    ].join('\n'),
+  },
+  // 11. Novotný: buyer relents, agrees to 45M, wants docs
   {
     cpKey: 'urgent',
     direction: 'inbound',
@@ -412,7 +608,27 @@ const NOVOTNY_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
       'Třinecká 672, Praha',
     ].join('\n'),
   },
-  // 7. Novotný increases pressure — buyer getting impatient, deadline approaching
+  // 12. User confirms, says docs are coming
+  {
+    cpKey: 'urgent',
+    direction: 'outbound',
+    from: NOVOTNY_FROM,
+    subject: `Re: ${NOVOTNY_NEGOTIATION_SUBJECT}`,
+    daysAgo: 6,
+    body: [
+      'Pane Novotný,',
+      '',
+      'výborně. Připravuji dokumenty:',
+      '- List vlastnictví: objednám na katastru dnes, hotový do 2 dnů',
+      '- Bezdlužnost SVJ: čekám na správce, slíbil do pátku',
+      '- Energetický průkaz: mám, pošlu v příloze',
+      '',
+      'JUDr. Procházka na Třinecké 672 mi vyhovuje.',
+      'Navrhuju termín příští týden ve čtvrtek nebo pátek — potvrdím jakmile',
+      'budu mít kompletní dokumenty.',
+    ].join('\n'),
+  },
+  // 13. Novotný: buyer impatient, deadline pressure, wants docs today
   {
     cpKey: 'urgent',
     direction: 'inbound',
@@ -435,6 +651,218 @@ const NOVOTNY_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
     ].join('\n'),
   },
 ]
+
+// ─── Klára Marcinová History (Thread 3: Cooling lead — user waiting, CP silent) ─
+// Buyer interested in a villa in Dejvice, Prague 6. Budget ~9.5M CZK.
+// There were several productive exchanges 3 weeks ago (viewing, liked it, price discussion).
+// User sent a follow-up 11 days ago confirming second viewing availability.
+// Klára never replied. → cooling lead, Mila should prompt user to follow up.
+
+const KLARA_EMAIL = 'ainikpage+KlaraMarcinova@gmail.com'
+const KLARA_FROM = 'Klara Marcinova <ainikpage+KlaraMarcinova@gmail.com>'
+
+const KLARA_NEGOTIATION_SUBJECT = `[${RUN_ID}] Vila Dejvice — Antonínská 12`
+
+const KLARA_NEGOTIATION_HISTORY: Omit<HistoryEmail, 'to'>[] = [
+  // 1. Klára's first contact — saw the listing, wants details
+  {
+    cpKey: 'klara',
+    direction: 'inbound',
+    from: KLARA_FROM,
+    subject: KLARA_NEGOTIATION_SUBJECT,
+    daysAgo: 24,
+    body: [
+      'Dobrý den,',
+      '',
+      'narazila jsem na váš inzerát vily na Antonínské 12 v Dejvicích.',
+      'Hledáme rodinný dům v Praze 6 — manžel pracuje v Bubenči a já',
+      'pracuju v centru, takže Dejvice jsou pro nás ideální.',
+      '',
+      'Mohli byste mi poslat více informací? Zajímá nás dispozice,',
+      'stav zahrady, možnost parkování a přesná cena.',
+      '',
+      'S pozdravem,',
+      'Klára Marcinová',
+    ].join('\n'),
+  },
+  // 2. User replies with property details, proposes viewing
+  {
+    cpKey: 'klara',
+    direction: 'outbound',
+    from: KLARA_FROM,
+    subject: `Re: ${KLARA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 23,
+    body: [
+      'Dobrý den paní Marcinová,',
+      '',
+      'děkuji za zájem! Posílám detaily k vile na Antonínské 12:',
+      '- Dispozice: 5+1, 280 m2 užitné plochy, pozemek 650 m2',
+      '- Zahrada: udržovaná, terasa, pergola, garáž pro 2 auta',
+      '- Stav: po rekonstrukci 2021 (kuchyně, koupelny, podlahy)',
+      '- Cena: 9 800 000 Kč',
+      '',
+      'Dejvice, klidná ulice 5 minut pěšky od metra Hradčanská.',
+      '',
+      'Rád domluvím prohlídku — jsem k dispozici příští týden.',
+      's pozdravem',
+    ].join('\n'),
+  },
+  // 3. Klára asks follow-up questions, wants viewing next week
+  {
+    cpKey: 'klara',
+    direction: 'inbound',
+    from: KLARA_FROM,
+    subject: `Re: ${KLARA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 21,
+    body: [
+      'Dobrý den,',
+      '',
+      'to zní skvěle! Pár doplňujících otázek:',
+      '- Jsou v ceně také veškeré spotřebiče?',
+      '- Jak stará je střecha?',
+      '- Je možné se nastěhovat do konce června?',
+      '',
+      'Prohlídka: mohlo by to být v úterý nebo ve středu odpoledne?',
+      'Nejlépe kolem 16h, manžel by šel se mnou.',
+      '',
+      'Klára',
+    ].join('\n'),
+  },
+  // 4. User answers questions, confirms viewing time
+  {
+    cpKey: 'klara',
+    direction: 'outbound',
+    from: KLARA_FROM,
+    subject: `Re: ${KLARA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 20,
+    body: [
+      'Paní Marcinová,',
+      '',
+      'spotřebiče: ano, vše v ceně (Bosch kuchyně, myčka, lednička).',
+      'Střecha: 2019, v perfektním stavu, pojistka do 2029.',
+      'Nastěhování do konce června: určitě možné, ideální timing.',
+      '',
+      'Prohlídka: středa ve 16h mi vyhovuje. Adresa Antonínská 12, Praha 6 —',
+      'zaparkovat lze přímo u domu nebo v přilehlé ulici.',
+      '',
+      'Těším se na setkání.',
+    ].join('\n'),
+  },
+  // 5. Klára after the viewing — enthusiastic, considering, mentions price
+  {
+    cpKey: 'klara',
+    direction: 'inbound',
+    from: KLARA_FROM,
+    subject: `Re: ${KLARA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 17,
+    body: [
+      'Dobrý den,',
+      '',
+      'díky za prohlídku — vila je krásná, manžel i já jsme si to oblíbili.',
+      'Ta zahrada a garáž jsou přesně to, co hledáme.',
+      '',
+      'Jediné co nás trošku zarazilo — cena. 9,8M je na hraně našeho rozpočtu.',
+      'Je prostor pro vyjednávání? Třeba 9,3-9,4M?',
+      '',
+      'Jinak bychom velmi rádi šli dál. Ještě bychom chtěli jednou projet',
+      's rodiči, kteří nám pomáhají s financováním.',
+      '',
+      'Klára',
+    ].join('\n'),
+  },
+  // 6. User responds to price question, invites second viewing
+  {
+    cpKey: 'klara',
+    direction: 'outbound',
+    from: KLARA_FROM,
+    subject: `Re: ${KLARA_NEGOTIATION_SUBJECT}`,
+    daysAgo: 11,
+    body: [
+      'Paní Marcinová,',
+      '',
+      'rád, že se vila líbila! K ceně: 9,5M Kč je můj konečný limit —',
+      'pod to nejdu, ale to snížení od 9,8M je pro vás 300 000 Kč navíc.',
+      '',
+      'Druhá prohlídka s rodiči je samozřejmě vítaná.',
+      'Dám vám vědět o dalších zájemcích, pokud by se situace změnila.',
+      '',
+      'Kdy by rodiče mohli přijet? Jsem k dispozici tento nebo příští týden.',
+    ].join('\n'),
+  },
+  // Klára never replied. This is the last message — user is now waiting.
+]
+
+// ─── Tomáš Horák History (Thread 4: Buyer goes on vacation → snooze trigger) ──
+// Short exchange about a garden flat in Košíře. Tomáš is interested but leaving
+// for 3-week vacation. His "current" email says "ozveme se po návratu" — triage
+// should set revisit_at (~May 5), lead tracking should skip this conversation.
+
+const TOMAS_EMAIL = 'ainikpage+horak.tomas@gmail.com'
+const TOMAS_FROM = 'Tomas Horak <ainikpage+horak.tomas@gmail.com>'
+
+const TOMAS_SUBJECT = `[${RUN_ID}] Zahradní byt Košíře — Na Popelce`
+
+const TOMAS_HISTORY: Omit<HistoryEmail, 'to'>[] = [
+  // 1. Tomáš sees listing, asks for details
+  {
+    cpKey: 'tomas',
+    direction: 'inbound',
+    from: TOMAS_FROM,
+    subject: TOMAS_SUBJECT,
+    daysAgo: 8,
+    body: [
+      'Dobrý den,',
+      '',
+      'viděl jsem váš inzerát na zahradní byt Na Popelce v Košířích.',
+      'Hledáme s partnerkou byt se zahrádkou v Praze 5 — máme rozpočet kolem 6,5M.',
+      '',
+      'Je byt stále k dispozici? Mohli bychom ho vidět tento týden?',
+      '',
+      'Díky,',
+      'Tomáš Horák',
+    ].join('\n'),
+  },
+  // 2. User responds with details
+  {
+    cpKey: 'tomas',
+    direction: 'outbound',
+    from: TOMAS_FROM,
+    subject: `Re: ${TOMAS_SUBJECT}`,
+    daysAgo: 7,
+    body: [
+      'Dobrý den pane Horáku,',
+      '',
+      'byt je k dispozici — 3+kk, 78m2, zahrada 45m2, cena 6 900 000 Kč.',
+      'Po rekonstrukci 2023, klidná ulice.',
+      '',
+      'Prohlídku můžeme domluvit na čtvrtek nebo pátek odpoledne.',
+      'Dejte vědět, co vám vyhovuje.',
+    ].join('\n'),
+  },
+]
+
+// ─── JUDr. Krejčí — Service CP (lawyer handling Novotný purchase) ─────────
+// Single email from a lawyer. Lead tracking should detect service role and
+// never flag this conversation as cooling/cold. Triage may still propose
+// a REPLY or TODO (lawyer asked for documents) — that's expected.
+
+const KREJCI_EMAIL = 'ainikpage+krejci.martin@gmail.com'
+const KREJCI_FROM = 'JUDr. Martin Krejci <ainikpage+krejci.martin@gmail.com>'
+
+// ─── Self-Email Command ────────────────────────────────────────────────────
+// User emails themselves with "Mila:" prefix → intercepted in ingestion
+// pipeline → AI-parsed → creates new CP. Trace: cps table has "Petr Svoboda".
+
+const SELF_EMAIL_COMMAND = {
+  subject: `[${RUN_ID}] Mila: nový kontakt`,
+  body: [
+    'Petr Svoboda',
+    'Tel: 602 555 123',
+    'Email: petr.svoboda@remax.cz',
+    'Role: buyer',
+    'Hledá byt v Praze 3, rozpočet 4-5M',
+  ].join('\n'),
+}
 
 // ─── Eva Finalization Email (Thread 2: New thread — assumes deal is done) ────
 // Separate thread from the negotiation. Eva assumes agreement, wants to
@@ -499,6 +927,48 @@ const TEST_EMAILS: TestEmail[] = [
       'Martin Král',
     ].join('\n'),
   },
+  // Tomáš Horák — vacation announcement (snooze trigger)
+  // Has 2-email history via bulk. This new email should trigger triage → revisit_at.
+  {
+    cpKey: 'tomas',
+    from: TOMAS_FROM,
+    subject: `Re: ${TOMAS_SUBJECT}`,
+    body: [
+      'Ahoj,',
+      '',
+      'díky za info, ten byt zní super!',
+      'Ale zítra letíme s partnerkou na 3 týdny do Chorvatska.',
+      'Můžeme se domluvit na prohlídku až po návratu?',
+      'Budu zpátky kolem 5. května.',
+      '',
+      'Ozveme se hned jak přiletíme. Snad byt bude ještě volný!',
+      '',
+      'Tomáš',
+    ].join('\n'),
+  },
+  // JUDr. Krejčí — lawyer (service CP, no lead tracking)
+  {
+    cpKey: 'lawyer',
+    from: KREJCI_FROM,
+    subject: `[${RUN_ID}] Revize kupní smlouvy — Vinohrady`,
+    body: [
+      'Dobrý den,',
+      '',
+      'jsem JUDr. Krejčí z advokátní kanceláře Krejčí & Partners.',
+      'Pan Novotný mě pověřil revizí kupní smlouvy k nemovitosti na Vinohradech.',
+      '',
+      'Smlouvu jsem obdržel a procházím ji. Předpokládám, že budu mít',
+      'připomínky hotové do pátku. Zatím jsem nenašel žádné zásadní problémy.',
+      '',
+      'Prosím o zaslání aktuálního listu vlastnictví a potvrzení bezdlužnosti SVJ',
+      'na tuto adresu — potřebuji je pro ověření údajů ve smlouvě.',
+      '',
+      'S pozdravem,',
+      'JUDr. Martin Krejčí',
+      'Krejčí & Partners, advokátní kancelář',
+      'Národní 18, Praha 1',
+    ].join('\n'),
+  },
 ]
 
 const HIGH_PRIORITY_EMAIL: TestEmail = {
@@ -534,29 +1004,53 @@ const HIGH_PRIORITY_EMAIL: TestEmail = {
 
 const ALL_TEST_SENDERS = [...TEST_EMAILS, HIGH_PRIORITY_EMAIL]
 
-// ─── CP Response Profiles (adaptive, not canned) ────────────────────────────
+// ─── Hardcoded Round 2 CP responses ─────────────────────────────────────────
 
-const CP_RESPONSE_PROFILES: Record<string, { persona: string; context: string; guidance: string }> = {
-  bob: {
-    persona: 'Bob, a potential apartment buyer',
-    context: 'Interested in Prague apartment on Vinohradska 45, budget ~8.5M CZK',
-    guidance: 'If Mila proposed a viewing time, confirm it and ask to bring your wife. Ask about parking. If she answered the price question, react to it.',
-  },
-  eva: {
-    persona: 'Eva Dvorakova, representing Dvorak & Partners s.r.o.',
-    context: 'Long negotiation over Sokolovská 46/51 Karlín (started at 465 vs 420, settled at 450 CZK/m2, 3yr with renewal option). Lawyer reviewed contract — 2 minor issues: 6-month notice period and 3 parking spots. Need to sign and move in by April. You asked for a call "around 9 or 10" to finalize details before signing.',
-    guidance: 'If Mila proposed a call time, confirm it. Push on the 6-month notice period issue — your lawyer insists. Ask about the 3 parking spots again. Ask when the actual signing appointment will be.',
-  },
-  martin: {
-    persona: 'Martin Kral, handling the Smichov property purchase',
-    context: 'Purchase price 12.4M CZK, seller wants to close by April. Bank needs signed docs by Friday.',
-    guidance: 'Confirm bank approved financing and all docs are signed. Ask about notary appointment. Available Monday-Wednesday next week, mornings preferred.',
-  },
-  urgent: {
-    persona: 'Jan Novotny, senior broker at Prague Commercial',
-    context: 'Months-long negotiation over Vinohrady commercial building. Started at 48M listed, buyer offered 38M, went through due diligence (found electrical + parking issues), settled at 45M. Notary JUDr. Procházka at Třinecká 672, appointment tomorrow 9 AM. Still waiting on list vlastnictví and bezdlužnost SVJ.',
-    guidance: 'Acknowledge whatever Mila confirmed. Press HARD for exact document delivery timing — you still need the LV and SVJ docs. Remind the buyer has the Žižkov property as backup. If documents not confirmed, threaten to postpone notary. Keep urgency extremely high.',
-  },
+const CP_ROUND2_RESPONSES: Record<string, string> = {
+  bob: [
+    'Díky za odpověď!',
+    '',
+    'Čas na prohlídku mi vyhovuje. Vzal bych s sebou manželku — je to pro oba.',
+    'Ještě jedna věc — je u domu možnost parkování? Máme dvě auta.',
+    '',
+    'Bob',
+  ].join('\n'),
+
+  eva: [
+    'Ahoj,',
+    '',
+    'díky za rychlou odpověď. Čas na telefonát mi sedí.',
+    '',
+    'K těm dvěma bodům — právník trvá na 6 měsících výpovědní lhůty,',
+    'to je pro nás podmínka. A ta 3 parkovací místa potřebujeme potvrdit písemně.',
+    '',
+    'Kdy budeme moct domluvit termín podpisu?',
+    '',
+    'Eva',
+    'Dvorak & Partners s.r.o.',
+  ].join('\n'),
+
+  martin: [
+    'Dobrý den,',
+    '',
+    'financování je schváleno, banka má podepsané dokumenty.',
+    'Jsem k dispozici v pondělí nebo v úterý dopoledne pro schůzku u notáře.',
+    '',
+    'Kdy to můžeme uzavřít?',
+    '',
+    'Martin Král',
+  ].join('\n'),
+
+  urgent: [
+    'Potřebuji jasnou odpověď — kdy přijdou ty dokumenty?',
+    '',
+    'List vlastnictví a bezdlužnost SVJ — bez toho notář nepůjde dopředu.',
+    'Kupující mi volal před hodinou a zvažuje Žižkov znovu.',
+    '',
+    'Pokud nemám dokumenty do 15:00, musím přesunout termín u notáře.',
+    '',
+    'Novotný',
+  ].join('\n'),
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -588,13 +1082,17 @@ interface ActionProposal {
 interface AgentResult {
   success: boolean
   emailsIngested: number
+  whatsappMessagesProcessed: number
   calendarEventsSynced: number
+  calendarInvitationsDetected: number
   messagesProcessed: number
   conversationsUpdated: number
   actionsGenerated: number
   followUpsGenerated: number
   coolingLeads: number
   coldLeads: number
+  reflectionObservations: number
+  replyDraftsGenerated: number
   actions: ActionProposal[]
   errors: string[]
 }
@@ -886,6 +1384,9 @@ async function runAgent(userId: string, roundLabel: string): Promise<AgentResult
   log(`${roundLabel}:agent`, `  Conversations updated: ${result.conversationsUpdated}`)
   log(`${roundLabel}:agent`, `  Actions generated:     ${result.actionsGenerated}`)
   log(`${roundLabel}:agent`, `  Follow-ups:            ${result.followUpsGenerated}`)
+  log(`${roundLabel}:agent`, `  Cooling leads:         ${result.coolingLeads || 0}`)
+  log(`${roundLabel}:agent`, `  Cold leads:            ${result.coldLeads || 0}`)
+  log(`${roundLabel}:agent`, `  Journal observations:  ${result.reflectionObservations || 0}`)
   if (result.actions?.length) {
     log(`${roundLabel}:agent`, `  Action details:`)
     for (const a of result.actions) {
@@ -894,6 +1395,17 @@ async function runAgent(userId: string, roundLabel: string): Promise<AgentResult
   }
   if (result.errors?.length) {
     log(`${roundLabel}:agent`, `  Errors: ${result.errors.join(', ')}`)
+  }
+  // AI usage + cost summary
+  const usage = (result as Record<string, unknown>).aiUsage as {
+    stages: { stage: string; model: string; calls: number; inputTokens: number; outputTokens: number; costUSD: number }[]
+    totalInputTokens: number; totalOutputTokens: number; totalCalls: number; totalCostUSD: number
+  } | undefined
+  if (usage && usage.totalCalls > 0) {
+    log(`${roundLabel}:agent`, `  AI usage: ${usage.totalCalls} calls, ${usage.totalInputTokens} in / ${usage.totalOutputTokens} out tokens — $${usage.totalCostUSD.toFixed(4)}`)
+    for (const s of usage.stages) {
+      log(`${roundLabel}:agent`, `    ${s.stage} → ${s.model}: ${s.calls}× (${s.inputTokens}→${s.outputTokens} tok) $${s.costUSD.toFixed(4)}`)
+    }
   }
 
   return result
@@ -981,40 +1493,10 @@ async function scanMilaReplies(userId: string): Promise<Map<string, MilaReply>> 
   return replies
 }
 
-// ─── Generate tailored CP response using AI ─────────────────────────────────
+// ─── Get hardcoded Round 2 CP response ──────────────────────────────────────
 
-async function generateTailoredCPResponse(
-  cpKey: string,
-  milaReplyBody: string,
-  originalEmail: TestEmail
-): Promise<string> {
-  const profile = CP_RESPONSE_PROFILES[cpKey]
-  if (!profile) return ''
-
-  const prompt = [
-    `You are ${profile.persona}.`,
-    `Context: ${profile.context}`,
-    '',
-    `You originally sent this email:`,
-    `"${originalEmail.body}"`,
-    '',
-    `You received this reply from the real estate agent's assistant (Mila):`,
-    `"${milaReplyBody}"`,
-    '',
-    `Write a realistic follow-up email response.`,
-    profile.guidance,
-    '',
-    `Rules:`,
-    `- Write 3-8 lines, natural and conversational`,
-    `- Reference specific details from Mila's reply`,
-    `- Sign off as ${extractName(originalEmail.from)}`,
-    `- Mix Czech and English naturally (this is Prague business)`,
-    `- Do NOT include subject line, just the body text`,
-  ].join('\n')
-
-  log('ai', `  Generating ${cpKey}'s response...`)
-  const result = await runAITask('drafting', prompt)
-  return result.trim()
+function getCPRound2Response(cpKey: string): string {
+  return CP_ROUND2_RESPONSES[cpKey] ?? ''
 }
 
 // ─── Inject tailored CP responses ───────────────────────────────────────────
@@ -1037,17 +1519,10 @@ async function injectTailoredCPResponses(
       continue
     }
 
-    const originalTestEmail = ALL_TEST_SENDERS.find(e => e.cpKey === original.cpKey)
-    if (!originalTestEmail) continue
-
-    const responseBody = await generateTailoredCPResponse(
-      original.cpKey,
-      milaReply.body,
-      originalTestEmail
-    )
+    const responseBody = getCPRound2Response(original.cpKey)
 
     if (!responseBody) {
-      log('respond', `  - AI returned empty for ${original.cpKey}, skipping`)
+      log('respond', `  - No Round 2 response defined for ${original.cpKey}, skipping`)
       continue
     }
 
@@ -1129,7 +1604,89 @@ async function runBrief(userId: string): Promise<void> {
   log('brief', `Brief sent successfully`)
 }
 
-// ─── Cleanup (removed — Gmail batch delete never worked reliably) ────────
+// ─── Inject self-addressed email (command interface) ────────────────────────
+
+async function injectSelfEmail(userId: string, subject: string, body: string): Promise<string> {
+  log('command', `Injecting self-email command: "${subject.replace(`[${RUN_ID}] `, '')}"`)
+
+  const gmail = await getGmailClient(userId)
+  const userEmail = await getUserEmail(userId)
+  const rfcMessageId = `<${RUN_ID}-self-cmd@e2e-test.local>`
+
+  const rfc2822 = [
+    `From: ${userEmail}`,
+    `To: ${userEmail}`,
+    `Subject: ${subject}`,
+    `Date: ${new Date().toUTCString()}`,
+    `Message-ID: ${rfcMessageId}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset="UTF-8"',
+    '',
+    body,
+  ].join('\r\n')
+
+  const res = await gmail.users.messages.insert({
+    userId: 'me',
+    requestBody: { raw: encodeRaw(rfc2822), labelIds: ['INBOX', 'UNREAD'] },
+    internalDateSource: 'dateHeader',
+  })
+
+  log('command', `  ✓ Self-email injected → ${res.data.id}`)
+  return res.data.id || 'unknown'
+}
+
+// ─── Quick smoke test ───────────────────────────────────────────────────────
+
+async function runQuickMode(): Promise<void> {
+  console.log()
+  console.log('─── Quick Smoke Test ───────────────────────────────────')
+  console.log('  Inject 1 urgent email → agent → instant-notify → done')
+  console.log()
+
+  const [injectedEmail] = await injectEmails(USER_ID, [HIGH_PRIORITY_EMAIL])
+
+  const result = await runAgent(USER_ID, 'quick')
+
+  const checks: CheckResult[] = [
+    {
+      name: 'Quick: Email ingested',
+      pass: result.emailsIngested >= 1,
+      detail: `${result.emailsIngested} email(s)`,
+    },
+    {
+      name: 'Quick: Action generated',
+      pass: result.actionsGenerated >= 1,
+      detail: `${result.actionsGenerated} action(s)`,
+    },
+    {
+      name: 'Quick: Urgent action (urgency >= 9)',
+      pass: (result.actions || []).some(a => a.urgency >= 9),
+      detail: `${(result.actions || []).filter(a => a.urgency >= 9).length} urgent action(s)`,
+    },
+  ]
+
+  const notifyResult = await runInstantNotify()
+  checks.push({
+    name: 'Quick: Instant notification sent',
+    pass: notifyResult.sent >= 1,
+    detail: `sent=${notifyResult.sent}`,
+  })
+
+  console.log()
+  const allPassed = printChecks(checks)
+
+  if (result.actions?.length) {
+    printActionUrls(result.actions, USER_ID)
+    await waitForKeypress('  ⏎  Press Enter when done...\n')
+  }
+
+  console.log()
+  console.log('═══════════════════════════════════════════════════════')
+  console.log(`  QUICK RESULT: ${allPassed ? 'ALL PASSED' : 'SOME FAILED'}`)
+  console.log('═══════════════════════════════════════════════════════')
+
+  if (!allPassed) process.exit(1)
+}
 
 // ─── Main ────────────────────────────────────────────────────────────────────
 
@@ -1140,7 +1697,9 @@ async function main() {
 
   console.log('═══════════════════════════════════════════════════════')
   console.log('  Mila E2E Pipeline Test — Interactive')
-  console.log(`  Mode: ${multiRound ? 'Multi-Round Interactive' : 'Single Round'}`)
+  const quickMode = flags.has('--quick')
+  const modeLabel = quickMode ? 'Quick Smoke Test' : multiRound ? 'Multi-Round Interactive' : 'Single Round'
+  console.log(`  Mode: ${modeLabel}`)
   console.log('═══════════════════════════════════════════════════════')
   console.log(`  User:     ${USER_ID}`)
   console.log(`  Target:   ${BASE_URL}`)
@@ -1153,6 +1712,12 @@ async function main() {
   if (!CRON_SECRET) fail('preflight', 'CRON_SECRET not set in .env.local')
   if (!process.env.NEXTAUTH_SECRET) {
     fail('preflight', 'NEXTAUTH_SECRET not set in .env.local (needed for action tokens)')
+  }
+
+  // ── Quick mode: minimal smoke test, ~30s ──────────────────────────────
+  if (quickMode) {
+    await runQuickMode()
+    return
   }
 
   const allChecks: CheckResult[] = []
@@ -1176,14 +1741,16 @@ async function main() {
 
     if (!flags.has('--skip-inject')) {
       // ── Phase 0: Inject conversation history (backfill) ──────────────
-      // Eva: negotiation about Sokolovská office (settled at 450 CZK/m2, 3yr).
-      // Novotný: difficult commercial building sale in Vinohrady (45M, months of pushback).
-      // Both histories give Mila realistic deal context before "current" emails arrive.
+      // Eva: full back-and-forth on Sokolovská office (settled at 450 CZK/m2, 3yr).
+      // Novotný: commercial building in Vinohrady (45M, months of pushback). User's last reply 6d ago.
+      // Klára: villa buyer in Dejvice (9.5M). User sent follow-up 11d ago, CP silent → cooling lead.
       console.log()
       console.log('─── Phase 0: Injecting Conversation History ────────────')
 
       await injectHistoryThread(USER_ID, EVA_NEGOTIATION_HISTORY, 'eva-negotiation')
       await injectHistoryThread(USER_ID, NOVOTNY_NEGOTIATION_HISTORY, 'novotny-negotiation')
+      await injectHistoryThread(USER_ID, KLARA_NEGOTIATION_HISTORY, 'klara-dejvice')
+      await injectHistoryThread(USER_ID, TOMAS_HISTORY, 'tomas-kosire')
 
       // Run bulk ingestion to process history — ingest, enrich, thread, summarize.
       // NO action generation — history is context only, not new work.
@@ -1193,7 +1760,7 @@ async function main() {
       const bulkRes = await fetch(`${BASE_URL}/api/ingest/bulk`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-api-key': API_KEY },
-        body: JSON.stringify({ userId: USER_ID, since: sinceDate.toISOString(), maxTotal: 50 }),
+        body: JSON.stringify({ userId: USER_ID, since: sinceDate.toISOString(), maxTotal: 100 }),
         signal: AbortSignal.timeout(300_000),
       })
       const bulkText = await bulkRes.text()
@@ -1202,6 +1769,11 @@ async function main() {
         log('history', `  ${line.trim()}`)
       }
       log('history', 'History processed via bulk ingestion (no actions generated)')
+
+      // ── Self-email command injection ──────────────────────────────────
+      // Injected now so the first agent run in Phase 1 picks it up.
+      // Trace: new CP "Petr Svoboda" in cps table.
+      await injectSelfEmail(USER_ID, SELF_EMAIL_COMMAND.subject, SELF_EMAIL_COMMAND.body)
 
       // Brief pause for Gmail indexing before Round 1 emails
       await new Promise(r => setTimeout(r, 2000))
@@ -1301,6 +1873,35 @@ async function main() {
       })
     }
 
+    // ── Post-refactor feature checks ──────────────────────────────────
+    // These verify pipeline steps that were added/changed in recent refactors.
+    // The agent result already returns these counts — we just weren't checking.
+
+    const totalCooling = allR1Results.reduce((sum, r) => sum + (r.coolingLeads || 0), 0)
+    const totalFollowUps = allR1Results.reduce((sum, r) => sum + (r.followUpsGenerated || 0), 0)
+    const totalReflections = allR1Results.reduce((sum, r) => sum + (r.reflectionObservations || 0), 0)
+
+    // Klára: 11 days since user's last message, CP silent → should be cooling
+    r1Checks.push({
+      name: 'R1: Cooling lead detected (Klára)',
+      pass: totalCooling > 0,
+      detail: `${totalCooling} cooling lead(s) — Klára silent 11+ days`,
+    })
+
+    // Lead tracking should generate follow-up actions for cooling leads
+    r1Checks.push({
+      name: 'R1: Lead follow-up actions generated',
+      pass: totalFollowUps > 0,
+      detail: `${totalFollowUps} follow-up action(s)`,
+    })
+
+    // Journal: rich negotiation histories (Eva 11 msgs, Novotný 13 msgs) should produce observations
+    r1Checks.push({
+      name: 'R1: Journal observations extracted',
+      pass: totalReflections > 0,
+      detail: `${totalReflections} observation(s) from conversations`,
+    })
+
     console.log()
     printChecks(r1Checks)
     allChecks.push(...r1Checks)
@@ -1350,7 +1951,7 @@ async function main() {
         console.log()
         console.log('─── Generating Tailored CP Responses ──────────────────')
 
-        await injectTailoredCPResponses(USER_ID, injected, milaReplies)
+        const cpResponseIds = await injectTailoredCPResponses(USER_ID, injected, milaReplies)
 
         const r2 = await runAgent(USER_ID, 'R2')
 
@@ -1391,6 +1992,37 @@ async function main() {
     } else if (multiRound) {
       log('R2', 'Skipped — no injected emails from Round 1')
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // DB TRACES — what to verify in Supabase after the run
+    // ═══════════════════════════════════════════════════════════════════════
+    console.log()
+    console.log('─── DB Traces to Verify ────────────────────────────────')
+    console.log('  Check these in Supabase to confirm pipeline correctness:')
+    console.log()
+    console.log('  SNOOZE (Tomáš Horák — vacation):')
+    console.log('    → conversation_threads WHERE topic ILIKE \'%Košíře%\' OR \'%Popelce%\'')
+    console.log('    → snooze_until should be set (~2026-05-05)')
+    console.log('    → No follow-up action for this conversation')
+    console.log()
+    console.log('  SERVICE CP (JUDr. Krejčí — lawyer):')
+    console.log('    → cps WHERE name ILIKE \'%Krejčí%\'')
+    console.log('    → role should be \'lawyer\' (set by enrichment)')
+    console.log('    → No lead tracking follow-up action (service CP bypass)')
+    console.log('    → May have a REPLY/TODO action (lawyer asked for documents — that\'s correct)')
+    console.log()
+    console.log('  SELF-EMAIL COMMAND (Mila: nový kontakt):')
+    console.log('    → cps WHERE name ILIKE \'%Svoboda%\'')
+    console.log('    → phone should contain \'602555123\', role = \'buyer\'')
+    console.log()
+    console.log('  COOLING LEAD (Klára Marcinová):')
+    console.log('    → conversation_threads WHERE topic ILIKE \'%Dejvice%\' OR \'%Antonínská%\'')
+    console.log('    → Should have a follow-up action (lead tracking)')
+    console.log()
+    console.log('  JOURNAL (reflection):')
+    console.log('    → journal_entries WHERE user_id = \'' + USER_ID + '\'')
+    console.log('    → Should have observations from Eva/Novotný negotiations')
+    console.log()
 
     // ═══════════════════════════════════════════════════════════════════════
     // FINAL: Morning brief with full conversation history

@@ -11,7 +11,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "eval:triage": "tsx scripts/eval-triage.ts"
+    "eval:triage": "tsx scripts/eval-triage.ts",
+    "dev:log": "mkdir -p logs && cross-env NODE_OPTIONS='--max-old-space-size=8192' next dev 2>&1 | tee logs/dev-$(date +%Y%m%d-%H%M%S).log",
+    "e2e": "mkdir -p logs && tsx scripts/e2e-test.ts 2>&1 | tee logs/e2e-$(date +%Y%m%d-%H%M%S).log",
+    "e2e:quick": "mkdir -p logs && tsx scripts/e2e-test.ts --quick 2>&1 | tee logs/e2e-quick-$(date +%Y%m%d-%H%M%S).log"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

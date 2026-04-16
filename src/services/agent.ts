@@ -3,6 +3,9 @@
  * Orchestrates the full processing pipeline
  */
 
+import { writeFile, mkdir } from 'fs/promises'
+import { join } from 'path'
+
 import { ingestEmailsForUser, ingestOutboundEmails } from './ingestion'
 import { processTimelineEntries, rebuildConversationSummary } from './threading'
 import { ingestCalendarEvents } from './calendar-ingestion'
@@ -33,6 +36,7 @@ import type { ExtractionResult } from '@/lib/ai/tasks'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import type { ActionProposal, JournalEntry, UserSettings, ConversationThread, ConversationSummary } from '@/lib/supabase/types'
 import type { DealMessage, DealContext } from './fact-extractor'
+import { resetAIUsage, getAIUsageSummary, type AIStageUsage } from '@/lib/ai/runner'
 
 export interface AgentRunResult {
   success: boolean
@@ -51,6 +55,13 @@ export interface AgentRunResult {
   actions: ActionProposal[]
   errors: string[]
   logs: string[]
+  aiUsage?: {
+    stages: AIStageUsage[]
+    totalInputTokens: number
+    totalOutputTokens: number
+    totalCalls: number
+    totalCostUSD: number
+  }
 }
 
 /** Captures console.log/warn/error output during a function's execution. */
@@ -105,6 +116,8 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     errors: [],
     logs,
   }
+
+  resetAIUsage()
 
   try {
     // Step 1: Verify user exists and has credentials
@@ -697,7 +710,32 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     console.error('[Agent] Error:', error)
     result.errors.push(error instanceof Error ? error.message : 'Unknown error')
   } finally {
+    // Collect AI usage regardless of success/failure
+    const usage = getAIUsageSummary()
+    result.aiUsage = usage
+    if (usage.totalCalls > 0) {
+      console.log(`[Agent] AI usage: ${usage.totalCalls} calls, ${usage.totalInputTokens} in / ${usage.totalOutputTokens} out tokens — $${usage.totalCostUSD.toFixed(4)}`)
+      for (const s of usage.stages) {
+        console.log(`[Agent]   ${s.stage} → ${s.model}: ${s.calls}× (${s.inputTokens}→${s.outputTokens} tok) $${s.costUSD.toFixed(4)}`)
+      }
+    }
     restore()
+
+    // Write logs to file (non-blocking, never fails the pipeline)
+    try {
+      const ts = new Date().toISOString().replace(/[:.]/g, '-')
+      const logDir = join(process.cwd(), 'logs')
+      await mkdir(logDir, { recursive: true })
+      const logContent = [
+        `Agent run: ${userId}`,
+        `Time: ${new Date().toISOString()}`,
+        `Success: ${result.success}`,
+        usage.totalCalls > 0 ? `AI cost: $${usage.totalCostUSD.toFixed(4)} (${usage.totalCalls} calls, ${usage.totalInputTokens} in / ${usage.totalOutputTokens} out)` : 'AI cost: $0 (no calls)',
+        '',
+        ...logs,
+      ].join('\n')
+      await writeFile(join(logDir, `agent-${ts}.log`), logContent)
+    } catch { /* never fail pipeline for logging */ }
   }
 
   return result

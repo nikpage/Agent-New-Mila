@@ -4,7 +4,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk'
-import type { AIProvider, AIGenerateOptions } from './types'
+import type { AIProvider, AIGenerateOptions, AIResult } from './types'
 
 let client: Anthropic | null = null
 
@@ -19,7 +19,7 @@ function getClient(): Anthropic {
 }
 
 export const anthropicProvider: AIProvider = {
-  async generateContent(model: string, prompt: string, options?: AIGenerateOptions): Promise<string> {
+  async generateContent(model: string, prompt: string, options?: AIGenerateOptions): Promise<AIResult> {
     const c = getClient()
 
     const useThinking = options?.thinkingBudget && options.thinkingBudget > 0
@@ -35,10 +35,14 @@ export const anthropicProvider: AIProvider = {
       messages: [{ role: 'user', content: prompt }],
     })
 
+    const usage = message.usage
+      ? { inputTokens: message.usage.input_tokens, outputTokens: message.usage.output_tokens }
+      : undefined
+
     // With thinking enabled, response contains thinking blocks + text blocks
     for (const block of message.content) {
       if (block.type === 'text') {
-        return block.text
+        return { text: block.text, usage }
       }
     }
 

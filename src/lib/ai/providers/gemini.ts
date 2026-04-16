@@ -7,7 +7,7 @@
  */
 
 import type { GenerativeModel } from '@google/generative-ai'
-import type { AIProvider, AIGenerateOptions } from './types'
+import type { AIProvider, AIGenerateOptions, AIResult } from './types'
 import { getNextClient } from './gemini-keys'
 
 const modelCaches = new Map<number, Map<string, GenerativeModel>>()
@@ -32,7 +32,7 @@ export function getLastKeyLabel(): string | null { return lastKeyLabel }
 export function getLastFingerprint(): string | null { return lastFingerprint }
 
 export const geminiProvider: AIProvider = {
-  async generateContent(model: string, prompt: string, options?: AIGenerateOptions): Promise<string> {
+  async generateContent(model: string, prompt: string, options?: AIGenerateOptions): Promise<AIResult> {
     const { model: m, keyLabel, fingerprint } = getModel(model)
     const genConfig: Record<string, unknown> = {}
     if (options?.temperature !== undefined) genConfig.temperature = options.temperature
@@ -44,7 +44,11 @@ export const geminiProvider: AIProvider = {
     keyUsage.set(keyLabel, (keyUsage.get(keyLabel) || 0) + 1)
     lastKeyLabel = keyLabel
     lastFingerprint = fingerprint
-    return result.response.text()
+    const meta = result.response.usageMetadata
+    return {
+      text: result.response.text(),
+      usage: meta ? { inputTokens: meta.promptTokenCount ?? 0, outputTokens: meta.candidatesTokenCount ?? 0 } : undefined,
+    }
   },
 }
 
