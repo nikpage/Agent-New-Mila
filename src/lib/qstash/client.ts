@@ -217,6 +217,37 @@ export async function deleteInstantNotifySchedule(
   await client.schedules.delete(scheduleId)
 }
 
+// ─── Usage Report ─────────────────────────────────────────────────────────────
+
+/**
+ * Create a QStash schedule for the daily AI usage report.
+ * Daily at 06:00 Prague time (will switch to monthly 1st later).
+ */
+export async function createUsageReportSchedule(): Promise<string> {
+  const client = getClient()
+
+  const headers: Record<string, string> = {}
+  if (CRON_SECRET) {
+    headers['Authorization'] = `Bearer ${CRON_SECRET}`
+  }
+
+  const result = await client.schedules.create({
+    destination: `${APP_BASE_URL}/api/cron/usage-report`,
+    cron: 'CRON_TZ=Europe/Prague 0 6 * * *',
+    headers,
+  })
+
+  return result.scheduleId
+}
+
+/**
+ * Delete the usage report schedule.
+ */
+export async function deleteUsageReportSchedule(scheduleId: string): Promise<void> {
+  const client = getClient()
+  await client.schedules.delete(scheduleId)
+}
+
 // ─── Agent Dispatcher ─────────────────────────────────────────────────────────
 
 /**

@@ -37,6 +37,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/client'
 import type { ActionProposal, JournalEntry, UserSettings, ConversationThread, ConversationSummary } from '@/lib/supabase/types'
 import type { DealMessage, DealContext } from './fact-extractor'
 import { resetAIUsage, getAIUsageSummary, formatAIUsageTable, type AIStageUsage } from '@/lib/ai/runner'
+import { insertAIUsage, type AIUsageRow } from '@/lib/db/ai-usage'
 
 export interface AgentRunResult {
   success: boolean
@@ -720,6 +721,25 @@ export async function runAgentForUser(userId: string): Promise<AgentRunResult> {
     if (usage.totalCalls > 0) {
       console.log(formatAIUsageTable(usage))
     }
+
+    // Log usage to DB (non-blocking)
+    if (usage.totalCalls > 0) {
+      const runId = crypto.randomUUID()
+      const runAt = new Date().toISOString()
+      const rows: AIUsageRow[] = usage.stages.map(s => ({
+        user_id: userId,
+        run_id: runId,
+        run_at: runAt,
+        stage: s.stage,
+        model: s.model,
+        calls: s.calls,
+        input_tokens: s.inputTokens,
+        output_tokens: s.outputTokens,
+        cost_usd: s.costUSD,
+      }))
+      try { await insertAIUsage(rows) } catch { /* never fail pipeline for logging */ }
+    }
+
     restore()
 
     // Write logs to file (non-blocking, never fails the pipeline)
