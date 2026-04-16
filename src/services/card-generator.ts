@@ -367,22 +367,26 @@ export async function insertCardsAsActions(
       const dedupeKey = `${card.dealId}:${card.card_type}`
       if (existingDealTypes.has(dedupeKey)) continue
 
-      // Find conversation for this deal — all cards now use real deal UUIDs.
+      // Find conversation via deal_timeline — the authoritative deal→conversation link.
+      // deal_timeline.deal_id is always set by deal-tagger; conversation_threads.deal_id is not.
       let conversationId: string | null = null
       const resolvedDealId: string = card.dealId
-      const { data: byDealId } = await supabase
-        .from('conversation_threads')
-        .select('id')
-        .eq('user_id', userId)
+      const { data: timelineRow } = await supabase
+        .from('deal_timeline')
+        .select('conversation_id')
         .eq('deal_id', card.dealId)
-        .order('last_updated', { ascending: false, nullsFirst: false })
+        .not('conversation_id', 'is', null)
+        .order('occurred_at', { ascending: false })
         .limit(1)
 
-      if (byDealId && byDealId.length > 0) {
-        conversationId = byDealId[0].id
+      if (timelineRow && timelineRow.length > 0) {
+        conversationId = timelineRow[0].conversation_id
       }
 
-      if (!conversationId) continue  // Can't insert without conversation_id
+      if (!conversationId) {
+        console.warn(`[CardGenerator] No conversation found for deal ${card.dealId} — skipping`)
+        continue
+      }
 
       // Get cp_id: from card first, else from conversation participants
       let cpId = card.cpId
