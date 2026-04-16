@@ -88,7 +88,7 @@ src/
 │   └── index.ts                # Barrel re-exports
 │
 ├── services/                   # Business logic (orchestration layer)
-│   ├── agent.ts                # Main pipeline — orchestration (parallel ingestion + graph walker)
+│   ├── agent.ts                # Main pipeline — 8-step orchestration (parallel ingestion)
 │   ├── scheduling.ts           # Calendar slot finding (1538 lines) ⚠️ LARGEST
 │   ├── planning.ts             # Action generation with channel detection (parallel batches of 5)
 │   ├── threading.ts            # Conversation assignment (timeline-based: external thread ID → CP count → density heuristic → AI)
@@ -98,31 +98,18 @@ src/
 │   ├── calendar-ingestion.ts   # Calendar sync + personal event filtering
 │   ├── lead-tracking.ts        # Cooling/cold/dead lead detection (parallel batches of 10)
 │   ├── morning-brief.ts        # Daily summary email + instant notifications (1049 lines)
-│   ├── reflection.ts           # Journal observation extraction from conversations
-│   ├── bypass-filter.ts        # Emergency detection — one cheap LLM call per message (stage: bypass)
-│   ├── temporal-extractor.ts   # Czech temporal expressions → DSL → resolved ISO dates (stage: temporal)
-│   ├── fact-extractor.ts       # Unified hard fact + soft observation extraction (stage: extraction)
-│   ├── reconstruction-critic.ts # QA pass — what did the extractor miss? (stage: reconstruction_critic)
-│   ├── entity-map-updater.ts   # Write hard facts to entity_map table (deterministic, no LLM)
-│   ├── belief-log-updater.ts   # Append soft observations to journal (contradiction detection)
-│   ├── graph-updater.ts        # Seed DAG from template + match facts to nodes + propose edges (stage: graph_proposal)
-│   ├── graph-walker.ts         # Walk deal DAGs → ranked WalkerTasks (deterministic, no LLM)
-│   ├── scoring-engine.ts       # Score WalkerTasks → ScoredTasks (deterministic, no LLM)
-│   ├── card-generator.ts       # ScoredTasks → ActionCards → action_proposals (stage: drafting)
-│   ├── deal-tagger.ts          # Tag timeline entries to deals (mirrors threading.ts for deal-centric model)
-│   └── anomaly-detector.ts     # "Deal of the year" insurance — detect unusually high stakes (stage: anomaly)
+│   └── reflection.ts           # Journal observation extraction from conversations
 │
 ├── lib/                        # Shared utilities & integrations
-│   ├── db/                     # Supabase CRUD — 17+ files
+│   ├── db/                     # Supabase CRUD — 14 files, ~3800 lines total
 │   ├── google/                 # Google APIs — calendar, gmail, auth, maps
 │   ├── supabase/               # Client + types (types.ts = 949 lines)
 │   ├── ai/
 │   │   ├── gemini.ts           # AI functions (preFilter, classify, enrichMessage, triageConversation, verifyTriage, etc.)
 │   │   ├── mila-voice.ts       # Centralized Mila text generation — ALL user-facing + CP-facing text
-│   │   ├── runner.ts           # runAITask() with 2-model fallback + 429/503 retry + token/cost tracking
-│   │   ├── tasks.ts            # AI task type definitions (ExtractionResult, etc.)
+│   │   ├── runner.ts           # runAITask() with 2-model fallback + 429/503 retry
 │   │   ├── context.ts          # AI context utilities
-│   │   └── providers/          # gemini.ts (multi-key rotation), gemini-keys.ts, anthropic.ts, types.ts (AIResult, AIUsage), index.ts
+│   │   └── providers/          # gemini.ts (multi-key rotation), gemini-keys.ts, anthropic.ts, types.ts, index.ts
 │   ├── qstash/
 │   │   └── client.ts           # QStash per-user brief scheduling (morning + afternoon)
 │   ├── whatsapp/
@@ -149,15 +136,9 @@ src/
 │   ├── brief/                  # Brief UI components (BriefCard, BriefFeed, ScheduleCard, ReplyCard, TodoCard, etc.)
 │   └── ui/                     # Button, Card, Badge, Input
 │
-│   ├── temporal/
-│   │   ├── dsl.ts              # Temporal DSL grammar (Czech time expressions)
-│   │   ├── executor.ts         # Sandboxed DSL execution → ISO dates
-│   │   └── prompt.ts           # Temporal extraction LLM prompt builder
-│
 ├── config/
 │   ├── client.ts               # Per-client config (identity, business, AI persona, leads, WA, calendar, scoring)
-│   ├── ai-models.ts            # 20 AI stages × 2-model fallback chains
-│   ├── deal-templates.ts       # Deal-type DAG templates (nodes + edges for graph seeding)
+│   ├── ai-models.ts            # 14 AI stages × 2-model fallback chains
 │   └── theme.ts                # Design tokens
 │
 ├── contexts/                   # React contexts (ThemeContext)
@@ -223,24 +204,13 @@ Steps 2 + 2.1 + 2.5 run IN PARALLEL (Promise.allSettled):
   Step 2.5: Sync Google Calendar events, detect invitations, filter personal events
 Step 3: Get all unassigned timeline entries (deal_timeline WHERE conversation_id IS NULL)
 Step 4: Assign timeline entries to conversations (external thread ID → CP count → density heuristic → AI)
-Step 4.5: Force-rebuild conversation summaries for all updated conversations
-Step 4b: Deal pipeline — per new inbound timeline entry, runs the graph walker world model:
-  1. bypass-filter (stage: bypass) — flag genuine same-day emergencies before processing
-  2. deal-tagger — tag timeline entry to correct deal (or create new deal)
-  3. temporal-extractor (stage: temporal) — Czech time expressions → DSL → resolved ISO dates
-  4. fact-extractor (stage: extraction) — unified hard fact + soft observation extraction with scratchpad
-  5. reconstruction-critic (stage: reconstruction_critic) — QA: what did the extractor miss?
-  6. World model updates in parallel: entity-map-updater + belief-log-updater + graph-updater (stage: graph_proposal)
-Step 5: Batch planner — graph walker → scoring engine → card generator → action_proposals
-  • walkAllDeals() — walks every active deal's DAG + classifies lead status (replaces separate lead-tracking step)
-  • Triage for new inbound conversations (triageConversation → verifyTriage → extractMessageFacts, batched ×5)
-  • scoreWalkerOutput() — deterministic scoring, merges graph tasks + triage tasks
-  • generateCards() — one LLM call per card (stage: drafting), triage_action tasks skip LLM (carry text from triage)
-  • insertCardsAsActions() — dedup by deal+type, insert into action_proposals
+Step 4.5: Force-rebuild conversation summaries for all updated conversations (threading only rebuilds after 5 new messages, but planning needs fresh summaries even after 1)
+Step 5: Generate action proposals via 2-call triage pipeline: triageConversation (flash with thinking — receives enrichment data + conversation summary, decides needs_action/type/urgency/venue/time) → verifyTriage (flash-lite, cross-checks justification against source message). Venue/time indices from triage are validated against enrichment data via code gates in planning.ts. If triage returns revisit_at, conversation is snoozed until that date. Channel-aware, batched ×5. Note: extractMessageFacts() exists in gemini.ts but is unused dead code — not called by planning.ts.
+Step 6: Lead tracking — scan all conversations for cooling/cold/dead leads (batched ×10). Ignores conversations where current_date < snooze_until. Skips service CPs entirely. Uses deal_timeline for activity detection (phone calls reset the counter).
 Step 7: Reflection — run runReflection() to extract journal observations from conversations.
 ```
 
-Result type includes: emailsIngested, whatsappMessagesProcessed, calendarEventsSynced, calendarInvitationsDetected, messagesProcessed, conversationsUpdated, actionsGenerated, followUpsGenerated, coolingLeads, coldLeads, reflectionObservations, replyDraftsGenerated, aiUsage (stages, totalInputTokens, totalOutputTokens, totalCalls, totalCostUSD).
+Result type includes: emailsIngested, whatsappMessagesProcessed, calendarEventsSynced, calendarInvitationsDetected, messagesProcessed, conversationsUpdated, actionsGenerated, followUpsGenerated, coolingLeads, coldLeads, reflectionObservations, replyDraftsGenerated.
 
 ### Action Deduplication
 One conversation should not produce duplicate action cards across pipeline runs. If an action was proposed in a previous brief and the agent hasn't acted on it, it carries forward — not duplicated. If new information changes the proposed action, the card updates.
@@ -265,8 +235,8 @@ The agent can also:
 Never read all files in a directory sequentially. This bloats context and causes hangs.
 
 Worst offenders (do NOT read all files in these):
-- `src/lib/db/` — 17+ files. Use the index below to pick the right file.
-- `src/services/` — 23+ files. Read only the service relevant to the task.
+- `src/lib/db/` — 14 files, ~3800 lines. Use the index below to pick the right file.
+- `src/services/` — 12 files, ~5500 lines. Read only the service relevant to the task.
 - `src/lib/google/` — 5 files, ~1600 lines. Read only the API you need.
 
 ### Do NOT follow imports into large type files
@@ -295,10 +265,6 @@ Instead of reading these files, use this index:
 | gdpr.ts | writeAuditLog, exportAllUserData, deleteAllUserData, enforceRetentionPolicy |
 | journal.ts | Journal entry CRUD — createJournalEntry, getJournalEntries, updateJournalEntry, expireTemporalEntries, etc. |
 | timeline.ts | createTimelineEntry, getUnassignedTimelineEntries, assignTimelineEntry, getTimelineForConversation, getTimelineForCP, getLatestInboundFromCP, getRecentDensityByConversation, getTimelineContextForConversations, getOrphanCallLogs, getCoolingConversations |
-| deals.ts | getDealById, getDealsForUser, getActiveDealsForCP, createDeal, updateDeal, findDealByExternalThread |
-| deal-graph.ts | getDAG, createNode, updateNodeStatus, createEdge, getBlockingNodes |
-| deal-participants.ts | Deal ↔ CP participant CRUD |
-| entity-map.ts | upsertEntity, getEntitiesForDeal — hard fact key-value store per deal |
 | locks.ts | tryAcquireUserLock, releaseUserLock |
 | index.ts | Barrel re-exports (do not read) |
 
@@ -343,76 +309,10 @@ Priority escalation is handled entirely by the `daysIgnored^1.5` factor in the m
 
 Skips conversations with existing pending actions. Caps at 3 auto follow-ups per conversation — after three unanswered nudges, the deal still appears in lead tracking but Mila stops generating new follow-up actions. Uses `selectOfferMultiplier()` from `@/shared/scoring` to apply seller/buyer role-based multiplier to follow-up priority scores. Uses `computeDaysIgnored()` from `@/shared/scoring` for consistent days-since-contact calculation (same logic as planning). Activity detection uses `getLatestInboundFromCP()` from `deal_timeline` — phone calls and voice notes count as activity. High-value conversations (matching `highValueSignals`) are flagged to the AI during planning for better dollar value estimation.
 
-## Graph Walker Pipeline (Step 4b + Step 5)
-
-The graph walker is Mila's deal-centric world model — it replaces per-message AI triage with a structured pipeline that extracts facts, builds a dependency graph per deal, and scores tasks deterministically.
-
-### Step 4b: World Model Updates (per new inbound timeline entry)
-```
-bypass-filter.ts → checkBypass(text, channel, settings)
-  ↓ isEmergency? → flag in log, continue processing
-deal-tagger.ts → tagMessageToDeal(entry, userId)
-  ↓ returns Deal (existing or new)
-temporal-extractor.ts → extractTemporalExpressions(text, timestamp, settings)
-  ↓ Czech time expressions → DSL code → executeDSLCode() → ISO dates
-fact-extractor.ts → extractFactsAndBeliefs(messages, temporalResult, dealContext, settings)
-  ↓ scratchpad-first reasoning → { hard_facts[], soft_observations[] }
-reconstruction-critic.ts → critiqueExtraction(originalMessages, extraction)
-  ↓ gaps? → logged for future re-run (max 1 re-run)
-IN PARALLEL:
-  entity-map-updater.ts → updateEntityMap(userId, dealId, hardFacts)     # upsert key-value facts
-  belief-log-updater.ts → updateBeliefLog(userId, dealId, observations)  # append-only journal
-  graph-updater.ts → updateGraph(userId, dealId, hardFacts)              # seed DAG + match facts to nodes
-```
-
-### Step 5: Batch Planner
-```
-graph-walker.ts → walkAllDeals(userId, settings)
-  ↓ walks every active deal's DAG + classifies lead status
-  ↓ returns WalkerTask[] per deal (blocking, due_soon, overdue, lead_cooling, etc.)
-  +
-triage pipeline (for new inbound conversations only, batched ×5):
-  triageConversation → verifyTriage → extractMessageFacts
-  ↓ produces WalkerTask[] with taskType='triage_action'
-  ↓
-scoring-engine.ts → scoreWalkerOutput(walkerOutputs, settings, triageTasks)
-  ↓ deterministic scoring: dealImportance + timePressure + graphPressure + immovability + anomalyBoost
-  ↓ returns ScoredTask[] sorted by score descending
-  ↓
-card-generator.ts → generateCards(scoredTasks, settings)
-  ↓ one LLM call per card (drafting stage), triage_action tasks skip LLM
-  ↓ returns ActionCard[] with intent_cs, rationale_cs, placeholders
-  ↓
-card-generator.ts → insertCardsAsActions(userId, cards)
-  ↓ dedup by deal+type, resolve deal→conversation→cp, insert into action_proposals
-```
-
-### Key Data Structures
-
-**Entity Map** (`entity_map` table via `src/lib/db/entity-map.ts`): Per-deal key-value store for hard facts. Keys are `type.key` (e.g. `price.asking_price`, `deadline.closing_date`). Upsert semantics — newer facts overwrite older ones.
-
-**Deal Graph** (`deal_graph_nodes` + `deal_graph_edges` tables via `src/lib/db/deal-graph.ts`): Per-deal DAG seeded from deal-type templates (`src/config/deal-templates.ts`). Nodes have `status` (pending/completed/skipped) and optional `deadline`. Edges are `depends_on`, `blocks`, or `suggests`. Graph walker classifies nodes as blocking/due_soon/overdue/has_slack.
-
-**Belief Log**: Soft observations appended to `journal_entries` scoped to a deal. Append-only. `belief-log-updater.ts` detects contradictions by comparing new content against existing entries on the same topic — calls `recordConflict()` on the old entry.
-
-**WalkerTask types**: `blocking` (all upstream done, this node blocks downstream), `due_soon` (<24h), `overdue` (past deadline), `has_slack` (>72h), `calendar_conflict`, `lead_cooling/cold/dead`, `triage_action` (from triage pipeline).
-
-### Scoring Engine Formula
-`Score = dealImportance + timePressure + graphPressure + immovability + anomalyBoost`
-
-Same core structure as calculatePriorityScore() but inputs come from entity map + graph, not per-message AI:
-- **dealImportance** = nVal × roleMultiplier (from entity map price + deal.user_role)
-- **timePressure** = urgency × daysIgnored^1.5 (urgency derived from taskType, not AI)
-- **graphPressure** = +2 for overdue/blocking, +1 for due_soon, 0 otherwise
-- **immovability** = from entity map (not yet populated)
-- **anomalyBoost** = from deals.anomaly_boost (set by anomaly-detector)
-
-For triage tasks (no deal context), urgency maps to effective daysIgnored: CRITICAL=15, TODAY=10, THIS_WEEK=5, SOON=2, NONE=0.5.
-
 ## Database Schema
 Full schema reference (all tables, columns, deal property model, migrations): See docs/SCHEMA.md
 
-Key tables: users, cps, channels, conversation_threads, messages, deal_timeline, action_proposals, events, todos, emails, audit_logs, user_agent_locks, deals, deal_graph_nodes, deal_graph_edges, entity_map. All tables have user_id — always filter by it in queries. The `channels` table maps channel UUIDs to types ('email', 'whatsapp', etc.) — `messages.channel_id` is a UUID FK to `channels.id`. The `deal_timeline` table is the chronological record of all CP interactions (emails, WhatsApp, calls, voice notes) — see Deal Timeline section below.
+Key tables: users, cps, channels, conversation_threads, messages, deal_timeline, action_proposals, events, todos, emails, audit_logs, user_agent_locks. All tables have user_id — always filter by it in queries. The `channels` table maps channel UUIDs to types ('email', 'whatsapp', etc.) — `messages.channel_id` is a UUID FK to `channels.id`. The `deal_timeline` table is the chronological record of all CP interactions (emails, WhatsApp, calls, voice notes) — see Deal Timeline section below.
 
 The `users` table includes dispatcher fields: `gmail_history_id` (Gmail sync cursor, written by agent run), `last_checked_at` (last dispatcher poll), `last_activity_at` (last time new mail detected).
 
@@ -460,7 +360,7 @@ These terms are independent. A small urgent deal beats a large routine one. A to
 
 W applies to non-deal events too. The agent's life doesn't stop for work.
 
-**Implementation**: `src/lib/db/actions.ts` → `calculatePriorityScore()` (legacy path) and `src/services/scoring-engine.ts` → `scoreWalkerOutput()` (graph walker path)
+**Implementation**: `src/lib/db/actions.ts` → `calculatePriorityScore()`
 
 | Input | Scale | Notes |
 |-------|-------|-------|
@@ -475,42 +375,31 @@ W applies to non-deal events too. The agent's life doesn't stop for work.
 
 **DO NOT REMOVE OR CHANGE** the formula or wiring without explicit user permission.
 
-**Wiring**: The graph walker path uses `scoring-engine.ts` which imports `selectOfferMultiplier` from `@/shared/scoring`. Deal-level daysIgnored comes from `deal.last_activity_at`. The legacy path (`planning.ts` + `lead-tracking.ts`) both import from `@/shared/scoring` and `@/lib/db/timeline` — never from each other. Both paths preserve the same formula structure.
+**Wiring**: Both `planning.ts` and `lead-tracking.ts` import `selectOfferMultiplier` and `computeDaysIgnored` from `@/shared/scoring` — never from each other. Both import `getLatestInboundFromCP` from `@/lib/db/timeline` for activity detection (replaces the old `getLatestMessageFromCP` from messages). Both pass sellerMultiplier (from CP role), kcHighValue (from user settings), and daysIgnored (from shared computation) to `calculatePriorityScore()`. `planning.ts` additionally passes weight (from triage AI response). Lead tracking passes no boost multipliers — escalation is handled entirely by daysIgnored^1.5 via the main formula.
 
 ## AI Model Configuration
-**Config**: `src/config/ai-models.ts` — 20 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
+**Config**: `src/config/ai-models.ts` — 14 pipeline stages, each with 2-model fallback chain (3rd slot reserved but unused).
 
-**Runner**: `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, retries 429s and 503s with exponential backoff (1s, 2s, 4s), logs per-call model + token count + cost. Tracks per-stage token usage and cost via `getAIUsageSummary()` / `resetAIUsage()` — agent.ts calls reset at pipeline start and summary in the finally block. Provider interface returns `AIResult { text, usage? }` (defined in `providers/types.ts`). MODEL_PRICING table covers all 5 models (gemini-2.5-flash, gemini-2.5-flash-lite, claude-haiku, claude-sonnet, claude-opus).
+**Runner**: `src/lib/ai/runner.ts` → `runAITask(stage, prompt)` — auto-cascades on failure, retries 429s and 503s with exponential backoff (1s, 2s, 4s), logs which model succeeded.
 
 **Model selection rule**: Structured JSON output → Gemini. Czech prose output → Claude. This ensures reliable Czech text generation.
 
-| Stage | Purpose | Primary → Fallback1 |
-|-------|---------|---------------------|
-| **Ingestion stages** | | |
-| filter | Spam detection (temp 0) | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
-| classify | Email category + priority (temp 0) | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
-| enrichment | Per-message key info extraction (temp 0) | gemini-2.5-flash → claude-haiku-4-5-20251001 |
-| threading | extractTopic, shouldJoinConversation (temp 0) | gemini-2.5-flash → claude-sonnet-4-6 |
+| Stage | Purpose | Primary → Fallback1 → Fallback2 |
+|-------|---------|--------------------------------|
+| filter | Spam detection | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
+| classify | Email category + priority | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
+| enrichment | Per-message key info extraction | gemini-2.5-flash → claude-haiku-4-5-20251001 |
+| threading | extractTopic, shouldJoinConversation | gemini-2.5-flash → claude-sonnet-4-6 |
 | analysis | analyzeConversation | gemini-2.5-flash → claude-sonnet-4-6 |
-| **Graph walker stages (Step 4b)** | | |
-| bypass | Emergency detection — same-day deadlines, deal-killing risks (temp 0) | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
-| temporal | Czech time expressions → DSL code → ISO dates (temp 0) | gemini-2.5-flash → claude-haiku-4-5-20251001 |
-| extraction | Unified hard fact + soft observation extraction with scratchpad (temp 0) | gemini-2.5-flash → claude-sonnet-4-6 |
-| reconstruction_critic | QA: what did the extractor miss? (temp 0) | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
-| graph_proposal | Novel edge inference for unmatched facts (rare, needs reasoning) | claude-sonnet-4-6 → gemini-2.5-flash |
-| anomaly | "Deal of the year" insurance — unusually high stakes detection (temp 0) | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
-| **Triage stages (Step 5)** | | |
-| triage_extract | extractMessageFacts (venue, time, questions; temp 0) | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
-| triage | triageConversation (decision-only; thinkingBudget 4096) | gemini-2.5-flash → claude-sonnet-4-6 |
-| triage_verify | verifyTriage (cross-check justification; temp 0) | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
-| **Output stages** | | |
-| drafting | mila-voice.ts + card-generator.ts (Czech prose) | claude-sonnet-4-6 → gemini-2.5-flash |
-| reflection | Journal observation extraction (temp 0) | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
-| draft_edit | Gap fill + spell/grammar on save (temp 0) | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
-| **Journal/belief stages** | | |
-| contradiction_analysis | Resolve conflicting beliefs (thinkingBudget 4096) | claude-sonnet-4-6 → gemini-2.5-flash |
-| contradiction_escalation | Opus fallback for unresolved contradictions (thinkingBudget 8192) | claude-opus-4-6 → claude-sonnet-4-6 |
-| belief_audit | Monthly/quarterly full belief review (thinkingBudget 8192) | claude-opus-4-6 → claude-sonnet-4-6 |
+| triage_extract | extractMessageFacts (pure reading comprehension — what CP said, asked, deadlines, venue, time, questions; temp 0) | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
+| triage | triageConversation (decision-only — receives verified extraction, not raw email; thinkingBudget 4096) | gemini-2.5-flash → claude-sonnet-4-6 |
+| triage_verify | verifyTriage (cross-check justification against source message) | gemini-2.5-flash-lite → claude-haiku-4-5-20251001 |
+| drafting | All mila-voice.ts functions (generateFinalDraft, generateBriefIntro, generateSchedulingIntent, generateLeadFollowUpIntent, generateUrgentIntro, generateBriefHeadline, regenerateDraftWithInstruction) | claude-sonnet-4-6 → gemini-2.5-flash |
+| reflection | Journal observation extraction | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
+| draft_edit | Gap fill + spell/grammar on save | claude-haiku-4-5-20251001 → claude-sonnet-4-6 |
+| contradiction_analysis | Resolve conflicting beliefs | claude-sonnet-4-6 → gemini-2.5-flash |
+| contradiction_escalation | Opus fallback for unresolved contradictions | claude-opus-4-6 → claude-sonnet-4-6 |
+| belief_audit | Monthly/quarterly full belief review | claude-opus-4-6 → claude-sonnet-4-6 |
 
 **Rate limit handling**: On 429/RESOURCE_EXHAUSTED/503 errors, retries same model up to 3 times with exponential backoff before falling to next model in chain.
 
