@@ -31,3 +31,6 @@ baileys_auth/
 
 # Agent + dev server logs
 logs/
+
+# E2E cassettes (LLM record/replay)
+.cassettes/

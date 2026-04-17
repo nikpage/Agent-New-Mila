@@ -10,6 +10,7 @@
 import { AI_TASK_MODELS, type AIStage } from '@/config/ai-models'
 import { resolveProvider } from './providers'
 import { getLastFingerprint } from './providers/gemini'
+import { cassetteEnabled, cassetteLookup, cassetteRecord } from './cassette'
 
 const MAX_RETRIES = 3
 
@@ -138,6 +139,14 @@ function isRetryableError(error: unknown): boolean {
 }
 
 export async function runAITask(stage: AIStage, prompt: string): Promise<string> {
+  if (cassetteEnabled()) {
+    const hit = cassetteLookup(stage, prompt)
+    if (hit !== undefined) {
+      lastCallInfo = { stage, model: 'cassette' }
+      return hit
+    }
+  }
+
   const chain = AI_TASK_MODELS[stage]
   const models = [chain.primary, chain.fallback1, chain.fallback2].filter((m): m is string => m !== null)
   const options: { temperature?: number; thinkingBudget?: number } = {}
@@ -156,6 +165,7 @@ export async function runAITask(stage: AIStage, prompt: string): Promise<string>
         const cost = calcCost(models[i], tokIn, tokOut)
         trackUsage(stage, models[i], tokIn, tokOut)
         console.log(`[AI] ${stage} → ${models[i]} (${tokIn}→${tokOut} tok, $${cost.toFixed(6)})${fp ? `\n  ${fp}` : ''}`)
+        cassetteRecord(stage, prompt, result.text)
         return result.text
       } catch (error) {
         if (isRetryableError(error) && retry < MAX_RETRIES) {
