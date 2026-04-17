@@ -186,6 +186,8 @@ async function bulkIngest(): Promise<void> {
     signal: AbortSignal.timeout(600_000),
   })
   if (!res.ok) throw new Error(`bulk ingest failed: HTTP ${res.status}`)
+  const reader = res.body?.getReader()
+  if (reader) { while (!(await reader.read()).done) {} }
   console.log(`  [bulk] history ingested`)
 }
 
