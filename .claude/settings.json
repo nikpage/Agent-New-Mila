@@ -19,11 +19,20 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Agent",
+        "matcher": "Edit|Write|Bash",
         "hooks": [
           {
-            "type": "prompt",
-            "prompt": "STOP. Is the answer already in the conversation? Only proceed if you genuinely need information not available in context. If the answer IS in context, output JSON: {\"decision\":\"block\",\"reason\":\"Answer is already in context — respond directly instead of launching an agent.\"}. If the information genuinely is NOT available, output: {\"decision\":\"allow\"}."
+            "type": "command",
+            "command": ".claude/hooks/check-permission.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/check-reread.sh"
           }
         ]
       }

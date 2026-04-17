@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse hook for Edit|Write|Bash.
 # Denies if the last user message did not explicitly authorize action.
-set -euo pipefail
+set -eu
 
 input=$(cat)
 session=$(printf '%s' "$input" | jq -r '.session_id // empty')

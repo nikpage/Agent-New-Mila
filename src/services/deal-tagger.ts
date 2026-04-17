@@ -17,6 +17,7 @@ import {
   createDeal,
   updateDeal,
 } from '@/lib/db/deals'
+import { addDealParticipant } from '@/lib/db/deal-participants'
 import { getMessageById } from '@/lib/db/messages'
 import { getSupabaseAdmin } from '@/lib/supabase/client'
 import type { DealTimelineEntry, Deal } from '@/lib/supabase/types'
@@ -44,6 +45,7 @@ export async function tagMessageToDeal(
       if (deal) {
         await writebackDealId(entry.id, deal.id)
         await touchDeal(deal.id)
+        await linkParticipant(deal.id, entry.cp_id)
         return deal
       }
     }
@@ -66,6 +68,7 @@ export async function tagMessageToDeal(
       const deal = activeDeals[0]
       await writebackDealId(entry.id, deal.id)
       await touchDeal(deal.id)
+      await linkParticipant(deal.id, entry.cp_id)
       return deal
     }
 
@@ -74,6 +77,7 @@ export async function tagMessageToDeal(
     if (matched) {
       await writebackDealId(entry.id, matched.id)
       await touchDeal(matched.id)
+      await linkParticipant(matched.id, entry.cp_id)
       return matched
     }
 
@@ -144,7 +148,7 @@ async function createNewDeal(userId: string, entry: DealTimelineEntry): Promise<
     ? entry.content.slice(0, 100).trim()
     : 'New deal'
 
-  return await createDeal({
+  const deal = await createDeal({
     user_id: userId,
     title,
     status: 'active',
@@ -152,6 +156,18 @@ async function createNewDeal(userId: string, entry: DealTimelineEntry): Promise<
     deal_type: null,
     last_activity_at: entry.occurred_at,
   })
+
+  await linkParticipant(deal.id, entry.cp_id)
+  return deal
+}
+
+async function linkParticipant(dealId: string, cpId: string | null | undefined): Promise<void> {
+  if (!cpId) return
+  try {
+    await addDealParticipant(dealId, cpId)
+  } catch (err) {
+    console.warn(`[DealTagger] addDealParticipant failed for deal=${dealId} cp=${cpId}: ${err}`)
+  }
 }
 
 async function writebackDealId(entryId: string, dealId: string): Promise<void> {
