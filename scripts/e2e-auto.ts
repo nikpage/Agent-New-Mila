@@ -221,43 +221,66 @@ export interface RunState {
   agent: AgentResult
   deals: Array<Record<string, unknown>>
   cps: Array<Record<string, unknown>>
+  cpStates: Array<Record<string, unknown>>
   entityMap: Array<Record<string, unknown>>
   journalEntries: Array<Record<string, unknown>>
   actions: Array<Record<string, unknown>>
   graphNodes: Array<Record<string, unknown>>
   graphEdges: Array<Record<string, unknown>>
   threads: Array<Record<string, unknown>>
+  dealParticipants: Array<Record<string, unknown>>
+  threadParticipants: Array<Record<string, unknown>>
 }
 
 async function captureState(agent: AgentResult): Promise<RunState> {
-  const [deals, cps, entityMap, journal, actions, threads] = await Promise.all([
-    supabase.from('deals').select('*').eq('user_id', USER_ID),
-    supabase.from('cps').select('*').eq('user_id', USER_ID),
-    supabase.from('entity_map').select('*').eq('user_id', USER_ID),
-    supabase.from('journal_entries').select('*').eq('user_id', USER_ID),
-    supabase.from('action_proposals').select('*').eq('user_id', USER_ID).eq('status', 'pending'),
-    supabase.from('conversation_threads').select('*').eq('user_id', USER_ID),
-  ])
+  const [deals, cps, entityMap, journal, actions, threads, dealParticipants] =
+    await Promise.all([
+      supabase.from('deals').select('*').eq('user_id', USER_ID),
+      supabase.from('cps').select('*').eq('user_id', USER_ID),
+      supabase.from('entity_map').select('*').eq('user_id', USER_ID),
+      supabase.from('journal_entries').select('*').eq('user_id', USER_ID),
+      supabase.from('action_proposals').select('*').eq('user_id', USER_ID).eq('status', 'pending'),
+      supabase.from('conversation_threads').select('*').eq('user_id', USER_ID),
+      supabase.from('deal_participants').select('*'),
+    ])
 
   const dealIds = (deals.data || []).map(d => d.id as string)
-  const [nodes, edges] = dealIds.length
-    ? await Promise.all([
-        supabase.from('deal_graph_nodes').select('*').in('deal_id', dealIds),
-        supabase.from('deal_graph_edges').select('*').in('deal_id', dealIds),
-      ])
-    : [{ data: [] }, { data: [] }]
+  const cpIds = (cps.data || []).map(c => c.id as string)
+  const threadIds = (threads.data || []).map(t => t.id as string)
+
+  const [nodes, edges, cpStates, threadParticipants] = await Promise.all([
+    dealIds.length
+      ? supabase.from('deal_graph_nodes').select('*').in('deal_id', dealIds)
+      : Promise.resolve({ data: [] }),
+    dealIds.length
+      ? supabase.from('deal_graph_edges').select('*').in('deal_id', dealIds)
+      : Promise.resolve({ data: [] }),
+    cpIds.length
+      ? supabase.from('cp_states').select('*').in('cp_id', cpIds)
+      : Promise.resolve({ data: [] }),
+    threadIds.length
+      ? supabase.from('thread_participants').select('*').in('thread_id', threadIds)
+      : Promise.resolve({ data: [] }),
+  ])
+
+  const dealIdSet = new Set(dealIds)
+  const filteredDealParticipants = (dealParticipants.data || [])
+    .filter(p => dealIdSet.has(p.deal_id as string))
 
   return {
     runId: RUN_ID,
     agent,
     deals: deals.data || [],
     cps: cps.data || [],
+    cpStates: cpStates.data || [],
     entityMap: entityMap.data || [],
     journalEntries: journal.data || [],
     actions: actions.data || [],
     graphNodes: nodes.data || [],
     graphEdges: edges.data || [],
     threads: threads.data || [],
+    dealParticipants: filteredDealParticipants,
+    threadParticipants: threadParticipants.data || [],
   }
 }
 
@@ -275,18 +298,19 @@ type Row = Record<string, unknown>
 
 function findCp(state: RunState, nameContains: string): Row | undefined {
   const re = new RegExp(nameContains, 'i')
-  return state.cps.find(c => re.test(String(c.name ?? '')) || re.test(String(c.email ?? '')))
+  return state.cps.find(c =>
+    re.test(String(c.name ?? '')) ||
+    re.test(String(c.primary_identifier ?? '')),
+  )
 }
 
 function dealsForCp(state: RunState, cpId: string): Row[] {
-  return state.deals.filter(d => d.cp_id === cpId || (Array.isArray(d.cp_ids) && (d.cp_ids as string[]).includes(cpId)))
-}
-
-function findDealByCpName(state: RunState, nameContains: string): Row | undefined {
-  const cp = findCp(state, nameContains)
-  if (!cp) return undefined
-  const ds = dealsForCp(state, cp.id as string)
-  return ds[0]
+  const dealIds = new Set(
+    state.dealParticipants
+      .filter(p => p.cp_id === cpId)
+      .map(p => p.deal_id as string),
+  )
+  return state.deals.filter(d => dealIds.has(d.id as string))
 }
 
 function entitiesFor(state: RunState, dealId: string): Row[] {
@@ -320,8 +344,49 @@ function beliefsFor(state: RunState, dealId: string): Row[] {
   return state.journalEntries.filter(j => j.deal_id === dealId)
 }
 
+function beliefMatches(b: Row, re: RegExp): boolean {
+  return re.test(String(b.content ?? '')) || re.test(String(b.topic ?? ''))
+}
+
 function threadsFor(state: RunState, cpId: string): Row[] {
-  return state.threads.filter(t => t.cp_id === cpId)
+  const threadIds = new Set(
+    state.threadParticipants
+      .filter(p => p.cp_id === cpId)
+      .map(p => p.thread_id as string),
+  )
+  return state.threads.filter(t => threadIds.has(t.id as string))
+}
+
+/**
+ * Free-text blob covering everything we know about a CP:
+ * name, primary_identifier (email), other_identifiers (phones JSON),
+ * locations JSON, cp_states.summary_text.
+ */
+function cpTextBlob(state: RunState, cp: Row): string {
+  const parts: string[] = [
+    String(cp.name ?? ''),
+    String(cp.primary_identifier ?? ''),
+    JSON.stringify(cp.other_identifiers ?? ''),
+    JSON.stringify(cp.locations ?? ''),
+  ]
+  const st = state.cpStates.find(s => s.cp_id === cp.id)
+  if (st) parts.push(String(st.summary_text ?? ''))
+  return parts.join(' | ')
+}
+
+function cpDigits(cp: Row): string {
+  return JSON.stringify(cp.other_identifiers ?? '').replace(/\D/g, '')
+}
+
+function cpHasEmail(cp: Row): boolean {
+  return /@/.test(String(cp.primary_identifier ?? '')) ||
+    /@/.test(JSON.stringify(cp.other_identifiers ?? ''))
+}
+
+function cpHasPhone(cp: Row): boolean {
+  const digits = cpDigits(cp)
+  // A real phone has ≥9 digits (CZ numbers are 9).
+  return digits.length >= 9
 }
 
 function check(name: string, pass: boolean, detail = ''): Check {
@@ -377,9 +442,9 @@ function assertions(state: RunState): Check[] {
     checks.push(check('nov.6d: closing pending',
       hasNode(state, novId, /clos|uzavr/i, /pending|in.?progress/i)))
     checks.push(check('nov.7a: beliefs include breach/overdue signal',
-      beliefsFor(state, novId).some(b => /overdue|breach|sl[íi]bil|unsent|missing|pozd/i.test(String(b.content ?? b.topic ?? ''))))  )
+      beliefsFor(state, novId).some(b => beliefMatches(b, /overdue|breach|sl[íi]bil|unsent|missing|pozd/i))))
     checks.push(check('nov.7b: beliefs include aggressive/pressure posture',
-      beliefsFor(state, novId).some(b => /aggressive|pressure|tlak|ultimat/i.test(String(b.content ?? b.topic ?? ''))))  )
+      beliefsFor(state, novId).some(b => beliefMatches(b, /aggressive|pressure|tlak|ultimat/i))))
     const novActions = actionsFor(state, novId)
     checks.push(check('nov.8: ≥3 cards', novActions.length >= 3, `${novActions.length} cards`))
     checks.push(check('nov.8a: SCHEDULE urgency=10 for notary',
@@ -433,8 +498,8 @@ function assertions(state: RunState): Check[] {
     checks.push(check('eva.6d: signing pending',
       hasNode(state, evaId, /sign|podpis/i, /pending|in.?progress/i)))
     checks.push(check('eva.7: beliefs friendly + open_issues',
-      beliefsFor(state, evaId).some(b => /friendly|collab|ahoj|smile/i.test(String(b.content ?? b.topic ?? ''))) &&
-      beliefsFor(state, evaId).some(b => /open.?issue|notice|park/i.test(String(b.content ?? b.topic ?? '')))))
+      beliefsFor(state, evaId).some(b => beliefMatches(b, /friendly|collab|ahoj|smile/i)) &&
+      beliefsFor(state, evaId).some(b => beliefMatches(b, /open.?issue|notice|park/i))))
     const evaActions = actionsFor(state, evaId)
     checks.push(check('eva.8: ≥2 cards', evaActions.length >= 2, `${evaActions.length} cards`))
     checks.push(check('eva.8a: SCHEDULE call tomorrow 9–10',
@@ -481,13 +546,13 @@ function assertions(state: RunState): Check[] {
     checks.push(check('kla.5: viewing_2 pending (with parents)',
       hasEntity(state, klaId, /viewing|prohl[íi]dk/i, /viewing_?2|druh|parent|rodi/i)))
     checks.push(check('kla.6: contact has email but no phone',
-      klaCp && !(klaCp.phone) && /@/.test(String(klaCp.email ?? ''))))
+      !!klaCp && cpHasEmail(klaCp) && !cpHasPhone(klaCp)))
     checks.push(check('kla.7: graph has silent/awaiting state',
       nodesFor(state, klaId).some(n => /cp.?response|await|silent|negot/i.test(String(n.label ?? ''))) ||
       nodesFor(state, klaId).some(n => /await|silent|pending/i.test(String(n.status ?? '')))))
     checks.push(check('kla.8: beliefs include financing + price_sensitivity',
-      beliefsFor(state, klaId).some(b => /financ|parent|rodi|rozpoc/i.test(String(b.content ?? b.topic ?? ''))) &&
-      beliefsFor(state, klaId).some(b => /price.?sensit|hesit|cena|hran/i.test(String(b.content ?? b.topic ?? ''))))  )
+      beliefsFor(state, klaId).some(b => beliefMatches(b, /financ|parent|rodi|rozpoc/i)) &&
+      beliefsFor(state, klaId).some(b => beliefMatches(b, /price.?sensit|hesit|cena|hran/i))))
     const klaActions = actionsFor(state, klaId)
     checks.push(check('kla.9: COOLING flagged',
       (state.agent.coolingLeads ?? 0) > 0 ||
@@ -524,12 +589,12 @@ function assertions(state: RunState): Check[] {
     checks.push(check('tom.4b: location Chorvatsko',
       hasEntity(state, tomId, /cp|status/i, /location/i, /chorvat|croatia/i)))
     checks.push(check('tom.5: contact email only, no phone',
-      tomCp && !(tomCp.phone)))
+      !!tomCp && cpHasEmail(tomCp) && !cpHasPhone(tomCp)))
     checks.push(check('tom.6: viewing deferred',
       hasNode(state, tomId, /viewing|prohl[íi]dk/i, /defer|request|pending/i)))
     checks.push(check('tom.7: beliefs casual + buyer_interest high',
-      beliefsFor(state, tomId).some(b => /casual|friendly|ahoj|super/i.test(String(b.content ?? b.topic ?? ''))) &&
-      beliefsFor(state, tomId).some(b => /interest|zajem|high/i.test(String(b.content ?? b.topic ?? ''))))  )
+      beliefsFor(state, tomId).some(b => beliefMatches(b, /casual|friendly|ahoj|super/i)) &&
+      beliefsFor(state, tomId).some(b => beliefMatches(b, /interest|zajem|high/i))))
     checks.push(check('tom.8: conversation SNOOZED',
       tomCp && threadsFor(state, tomCp.id as string).some(t => !!t.snooze_until)))
     const tomActions = actionsFor(state, tomId)
@@ -541,14 +606,15 @@ function assertions(state: RunState): Check[] {
   const krejCp = findCp(state, 'Krej[cč][íi]|JUDr')
   checks.push(check('krej: cp exists', !!krejCp))
   if (krejCp) {
+    const krejBlob = cpTextBlob(state, krejCp)
     checks.push(check('krej.1: role = lawyer/service',
       /lawyer|service|pr[áa]vn/i.test(String(krejCp.role ?? ''))))
     checks.push(check('krej.2a: title JUDr.',
-      /JUDr/i.test(String(krejCp.name ?? '')) || /JUDr/i.test(String(krejCp.title ?? ''))))
+      /JUDr/i.test(krejBlob)))
     checks.push(check('krej.2b: company Krejčí & Partners',
-      /krej[cč][íi].*partners|krej[cč][íi][\s&]/i.test(String(krejCp.company ?? ''))))
+      /krej[cč][íi].*partners|krej[cč][íi][\s&]+partner/i.test(krejBlob)))
     checks.push(check('krej.2c: office Národní 18',
-      /n[áa]rodn[íi].*18/i.test(String(krejCp.office_address ?? krejCp.address ?? ''))))
+      /n[áa]rodn[íi][^,;|]{0,20}18/i.test(krejBlob)))
     checks.push(check('krej.5: NOT flagged cooling/cold/dead',
       !state.actions.some(a => a.cp_id === krejCp.id && /cool|cold|dead/i.test(String(a.action_type)))))
   }
@@ -565,9 +631,10 @@ function assertions(state: RunState): Check[] {
     checks.push(check('bob.2: buyer_budget ≈ 8.5M',
       hasEntity(state, bobId, /price|buyer/i, /budget|rozpoc/i, /8[\s.,]?5|8[\s.]?500/)))
     checks.push(check('bob.3: no phone/company',
-      bobCp && !bobCp.phone && !bobCp.company))
+      !!bobCp && !cpHasPhone(bobCp) &&
+      !/s\.r\.o\.|a\.s\.|partners|company|spol\./i.test(cpTextBlob(state, bobCp))))
     checks.push(check('bob.4: beliefs low urgency + exploratory',
-      beliefsFor(state, bobId).some(b => /low|spech|nespe|explor|zvazuj/i.test(String(b.content ?? b.topic ?? ''))))  )
+      beliefsFor(state, bobId).some(b => beliefMatches(b, /low|spech|nespe|explor|zvazuj/i))))
     const bobActions = actionsFor(state, bobId)
     checks.push(check('bob.6: REPLY urgency ≤3',
       bobActions.some(a => a.action_type === 'REPLY' && (a.urgency as number) <= 3)))
@@ -600,11 +667,11 @@ function assertions(state: RunState): Check[] {
   checks.push(check('petr.2: cp created name + role=buyer', !!petrCp &&
     /buyer/i.test(String(petrCp.role ?? ''))))
   if (petrCp) {
+    const petrBlob = cpTextBlob(state, petrCp)
     checks.push(check('petr.3a: email petr.svoboda@remax.cz',
-      /petr\.svoboda@remax/i.test(String(petrCp.email ?? ''))))
+      /petr\.svoboda@remax/i.test(petrBlob)))
     checks.push(check('petr.3b: phone 602 555 123',
-      /602[\s.]?555[\s.]?123/.test(String(petrCp.phone ?? '').replace(/\D/g, '') || String(petrCp.phone ?? '')) ||
-      String(petrCp.phone ?? '').replace(/\D/g, '').includes('602555123')))
+      cpDigits(petrCp).includes('602555123')))
     const petrDeals = dealsForCp(state, petrCp.id as string)
     const petrActions = state.actions.filter(a => a.cp_id === petrCp.id)
     checks.push(check('petr.5: no conversation/cards',
