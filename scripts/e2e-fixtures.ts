@@ -180,7 +180,7 @@ export const NOVOTNY_HISTORY: FixtureHistoryEmail[] = [
       'výborně. Připravuji dokumenty:',
       '- List vlastnictví: objednám na katastru dnes, hotový do 2 dnů',
       '- Bezdlužnost SVJ: čekám na správce, slíbil do pátku',
-      '- Energetický průkaz: mám, pošlu v příloze', '',
+      '- Energetický průkaz: posílám v příloze', '',
       'JUDr. Procházka na Třinecké 672 mi vyhovuje.',
     ].join('\n'),
   },
@@ -356,7 +356,7 @@ export const TEST_EMAILS: FixtureCurrentEmail[] = [
     body: [
       'Ahoj,', '',
       'díky za info, ten byt zní super!',
-      'Ale zítra letíme s partnerkou na 3 týdny do Chorvatska.',
+      'Ale zítra letíme s partnerkou na dva a půl týdne do Chorvatska.',
       'Můžeme se domluvit na prohlídku až po návratu?',
       'Budu zpátky kolem 5. května.', '',
       'Ozveme se hned jak přiletíme. Snad byt bude ještě volný!', '',
