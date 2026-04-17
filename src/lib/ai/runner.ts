@@ -10,7 +10,7 @@
 import { AI_TASK_MODELS, type AIStage } from '@/config/ai-models'
 import { resolveProvider } from './providers'
 import { getLastFingerprint } from './providers/gemini'
-import { cassetteEnabled, cassetteLookup, cassetteRecord } from './cassette'
+import { cassetteMode, cassetteLookup, cassetteRecord } from './cassette'
 
 const MAX_RETRIES = 3
 
@@ -139,7 +139,7 @@ function isRetryableError(error: unknown): boolean {
 }
 
 export async function runAITask(stage: AIStage, prompt: string): Promise<string> {
-  if (cassetteEnabled()) {
+  if (cassetteMode() === 'replay') {
     const hit = cassetteLookup(stage, prompt)
     if (hit !== undefined) {
       lastCallInfo = { stage, model: 'cassette' }
