@@ -724,6 +724,15 @@ async function main() {
     if (c.pass) passed++
   }
 
+  console.log('\n─── Phase 5: Trigger morning brief ─────────────────────')
+  const briefRes = await fetch(`${BASE_URL}/api/cron/morning-brief?userId=${USER_ID}`, {
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${CRON_SECRET}` },
+  })
+  const briefBody = await briefRes.text()
+  console.log(`  brief status=${briefRes.status}`)
+  console.log(`  brief body=${briefBody.slice(0, 500)}`)
+
   console.log('\n═══════════════════════════════════════════════════════')
   console.log(`  RESULT: ${passed}/${checks.length} checks passed`)
   console.log('═══════════════════════════════════════════════════════')
