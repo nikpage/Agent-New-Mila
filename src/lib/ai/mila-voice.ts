@@ -1,6 +1,7 @@
 import type { UserSettings } from '../supabase/types'
 import { runAITask } from './runner'
 import { getAISystemPrompt } from '@/config/client'
+import { promptNow } from './clock'
 
 /**
  * Centralized Mila text generation — ALL user-facing + CP-facing text.
@@ -328,7 +329,7 @@ export async function generateFinalDraft(
     : `Write a professional email in ${settings.ai_language || 'Czech'}.\nSign off with:\n${settings.ai_email_signature}`
 
   const tz = settings.timezone || 'Europe/Prague'
-  const now = new Date()
+  const now = promptNow()
   const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz })
 
   const prompt = `${systemContext}

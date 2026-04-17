@@ -27,6 +27,7 @@ const MODE: Mode = (() => {
 })()
 
 const FILE = process.env.AI_CASSETTE_FILE || '.cassettes/default.json'
+const META_KEY = '__meta__'
 
 let cache: Record<string, string> | null = null
 
@@ -49,6 +50,37 @@ function persist(): void {
   mkdirSync(dirname(FILE), { recursive: true })
   writeFileSync(FILE, JSON.stringify(cache, null, 2), 'utf-8')
 }
+
+/**
+ * Pin the wall clock for prompt builders so cassette keys stay stable.
+ * Record: capture now, persist into cassette. Replay: restore from cassette.
+ * Runs at module load so the env var is set before any prompt is built.
+ */
+;(function bootstrapFixedNow() {
+  if (MODE === 'off') return
+
+  if (MODE === 'replay') {
+    const meta = load()[META_KEY]
+    if (meta && !process.env.AI_CASSETTE_FIXED_NOW) {
+      try {
+        const parsed = JSON.parse(meta) as { fixedNow?: string }
+        if (parsed.fixedNow) {
+          process.env.AI_CASSETTE_FIXED_NOW = parsed.fixedNow
+          console.log(`[cassette] replay pinned to ${parsed.fixedNow}`)
+        }
+      } catch { /* ignore malformed meta */ }
+    }
+    return
+  }
+
+  if (!process.env.AI_CASSETTE_FIXED_NOW) {
+    process.env.AI_CASSETTE_FIXED_NOW = new Date().toISOString()
+  }
+  const store = load()
+  store[META_KEY] = JSON.stringify({ fixedNow: process.env.AI_CASSETTE_FIXED_NOW })
+  persist()
+  console.log(`[cassette] record pinned to ${process.env.AI_CASSETTE_FIXED_NOW}`)
+})()
 
 function keyFor(stage: string, prompt: string): string {
   return createHash('sha256').update(`${stage}\n${prompt}`).digest('hex')

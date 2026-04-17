@@ -1,6 +1,7 @@
 import type { ConversationSummary, ActionType, DealType, UserSettings } from '../supabase/types'
 import { runAITask } from './runner'
 import { getAISystemPrompt } from '@/config/client'
+import { promptNow } from './clock'
 
 /**
  * Enriched text JSON schema (output of enrichMessage).
@@ -135,7 +136,7 @@ export async function enrichMessage(
 
   const outputLanguage = settings?.ai_language || 'Czech'
   const tz = settings?.timezone || 'Europe/Prague'
-  const now = new Date()
+  const now = promptNow()
   const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz })
   const isoDate = now.toISOString().split('T')[0]
 
@@ -315,7 +316,7 @@ export async function extractMessageFacts(
 ): Promise<ExtractionResult> {
   console.log(`[AI:extractMessageFacts] Running stage 'triage_extract' for ${cpName}`)
 
-  const now = new Date()
+  const now = promptNow()
   const tz = settings.timezone || 'Europe/Prague'
   const isoDate = now.toLocaleDateString('sv-SE', { timeZone: tz })
   const tomorrowDate = new Date(now.getTime() + 86400000).toISOString().split('T')[0]
@@ -462,7 +463,7 @@ export async function triageConversation(
   console.log(`[AI:triageConversation] Running stage 'triage' for ${cpName}`)
 
   const systemContext = getAISystemPrompt(settings)
-  const now = new Date()
+  const now = promptNow()
   const tz = settings.timezone || 'Europe/Prague'
   const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz })
   const isoDate = now.toLocaleDateString('sv-SE', { timeZone: tz })
