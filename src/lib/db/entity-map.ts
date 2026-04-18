@@ -26,7 +26,7 @@ export async function upsertEntity(
         confidence,
         updated_at: now,
       } satisfies EntityMapEntryInsert,
-      { onConflict: 'deal_id,entity_type,entity_key' }
+      { onConflict: 'user_id,deal_id,entity_type,entity_key' }
     )
     .select()
     .single()
