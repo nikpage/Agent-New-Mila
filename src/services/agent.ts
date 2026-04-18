@@ -589,7 +589,7 @@ export async function runFlowA(userId: string): Promise<FlowAResult> {
     }
 
     // Steps 2/2.1/2.5: Ingest emails + calendar in parallel
-    const [inboundResult, outboundResult] = await Promise.allSettled([
+    const [inboundResult, outboundResult, calendarResult] = await Promise.allSettled([
       ingestEmailsForUser(userId),
       ingestOutboundEmails(userId),
       ingestCalendarEvents(userId),
@@ -604,6 +604,13 @@ export async function runFlowA(userId: string): Promise<FlowAResult> {
       result.emailsIngested += outboundResult.value
     } else {
       result.errors.push(`Outbound ingestion: ${outboundResult.reason instanceof Error ? outboundResult.reason.message : 'Unknown error'}`)
+    }
+    if (calendarResult.status === 'fulfilled') {
+      if (calendarResult.value.errors.length > 0) {
+        result.errors.push(...calendarResult.value.errors)
+      }
+    } else {
+      result.errors.push(`Calendar ingestion: ${calendarResult.reason instanceof Error ? calendarResult.reason.message : 'Unknown error'}`)
     }
 
     // Save Gmail historyId

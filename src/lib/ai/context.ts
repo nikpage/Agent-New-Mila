@@ -16,6 +16,7 @@ import { getTimelineForConversation } from '@/lib/db/timeline'
 import { getJournalEntriesForContext } from '@/lib/db/journal'
 import { getRecentMessages } from '@/lib/db/conversations'
 import { parseEnrichedText, type EnrichedMessageData } from './tasks'
+import { promptNow } from './clock'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ export async function buildMilaContext(
 export function formatTimelineForPrompt(entries: DealTimelineEntry[]): string {
   if (entries.length === 0) return '(no recent activity)'
 
-  const now = Date.now()
+  const now = promptNow().getTime()
   return entries.map(e => {
     const daysAgo = Math.max(0, Math.round((now - new Date(e.occurred_at).getTime()) / 86_400_000))
     const ago = daysAgo === 0 ? 'today' : daysAgo === 1 ? '1d ago' : `${daysAgo}d ago`

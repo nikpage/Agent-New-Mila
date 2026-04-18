@@ -22,6 +22,12 @@ type Mode = 'record' | 'replay' | 'off'
 
 const MODE: Mode = (() => {
   const m = process.env.AI_CASSETTE_MODE?.toLowerCase()
+  if (m === 'record' && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      `[cassette] AI_CASSETTE_MODE=record is not allowed in production — ` +
+      `refusing to record real API calls. Unset AI_CASSETTE_MODE or set it to 'replay'.`,
+    )
+  }
   if (m === 'record' || m === 'replay') return m
   return 'off'
 })()

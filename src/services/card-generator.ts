@@ -266,7 +266,7 @@ export async function generateCards(
           nodeId:              task.nodeId,
           dealId:              task.dealId,
           taskType:            task.taskType,
-          score:               task.score,
+          score:               task.score + (weight ?? 0),
           scoreBreakdown:      task.scoreBreakdown,
           cpId:                task.cpId,
           entityMapSnapshot:   task.entityMapSnapshot,
