@@ -11,7 +11,7 @@
  *
  * No pauses, no browser URLs, no Round 2. Cassette-safe (intercepts LLM later).
  *
- * Usage: npx tsx scripts/e2e-auto.ts [userId]
+ * Usage: npx tsx scripts/e2e-pipeline.ts [userId]
  */
 
 import { config } from 'dotenv'
@@ -102,7 +102,7 @@ async function injectHistoryThread(
 
   for (let i = 0; i < emails.length; i++) {
     const e = emails[i]
-    const rfcId = `<${RUN_ID}-hist-${label}-${i}@e2e-auto.local>`
+    const rfcId = `<${RUN_ID}-hist-${label}-${i}@e2e-pipeline.local>`
     msgIds.push(rfcId)
 
     const fromAddr = e.direction === 'outbound' ? me : e.from
@@ -140,7 +140,7 @@ async function injectHistoryThread(
 async function injectCurrentEmail(e: FixtureCurrentEmail): Promise<void> {
   const gmail = await gmailClient()
   const me = await userEmail()
-  const rfcId = `<${RUN_ID}-curr-${e.cpKey}@e2e-auto.local>`
+  const rfcId = `<${RUN_ID}-curr-${e.cpKey}@e2e-pipeline.local>`
   const rfc2822 = [
     `From: ${e.from}`,
     `To: ${me}`,
@@ -164,7 +164,7 @@ async function injectCurrentEmail(e: FixtureCurrentEmail): Promise<void> {
 async function injectSelfEmail(): Promise<void> {
   const gmail = await gmailClient()
   const me = await userEmail()
-  const rfcId = `<${RUN_ID}-self@e2e-auto.local>`
+  const rfcId = `<${RUN_ID}-self@e2e-pipeline.local>`
   const rfc2822 = [
     `From: ${me}`,
     `To: ${me}`,

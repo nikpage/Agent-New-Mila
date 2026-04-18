@@ -306,7 +306,12 @@ async function classifyInboundReply(
             enrichmentSignal = cls
           }
           const nearest = pickNearestProposedTime(enrichment?.proposedTimes, now)
-          hoursUntilDue = nearest.hours
+          // Only treat a proposed time as a user-action deadline when the enrichment
+          // flagged HARD DEADLINE. Otherwise a CP-mentioned time (e.g. their vacation
+          // departure) would falsely drive urgency up.
+          if (cls === 'HARD DEADLINE') {
+            hoursUntilDue = nearest.hours
+          }
           meetingContext = nearest.eventContext
         }
       }

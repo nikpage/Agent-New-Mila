@@ -2,7 +2,7 @@
  * E2E test fixtures — hand-authored Czech negotiation scenarios.
  *
  * Ground truth input data. Pure data exports, no logic.
- * Used by both e2e-test.ts (interactive) and e2e-auto.ts (headless).
+ * Used by both e2e-test.ts (interactive) and e2e-pipeline.ts (headless batch).
  *
  * Runner prepends [RUN_ID] to subjectSuffix at send time for uniqueness.
  */
