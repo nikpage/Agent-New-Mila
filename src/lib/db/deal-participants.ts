@@ -7,23 +7,45 @@ export async function addDealParticipant(
   role?: string
 ): Promise<DealParticipant> {
   const supabase = getSupabaseAdmin()
+
+  // idx_deal_participants_unique is PARTIAL (WHERE status = 'active') so
+  // supabase-js upsert cannot target it via onConflict. Do an explicit
+  // check-then-insert, with a 23505 fallback for the concurrent-insert race.
+  const matchExisting = () => {
+    let q = supabase
+      .from('deal_participants')
+      .select('*')
+      .eq('deal_id', dealId)
+      .eq('cp_id', cpId)
+      .eq('status', 'active')
+    q = role == null ? q.is('role', null) : q.eq('role', role)
+    return q.maybeSingle()
+  }
+
+  const { data: existing, error: selectErr } = await matchExisting()
+  if (selectErr) throw new Error(`Failed to check deal participant: ${selectErr.message}`)
+  if (existing) return existing
+
   const { data, error } = await supabase
     .from('deal_participants')
-    .upsert(
-      {
-        deal_id: dealId,
-        cp_id: cpId,
-        role: role ?? null,
-        status: 'active',
-        added_at: new Date().toISOString(),
-      } satisfies DealParticipantInsert,
-      { onConflict: 'deal_id,cp_id,role' }
-    )
+    .insert({
+      deal_id: dealId,
+      cp_id: cpId,
+      role: role ?? null,
+      status: 'active',
+      added_at: new Date().toISOString(),
+    } satisfies DealParticipantInsert)
     .select()
     .single()
 
-  if (error) throw new Error(`Failed to add deal participant: ${error.message}`)
-  return data
+  if (!error) return data
+
+  if (error.code === '23505') {
+    const { data: raced, error: racedErr } = await matchExisting()
+    if (racedErr) throw new Error(`Failed to re-select after conflict: ${racedErr.message}`)
+    if (raced) return raced
+  }
+  throw new Error(`Failed to add deal participant: ${error.message}`)
 }
 
 export async function getParticipantsForDeal(dealId: string): Promise<DealParticipant[]> {
