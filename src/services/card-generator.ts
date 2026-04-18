@@ -145,15 +145,19 @@ function buildCardPrompt(
         ? `Hours until due: ${task.hoursUntilDue.toFixed(1)}`
         : 'No deadline set'
 
-  const cpMessageBlock = task.taskType === 'inbound_reply' && task.latestInboundText
+  const cpMessageBlock = task.latestInboundText
     ? `
 
-CP's latest inbound message (what you are replying to):
+CP's latest inbound message (GROUND TRUTH — what the CP actually wrote):
 """
 ${task.latestInboundText.slice(0, 2000)}
 """
 
-REPLY grounding rules (MUST follow for inbound_reply):
+Grounding rules (apply to ALL card types):
+- Read the CP's message literally. Your intent_cs and rationale_cs MUST reflect what the CP actually said — name the concrete topic (signing at notary, price counter-offer, document review, viewing), never a generic phrase like "initial meeting" / "úvodní schůzka" / "follow up" when the message is specific.
+- If the CP names a time or date ("zítra 9:00", "v pondělí 14:00", "1. května 10:00"), resolve it to an absolute ISO 8601 timestamp in Europe/Prague timezone (UTC+2 in CEST summer, UTC+1 in CET winter).
+
+If card_type = REPLY, additionally:
 - Identify the questions the CP literally asked in the message above.
 - For each question, attempt to answer from the entity map facts.
 - Questions you CAN answer from entity map → include the answer directly in draft_skeleton, NO placeholder.
@@ -164,7 +168,12 @@ REPLY grounding rules (MUST follow for inbound_reply):
 - NEVER invent questions the CP did not ask.
 - NEVER add verification/confirmation questions ("Confirmed X?", "Did you send Y?").
 - NEVER restate the CP's own deadlines as questions back to them.
-- If the CP asked no questions, "placeholders" MUST be [] and draft_skeleton is a plain acknowledgment/next-step.`
+- If the CP asked no questions, "placeholders" MUST be [] and draft_skeleton is a plain acknowledgment/next-step.
+
+If card_type = SCHEDULE, additionally:
+- Extract the meeting/signing/viewing time named in the CP's message.
+- Return "suggested_time_iso" as an ISO 8601 datetime reflecting that time (e.g. "2026-04-19T07:00:00Z" for 09:00 Prague CEST), or null if not inferable.
+- Return "suggested_location" as the venue named in the CP's message, or null.`
     : ''
 
   return `You are generating an action card for a real estate agent's deal management system.
@@ -193,6 +202,8 @@ Return a JSON object with these fields:
 - "draft_skeleton": if card_type is REPLY, a brief message skeleton (2-3 sentences, use {{ placeholder }} for unknowns). Otherwise null.
 - "placeholders": array of strings naming each {{ placeholder }} used (empty array if none)
 - "weight": integer 1-10 estimating how hard it would be to reschedule this action (1=trivial, 10=very hard to move). For meetings with external parties or deadlines, use 6-8. For internal tasks, use 2-4. For court dates or notary appointments, use 10.
+- "suggested_time_iso": SCHEDULE only — ISO 8601 datetime extracted from the CP's message (e.g. "2026-04-19T07:00:00Z"), or null if no time is named or inferable.
+- "suggested_location": SCHEDULE only — venue/address named in the CP's message, or null.
 
 ${task.meetingContext ? `CP's latest message references an upcoming ${task.meetingContext}${task.hoursUntilDue !== null ? ` (in ${task.hoursUntilDue.toFixed(1)} hours)` : ''}. If this is a concrete meeting to attend or confirm, card_type MUST be SCHEDULE, not REPLY.\n\n` : ''}Rules:
 - Write ALL text in ${language}
@@ -266,6 +277,8 @@ export async function generateCards(
           draft_skeleton?: string | null
           placeholders?: string[]
           weight?: number
+          suggested_time_iso?: string | null
+          suggested_location?: string | null
         }
         try {
           // Take first JSON block — Gemini sometimes wraps in markdown fences
@@ -286,9 +299,19 @@ export async function generateCards(
         // Skip if this specific deal+type already has a pending action
         if (existingDealTypes?.has(`${task.dealId}:${cardType}`)) return null
 
-        // Extract venue/time from entity map for SCHEDULE cards
-        const meetingVenue = extractVenueFromEntityMap(task.entityMapSnapshot)
-        const proposedTime = extractTimeFromEntityMap(task.entityMapSnapshot)
+        // Extract venue/time for SCHEDULE cards: prefer LLM extraction from the CP's
+        // latest message (grounded in the actual email), fall back to entity map regex.
+        const llmTimeIso = typeof parsed.suggested_time_iso === 'string'
+          ? parsed.suggested_time_iso
+          : null
+        const llmTimeValid = llmTimeIso && !isNaN(new Date(llmTimeIso).getTime())
+          ? llmTimeIso
+          : null
+        const llmLocation = typeof parsed.suggested_location === 'string' && parsed.suggested_location.trim()
+          ? parsed.suggested_location.trim()
+          : null
+        const meetingVenue = llmLocation ?? extractVenueFromEntityMap(task.entityMapSnapshot)
+        const proposedTime = llmTimeValid ?? extractTimeFromEntityMap(task.entityMapSnapshot)
 
         const weight = typeof parsed.weight === 'number'
           ? Math.min(10, Math.max(1, Math.round(parsed.weight)))

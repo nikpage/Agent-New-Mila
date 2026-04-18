@@ -41,9 +41,11 @@ const BASE_URL =
   process.env.APP_BASE_URL ||
   'http://localhost:3000'
 const API_KEY = process.env.MILA_USER_API_KEY || ''
+const CRON_SECRET = process.env.CRON_SECRET || ''
 const RUN_ID = `E2E-REALITY-${Date.now()}`
 
 if (!API_KEY) { console.error('MILA_USER_API_KEY not set'); process.exit(1) }
+if (!CRON_SECRET) { console.error('CRON_SECRET not set'); process.exit(1) }
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
   console.error('SUPABASE_URL / SUPABASE_SERVICE_KEY not set'); process.exit(1)
 }
@@ -499,6 +501,15 @@ async function main() {
       }
     }
   }
+
+  console.log('\n─── Phase 2: Trigger morning brief ─────────────────────')
+  const briefRes = await fetch(`${BASE_URL}/api/cron/morning-brief?userId=${USER_ID}`, {
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${CRON_SECRET}` },
+  })
+  const briefBody = await briefRes.text()
+  console.log(`  brief status=${briefRes.status}`)
+  console.log(`  brief body=${briefBody.slice(0, 500)}`)
 
   console.log('\n═══════════════════════════════════════════════════════')
   console.log('  REALITY BUG SUMMARY')
