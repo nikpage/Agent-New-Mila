@@ -217,7 +217,7 @@ async function syncGoogleEventToLocal(
         cp_id: cpId,
         description: `Nastavit váhu pro: "${gcalEvent.summary}" (${dateStr})`,
         status: 'pending',
-        due_date: gcalEvent.startTime.toISOString().split('T')[0],
+        due_date: gcalEvent.startTime.toLocaleDateString('sv-SE', { timeZone: 'Europe/Prague' }),
       })
     } catch (error) {
       console.error(`Failed to create weight-setting todo for event ${gcalEvent.id}:`, error)

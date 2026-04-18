@@ -129,7 +129,7 @@ function buildCardPrompt(
     : '  (no beliefs recorded yet)'
 
   const deadline = task.deadline
-    ? `Deadline: ${new Date(task.deadline).toISOString().slice(0, 16)}`
+    ? `Deadline: ${new Date(task.deadline).toLocaleString('sv-SE', { timeZone: 'Europe/Prague' }).slice(0, 16)}`
     : task.slack !== null
       ? `Slack: ${task.slack.toFixed(1)} hours until deadline`
       : task.hoursUntilDue !== null

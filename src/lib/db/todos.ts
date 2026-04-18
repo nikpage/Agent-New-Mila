@@ -43,7 +43,7 @@ export async function getTodosForUser(
 
   // By default, only show todos with future or null due dates
   if (!options?.includePast) {
-    const today = new Date().toISOString().split('T')[0]
+    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Prague' })
     query = query.or(`due_date.gte.${today},due_date.is.null`)
   }
 
@@ -166,7 +166,7 @@ export async function getTodosForThread(threadId: string): Promise<Todo[]> {
  */
 export async function getOverdueTodos(userId: string): Promise<Todo[]> {
   const supabase = getSupabaseAdmin()
-  const today = new Date().toISOString().split('T')[0]
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Prague' })
 
   const { data, error } = await supabase
     .from('todos')
@@ -188,7 +188,7 @@ export async function getOverdueTodos(userId: string): Promise<Todo[]> {
  */
 export async function getTodosDueToday(userId: string): Promise<Todo[]> {
   const supabase = getSupabaseAdmin()
-  const today = new Date().toISOString().split('T')[0]
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Prague' })
 
   const { data, error } = await supabase
     .from('todos')

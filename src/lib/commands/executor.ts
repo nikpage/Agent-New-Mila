@@ -154,7 +154,7 @@ function buildTodoParsePrompt(body: string): string {
 Text:
 ${body}
 
-Today's date: ${new Date().toISOString().split('T')[0]}
+Today's date: ${new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Prague' })}
 
 Return JSON:
 {

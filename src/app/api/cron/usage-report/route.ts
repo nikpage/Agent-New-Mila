@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
     const periodStart = new Date(periodEnd)
     periodStart.setUTCDate(periodStart.getUTCDate() - 1)
 
-    const periodLabel = periodStart.toISOString().slice(0, 10)
+    const periodLabel = periodStart.toLocaleDateString('sv-SE', { timeZone: 'Europe/Prague' })
 
     // Fetch period usage + cumulative
     const [periodUsage, cumulativeUsage] = await Promise.all([
