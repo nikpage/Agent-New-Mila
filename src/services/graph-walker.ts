@@ -16,6 +16,8 @@ import { getCurrentBeliefs } from '@/lib/db/journal'
 import { getParticipantsForDeal } from '@/lib/db/deal-participants'
 import { getLatestInboundFromCP } from '@/lib/db/timeline'
 import { hasPendingActionForCP } from '@/lib/db/actions'
+import { getMessageById } from '@/lib/db/messages'
+import { parseEnrichedText } from '@/lib/ai/tasks'
 import type { UserSettings, Deal, DealGraphNode, DealGraphEdge } from '@/lib/supabase/types'
 
 // ─── Output types ─────────────────────────────────────────────────────────────
@@ -48,6 +50,10 @@ export interface WalkerTask {
   entityMapSnapshot: Record<string, string>
   /** Current deal beliefs — latest content per topic */
   beliefSnapshot: string[]
+  /** CP's latest inbound message text — only set for 'inbound_reply' */
+  latestInboundText?: string
+  /** Urgency signal parsed from message enrichment — only set for 'inbound_reply' */
+  enrichmentSignal?: 'HARD DEADLINE' | 'SOFT REFERENCE' | null
 }
 
 export interface GraphWalkerOutput {
@@ -264,6 +270,7 @@ async function classifyInboundReply(
 
     let bestCpId: string | null = null
     let bestTs = 0
+    let bestMessageId: string | null = null
     for (const p of participants) {
       const latest = await getLatestInboundFromCP(deal.user_id, p.cp_id)
       if (!latest?.occurred_at) continue
@@ -271,6 +278,7 @@ async function classifyInboundReply(
       if (ts > bestTs) {
         bestTs = ts
         bestCpId = p.cp_id
+        bestMessageId = latest.message_id
       }
     }
     if (!bestCpId || bestTs === 0) return null
@@ -279,6 +287,23 @@ async function classifyInboundReply(
     if (daysSince > INBOUND_REPLY_FRESHNESS_DAYS) return null
 
     if (await hasPendingActionForCP(deal.user_id, bestCpId)) return null
+
+    // Pull message text + enrichment signal for downstream urgency + drafting
+    let latestInboundText: string | undefined
+    let enrichmentSignal: 'HARD DEADLINE' | 'SOFT REFERENCE' | null = null
+    if (bestMessageId) {
+      const msg = await getMessageById(bestMessageId)
+      if (msg) {
+        latestInboundText = msg.cleaned_text || msg.raw_text || undefined
+        if (msg.enriched_text) {
+          const enrichment = parseEnrichedText(msg.enriched_text)
+          const cls = enrichment?.urgency?.classification
+          if (cls === 'HARD DEADLINE' || cls === 'SOFT REFERENCE') {
+            enrichmentSignal = cls
+          }
+        }
+      }
+    }
 
     return {
       nodeId: `deal:${deal.id}:reply`,
@@ -291,6 +316,8 @@ async function classifyInboundReply(
       cpId: bestCpId,
       entityMapSnapshot,
       beliefSnapshot,
+      latestInboundText,
+      enrichmentSignal,
     }
   } catch (err) {
     console.warn(`[GraphWalker] inbound_reply classify failed for deal ${deal.id}:`, err)

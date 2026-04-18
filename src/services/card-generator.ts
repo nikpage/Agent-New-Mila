@@ -64,12 +64,14 @@ export function deriveCardType(taskType: WalkerTaskType): 'REPLY' | 'SCHEDULE' |
 
 // ─── Urgency mapping (mirrors scoring-engine) ─────────────────────────────────
 
-function deriveUrgency(taskType: WalkerTaskType, hoursUntilDue: number | null): number {
-  switch (taskType) {
+function deriveUrgency(task: ScoredTask, hoursUntilDue: number | null): number {
+  switch (task.taskType) {
     case 'overdue':          return 10
     case 'due_soon':
       return (hoursUntilDue !== null && hoursUntilDue < 4) ? 9 : 8
-    case 'inbound_reply':    return 8
+    case 'inbound_reply':
+      // Base 8. HARD DEADLINE bumps to 9. SOFT REFERENCE stays 8.
+      return task.enrichmentSignal === 'HARD DEADLINE' ? 9 : 8
     case 'blocking':         return 7
     case 'lead_dead':        return 7
     case 'calendar_conflict': return 6
@@ -200,7 +202,7 @@ export async function generateCards(
   const results = await Promise.allSettled(
     scoredTasks.map(async (task): Promise<ActionCard | null> => {
       const fallbackCardType = deriveCardType(task.taskType)
-      const urgency = deriveUrgency(task.taskType, task.hoursUntilDue)
+      const urgency = deriveUrgency(task, task.hoursUntilDue)
 
       // Skip LLM if a pending action already exists for this deal+type.
       // insertCardsAsActions would discard it anyway — no point generating text.
