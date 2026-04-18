@@ -42,7 +42,15 @@ function deriveUrgency(task: WalkerTask): number {
     case 'blocking':         return 7
     case 'lead_dead':        return 7
     case 'lead_cold':        return 5
-    case 'inbound_reply':    return 8
+    case 'inbound_reply':
+      if (task.hoursUntilDue !== null) {
+        if (task.hoursUntilDue < 4) return 10
+        if (task.hoursUntilDue < 24) return 9
+        if (task.hoursUntilDue < 48) return 8
+        if (task.hoursUntilDue < 72) return 7
+        return task.enrichmentSignal === 'HARD DEADLINE' ? 7 : 6
+      }
+      return task.enrichmentSignal === 'HARD DEADLINE' ? 8 : 7
     case 'lead_cooling':     return 3
     case 'has_slack':        return 2
     case 'calendar_conflict': return 6

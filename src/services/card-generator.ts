@@ -70,8 +70,15 @@ function deriveUrgency(task: ScoredTask, hoursUntilDue: number | null): number {
     case 'due_soon':
       return (hoursUntilDue !== null && hoursUntilDue < 4) ? 9 : 8
     case 'inbound_reply':
-      // Base 8. HARD DEADLINE bumps to 9. SOFT REFERENCE stays 8.
-      return task.enrichmentSignal === 'HARD DEADLINE' ? 9 : 8
+      // Use concrete time-to-meeting if enrichment gave us one; else fall back to signal.
+      if (hoursUntilDue !== null) {
+        if (hoursUntilDue < 4) return 10
+        if (hoursUntilDue < 24) return 9
+        if (hoursUntilDue < 48) return 8
+        if (hoursUntilDue < 72) return 7
+        return task.enrichmentSignal === 'HARD DEADLINE' ? 7 : 6
+      }
+      return task.enrichmentSignal === 'HARD DEADLINE' ? 8 : 7
     case 'blocking':         return 7
     case 'lead_dead':        return 7
     case 'calendar_conflict': return 6
@@ -150,7 +157,10 @@ REPLY grounding rules (MUST follow for inbound_reply):
 - Identify the questions the CP literally asked in the message above.
 - For each question, attempt to answer from the entity map facts.
 - Questions you CAN answer from entity map → include the answer directly in draft_skeleton, NO placeholder.
-- Questions you CANNOT answer from entity map → add to "placeholders" and use {{ placeholder }} in draft_skeleton.
+- Questions you CANNOT answer from entity map → add a SHORT fact LABEL (1–3 words, lowercase_snake_case) to "placeholders" and reference it as {{ placeholder }} in draft_skeleton. Label names the MISSING FACT, never a question or sentence.
+  - Good: {{ delivery_date }}, {{ document_status }}, {{ final_price }}
+  - Bad: {{ status_dokumentů_a_očekávaný_čas_dodání }} (that's the CP's question, not a fact label)
+  - Bad: {{ do_you_want_to_proceed }} (that's a question to the user, not a missing fact)
 - NEVER invent questions the CP did not ask.
 - NEVER add verification/confirmation questions ("Confirmed X?", "Did you send Y?").
 - NEVER restate the CP's own deadlines as questions back to them.
@@ -184,12 +194,13 @@ Return a JSON object with these fields:
 - "placeholders": array of strings naming each {{ placeholder }} used (empty array if none)
 - "weight": integer 1-10 estimating how hard it would be to reschedule this action (1=trivial, 10=very hard to move). For meetings with external parties or deadlines, use 6-8. For internal tasks, use 2-4. For court dates or notary appointments, use 10.
 
-Rules:
+${task.meetingContext ? `CP's latest message references an upcoming ${task.meetingContext}${task.hoursUntilDue !== null ? ` (in ${task.hoursUntilDue.toFixed(1)} hours)` : ''}. If this is a concrete meeting to attend or confirm, card_type MUST be SCHEDULE, not REPLY.\n\n` : ''}Rules:
 - Write ALL text in ${language}
 - For intent_cs: use action verbs, be direct (e.g. "Zavolat Novákovi ohledně ceny" not "Je nutné zvážit možnost...")
-- If entity map contains meeting_venue or address AND a deadline/time, card_type should be SCHEDULE
-- If beliefs mention a counterparty request or question, card_type should be REPLY
+- card_type priority: SCHEDULE beats REPLY when the CP's message names a specific meeting/signing/viewing/notary appointment with a time — the next action is to confirm/attend the meeting, not to write prose back.
+- If entity map contains meeting_venue or address AND a specific time, card_type should be SCHEDULE
 - If the graph node is about viewings/meetings/showings AND venue/time data exists, card_type should be SCHEDULE
+- REPLY only when there is no concrete meeting to confirm — CP asked a question, made a request, or needs information.
 - Add {{ placeholder }} only when the specific detail is MISSING from entity map
 - Keep intent_cs under 20 words
 

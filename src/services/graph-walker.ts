@@ -54,6 +54,8 @@ export interface WalkerTask {
   latestInboundText?: string
   /** Urgency signal parsed from message enrichment — only set for 'inbound_reply' */
   enrichmentSignal?: 'HARD DEADLINE' | 'SOFT REFERENCE' | null
+  /** Event context from nearest proposed time — "signing" | "viewing" | "notary" | ... — only set for 'inbound_reply' */
+  meetingContext?: string | null
 }
 
 export interface GraphWalkerOutput {
@@ -291,6 +293,8 @@ async function classifyInboundReply(
     // Pull message text + enrichment signal for downstream urgency + drafting
     let latestInboundText: string | undefined
     let enrichmentSignal: 'HARD DEADLINE' | 'SOFT REFERENCE' | null = null
+    let hoursUntilDue: number | null = null
+    let meetingContext: string | null = null
     if (bestMessageId) {
       const msg = await getMessageById(bestMessageId)
       if (msg) {
@@ -301,6 +305,9 @@ async function classifyInboundReply(
           if (cls === 'HARD DEADLINE' || cls === 'SOFT REFERENCE') {
             enrichmentSignal = cls
           }
+          const nearest = pickNearestProposedTime(enrichment?.proposedTimes, now)
+          hoursUntilDue = nearest.hours
+          meetingContext = nearest.eventContext
         }
       }
     }
@@ -311,17 +318,48 @@ async function classifyInboundReply(
       taskType: 'inbound_reply',
       nodeLabel: null,
       deadline: null,
-      hoursUntilDue: null,
+      hoursUntilDue,
       slack: null,
       cpId: bestCpId,
       entityMapSnapshot,
       beliefSnapshot,
       latestInboundText,
       enrichmentSignal,
+      meetingContext,
     }
   } catch (err) {
     console.warn(`[GraphWalker] inbound_reply classify failed for deal ${deal.id}:`, err)
     return null
+  }
+}
+
+/**
+ * Pick the nearest upcoming proposed time from enrichment. Returns hours until it,
+ * plus its eventContext (signing/viewing/notary/...). Past times (>2h old) are skipped.
+ * Timezone note: naive Date parse — can be off by Prague offset, acceptable for urgency bucketing.
+ */
+function pickNearestProposedTime(
+  proposedTimes: Array<{ specificDate?: string; timeOfDay?: string; eventContext?: string }> | undefined,
+  now: Date,
+): { hours: number | null; eventContext: string | null } {
+  if (!proposedTimes?.length) return { hours: null, eventContext: null }
+  let bestHours: number | null = null
+  let bestContext: string | null = null
+  for (const t of proposedTimes) {
+    if (!t.specificDate) continue
+    const time = t.timeOfDay || '12:00'
+    const d = new Date(`${t.specificDate}T${time}:00`)
+    if (isNaN(d.getTime())) continue
+    const hrs = (d.getTime() - now.getTime()) / (1000 * 60 * 60)
+    if (hrs < -2) continue
+    if (bestHours === null || hrs < bestHours) {
+      bestHours = hrs
+      bestContext = t.eventContext || null
+    }
+  }
+  return {
+    hours: bestHours !== null ? Math.round(bestHours * 10) / 10 : null,
+    eventContext: bestContext,
   }
 }
 
