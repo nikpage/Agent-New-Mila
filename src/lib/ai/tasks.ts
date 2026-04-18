@@ -138,7 +138,7 @@ export async function enrichMessage(
   const tz = settings?.timezone || 'Europe/Prague'
   const now = promptNow()
   const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: tz })
-  const isoDate = now.toISOString().split('T')[0]
+  const isoDate = now.toLocaleDateString('sv-SE', { timeZone: tz })
 
   const prompt = `${businessContext}TODAY'S DATE: ${todayStr} (${isoDate}). Extract relative date references as-is — do NOT compute absolute dates. Just classify what kind of reference it is.
 
@@ -217,7 +217,7 @@ export async function analyzeConversation(
 ): Promise<ConversationSummary> {
   console.log(`[AI:analyzeConversation] Running stage 'analysis'`)
   const messageText = messages
-    .map(m => `[${m.direction}] ${m.date.toISOString().split('T')[0]}: ${m.text}`)
+    .map(m => `[${m.direction}] ${m.date.toLocaleDateString('sv-SE', { timeZone: settings?.timezone || 'Europe/Prague' })}: ${m.text}`)
     .join('\n\n')
 
   const businessContext = settings
@@ -298,7 +298,6 @@ export interface ExtractionResult {
   confirmed_venue_freetext: string | null
   confirmed_time_index: number | null
   confirmed_time_freetext: string | null
-  questions_for_user: string[]
   cp_commitments: string[]
 }
 
@@ -319,8 +318,8 @@ export async function extractMessageFacts(
   const now = promptNow()
   const tz = settings.timezone || 'Europe/Prague'
   const isoDate = now.toLocaleDateString('sv-SE', { timeZone: tz })
-  const tomorrowDate = new Date(now.getTime() + 86400000).toISOString().split('T')[0]
-  const nextWeekDate = new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0]
+  const tomorrowDate = new Date(now.getTime() + 86400000).toLocaleDateString('sv-SE', { timeZone: tz })
+  const nextWeekDate = new Date(now.getTime() + 7 * 86400000).toLocaleDateString('sv-SE', { timeZone: tz })
   const lang = settings.ai_language || 'Czech'
 
   // Build enrichment reference block
@@ -360,8 +359,7 @@ EXTRACT:
 3. DEADLINES: Any deadline mentioned with a date and/or consequence. Quote the exact phrase. Mark as hard (explicit consequence stated) or soft (just a date reference).
 4. VENUE: Which address index from the ADDRESSES list (if any) is where people will physically MEET? Only pick an address if the meeting is literally AT that location (e.g. a viewing at a property, signing at an office). Write free text only if venue is mentioned but not in the list. null if no meeting venue mentioned.
 5. TIME: Which time index from the PROPOSED TIMES list (if any) is the relevant meeting/appointment time? If the time is not in the list, resolve it to ISO datetime (YYYY-MM-DDTHH:MM:SS). null if no time proposed.
-6. QUESTIONS FOR USER: Questions the CP asked that require the user's personal knowledge to answer (e.g. "Is financing ready?", "Can you confirm the date?"). Copy exactly from the message. Do NOT rephrase or invent new questions.
-7. CP COMMITMENTS: Things the CP said THEY will do (e.g. "I'll send the contract Monday").
+6. CP COMMITMENTS: Things the CP said THEY will do (e.g. "I'll send the contract Monday").
 
 Respond with ONLY valid JSON:
 {
@@ -372,11 +370,10 @@ Respond with ONLY valid JSON:
   "confirmed_venue_freetext": "string" | null,
   "confirmed_time_index": 0 | null,
   "confirmed_time_freetext": "ISO datetime" | null,
-  "questions_for_user": ["exact question from message"],
   "cp_commitments": ["string"]
 }
 
-CRITICAL: All text output (what_cp_said, what_cp_asks_for, deadlines, questions_for_user, cp_commitments) must be in ${lang}.`
+CRITICAL: All text output (what_cp_said, what_cp_asks_for, deadlines, cp_commitments) must be in ${lang}.`
 
   const raw = await runAITask('triage_extract', prompt)
   const jsonMatch = raw.match(/\{[\s\S]*\}/)
@@ -390,7 +387,6 @@ CRITICAL: All text output (what_cp_said, what_cp_asks_for, deadlines, questions_
       confirmed_venue_freetext: null,
       confirmed_time_index: null,
       confirmed_time_freetext: null,
-      questions_for_user: [],
       cp_commitments: [],
     }
   }
@@ -409,7 +405,6 @@ CRITICAL: All text output (what_cp_said, what_cp_asks_for, deadlines, questions_
     confirmed_venue_freetext: typeof parsed.confirmed_venue_freetext === 'string' ? parsed.confirmed_venue_freetext : null,
     confirmed_time_index: typeof parsed.confirmed_time_index === 'number' ? parsed.confirmed_time_index : null,
     confirmed_time_freetext: typeof parsed.confirmed_time_freetext === 'string' ? parsed.confirmed_time_freetext : null,
-    questions_for_user: Array.isArray(parsed.questions_for_user) ? parsed.questions_for_user.filter((s: unknown) => typeof s === 'string') : [],
     cp_commitments: Array.isArray(parsed.cp_commitments) ? parsed.cp_commitments.filter((s: unknown) => typeof s === 'string') : [],
   }
 }
@@ -468,8 +463,8 @@ export async function triageConversation(
   const todayStr = now.toLocaleDateString('cs-CZ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: tz })
   const isoDate = now.toLocaleDateString('sv-SE', { timeZone: tz })
   const timeStr = now.toLocaleTimeString('cs-CZ', { hour: '2-digit', minute: '2-digit', timeZone: tz })
-  const tomorrowDate = new Date(now.getTime() + 86400000).toISOString().split('T')[0]
-  const nextWeekDate = new Date(now.getTime() + 7 * 86400000).toISOString().split('T')[0]
+  const tomorrowDate = new Date(now.getTime() + 86400000).toLocaleDateString('sv-SE', { timeZone: tz })
+  const nextWeekDate = new Date(now.getTime() + 7 * 86400000).toLocaleDateString('sv-SE', { timeZone: tz })
 
   const lang = settings.ai_language || 'Czech'
   const channelNote = channel === 'whatsapp'
@@ -592,7 +587,7 @@ RULES:
   SOON = No same-day demand. Deadline is weeks or months away.
   NONE = No time pressure at all.
   NOTE: A "HARD DEADLINE" label in the urgency signal means the deadline itself is firm — it does NOT mean the user must reply immediately. Judge CRITICAL only by explicit same-day CP demands.
-- missing_info: ONLY questions the CP explicitly asked in their message that the user must answer personally. Copy the question verbatim from the CP's text. If the CP asked no questions, return []. NEVER invent questions based on the deal situation or what you think is missing.
+- missing_info: ONLY decisions the user must make that Mila cannot infer from deal state (price choice, yes/no business decision, preference between options). NEVER copy or paraphrase the CP's words into a question. NEVER ask the user to confirm whether they did something ("Odeslali jste X?", "Potvrzujete Y?") — Mila is not a homework checker. NEVER restate CP deadlines as questions. Empty array [] is the correct answer when Mila has enough context to draft. Good: "Za kolik chcete nabídnout?" Bad: "Potvrzujete financování?"
 
 Respond with ONLY valid JSON:
 {
@@ -615,7 +610,7 @@ Respond with ONLY valid JSON:
     "deal_type": "sale" | "purchase" | "rental" | "lease" | "consultation" | "other" | null,
     "weight": 1-10,
     "immovable": false,
-    "missing_info": [{"label": "Full question in ${lang}", "value": null}]
+    "missing_info": [{"label": "Decision/preference Mila needs from user in ${lang}", "value": null}]
   }
 }
 
@@ -675,7 +670,7 @@ function coerceTriageAction(raw: Record<string, unknown>): TriageAction {
     urgency_category,
     urgency_justification: typeof raw.urgency_justification === 'string' ? raw.urgency_justification : '',
     what_cp_wants: typeof raw.what_cp_wants === 'string' ? raw.what_cp_wants : '',
-    // venue/time/missing_info: defaults here, overridden by extraction merge in planning.ts
+    // venue/time defaults: extraction may override in planning.ts. missing_info is triage-only.
     venue_index: typeof raw.venue_index === 'number' ? raw.venue_index : null,
     meeting_venue: typeof raw.meeting_venue === 'string' ? raw.meeting_venue : null,
     time_index: typeof raw.time_index === 'number' ? raw.time_index : null,

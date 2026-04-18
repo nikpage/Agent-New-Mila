@@ -16,6 +16,17 @@ Answer questions from what's already in context FIRST. Do NOT launch agents or r
 
 - NEVER modify expected values in pinning tests (files: `actions.test.ts`, `lead-tracking.test.ts`, `threading.test.ts`, `defaults.test.ts`, `action-card-disable.test.ts`, `instant-notify-grouping.test.ts`, `draft-payload.test.ts`, `address-inference.test.ts`). If a pinning test fails, REPORT the failure and WAIT. Do not update the test to match new output
 
+## Bug tracking (standard step)
+
+Every bug found gets a GitHub issue — `file:line`, symptom, verification state. No exceptions.
+
+- Flagged by audit → open issue before proposing a fix.
+- Fix landed → close the issue with the commit/PR reference.
+- False positive after reading the code → close as invalid with the reason.
+- At start of any bug-hunting session, list open issues first (`gh issue list`). Do not re-flag what is already tracked.
+
+This applies to subagent reports too: a subagent finding does not become a fix until an issue exists and the code was read directly.
+
 ## Base URLs & Testing
 - **Local**: `http://localhost:3000`
 - **Prod**: `https://mila.specialagents.pro/`

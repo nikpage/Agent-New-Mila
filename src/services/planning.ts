@@ -214,10 +214,6 @@ export async function generateActionProposal(
         triageResult.action.proposed_time = extraction.confirmed_time_freetext
         triageResult.action.time_index = null
       }
-      // Merge CP questions into missing_info if triage didn't capture them
-      if (extraction.questions_for_user.length > 0 && triageResult.action.missing_info.length === 0) {
-        triageResult.action.missing_info = extraction.questions_for_user.map(q => ({ label: q, value: null }))
-      }
       // what_cp_said is extraction's summary of CP intent — use as what_cp_wants fallback
       if (!triageResult.action.what_cp_wants && extraction.what_cp_said) {
         triageResult.action.what_cp_wants = extraction.what_cp_said
@@ -328,6 +324,7 @@ export async function generateActionProposal(
 
     // Build cp_availability string from enrichment proposedTimes
     // The scheduler's filterSlotsByCpAvailability parses day names, morning/afternoon, and "at HH:MM"
+    const tz = settings.timezone || 'Europe/Prague'
     let cpAvailabilityText: string | null = null
     if (enrichment?.proposedTimes?.length) {
       const parts: string[] = []
@@ -335,12 +332,10 @@ export async function generateActionProposal(
         const pieces: string[] = []
         if (t.dayOfWeek) pieces.push(t.dayOfWeek)
         else if (t.relativeRef === 'tomorrow') {
-          const d = new Date(); d.setDate(d.getDate() + 1)
-          const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
-          pieces.push(dayNames[d.getDay()])
+          const d = new Date(Date.now() + 86400000)
+          pieces.push(d.toLocaleDateString('en-US', { weekday: 'long', timeZone: tz }).toLowerCase())
         } else if (t.relativeRef === 'today') {
-          const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
-          pieces.push(dayNames[new Date().getDay()])
+          pieces.push(new Date().toLocaleDateString('en-US', { weekday: 'long', timeZone: tz }).toLowerCase())
         }
         if (t.timeOfDay) {
           pieces.push(`at ${t.timeOfDay}`)
@@ -465,19 +460,20 @@ export async function generateActionProposal(
 
           // Resolve relative date references when specificDate is missing
           if (!date && resolvedProposedTime.relativeRef) {
-            const today = new Date()
+            const nowMs = Date.now()
             const ref = resolvedProposedTime.relativeRef.toLowerCase()
             if (ref === 'today') {
-              date = today.toISOString().slice(0, 10)
+              date = new Date(nowMs).toLocaleDateString('sv-SE', { timeZone: tz })
             } else if (ref === 'tomorrow') {
-              const d = new Date(today); d.setDate(d.getDate() + 1)
-              date = d.toISOString().slice(0, 10)
+              date = new Date(nowMs + 86400000).toLocaleDateString('sv-SE', { timeZone: tz })
             } else if (ref === 'day_after_tomorrow') {
-              const d = new Date(today); d.setDate(d.getDate() + 2)
-              date = d.toISOString().slice(0, 10)
+              date = new Date(nowMs + 2 * 86400000).toLocaleDateString('sv-SE', { timeZone: tz })
             } else if (ref === 'next_week') {
-              const d = new Date(today); d.setDate(d.getDate() + (8 - d.getDay()) % 7 || 7)
-              date = d.toISOString().slice(0, 10)
+              const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+              const todayDayName = new Date(nowMs).toLocaleDateString('en-US', { weekday: 'long', timeZone: tz }).toLowerCase()
+              const todayDow = dayNames.indexOf(todayDayName)
+              const daysToNextMon = (8 - todayDow) % 7 || 7
+              date = new Date(nowMs + daysToNextMon * 86400000).toLocaleDateString('sv-SE', { timeZone: tz })
             }
           }
 
@@ -489,11 +485,13 @@ export async function generateActionProposal(
             }
             const target = dayMap[resolvedProposedTime.dayOfWeek.toLowerCase()]
             if (target !== undefined) {
-              const today = new Date()
-              let diff = target - today.getDay()
+              const nowMs = Date.now()
+              const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday']
+              const todayDayName = new Date(nowMs).toLocaleDateString('en-US', { weekday: 'long', timeZone: tz }).toLowerCase()
+              const todayDow = dayNames.indexOf(todayDayName)
+              let diff = target - todayDow
               if (diff <= 0) diff += 7
-              const d = new Date(today); d.setDate(d.getDate() + diff)
-              date = d.toISOString().slice(0, 10)
+              date = new Date(nowMs + diff * 86400000).toLocaleDateString('sv-SE', { timeZone: tz })
             }
           }
 
