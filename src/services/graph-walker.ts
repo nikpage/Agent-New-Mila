@@ -13,6 +13,9 @@ import { getDealsForUser } from '@/lib/db/deals'
 import { getDAG, getBlockingNodes } from '@/lib/db/deal-graph'
 import { getEntitiesForDeal } from '@/lib/db/entity-map'
 import { getCurrentBeliefs } from '@/lib/db/journal'
+import { getParticipantsForDeal } from '@/lib/db/deal-participants'
+import { getLatestInboundFromCP } from '@/lib/db/timeline'
+import { hasPendingActionForCP } from '@/lib/db/actions'
 import type { UserSettings, Deal, DealGraphNode, DealGraphEdge } from '@/lib/supabase/types'
 
 // ─── Output types ─────────────────────────────────────────────────────────────
@@ -119,6 +122,10 @@ async function walkOneDeal(
   // ── Lead tracking ────────────────────────────────────────────────────────────
   const leadTask = classifyLeadStatus(deal, entityMapSnapshot, beliefSnapshot, now, settings)
   if (leadTask) tasks.push(leadTask)
+
+  // ── Inbound reply detection ─────────────────────────────────────────────────
+  const replyTask = await classifyInboundReply(deal, entityMapSnapshot, beliefSnapshot, now)
+  if (replyTask) tasks.push(replyTask)
 
   return tasks
 }
@@ -238,6 +245,56 @@ function classifyLeadStatus(
     cpId: null,
     entityMapSnapshot,
     beliefSnapshot,
+  }
+}
+
+// ─── Inbound reply detection ──────────────────────────────────────────────────
+
+const INBOUND_REPLY_FRESHNESS_DAYS = 14
+
+async function classifyInboundReply(
+  deal: Deal,
+  entityMapSnapshot: Record<string, string>,
+  beliefSnapshot: string[],
+  now: Date,
+): Promise<WalkerTask | null> {
+  try {
+    const participants = await getParticipantsForDeal(deal.id)
+    if (participants.length === 0) return null
+
+    let bestCpId: string | null = null
+    let bestTs = 0
+    for (const p of participants) {
+      const latest = await getLatestInboundFromCP(deal.user_id, p.cp_id)
+      if (!latest?.occurred_at) continue
+      const ts = new Date(latest.occurred_at).getTime()
+      if (ts > bestTs) {
+        bestTs = ts
+        bestCpId = p.cp_id
+      }
+    }
+    if (!bestCpId || bestTs === 0) return null
+
+    const daysSince = (now.getTime() - bestTs) / (1000 * 60 * 60 * 24)
+    if (daysSince > INBOUND_REPLY_FRESHNESS_DAYS) return null
+
+    if (await hasPendingActionForCP(deal.user_id, bestCpId)) return null
+
+    return {
+      nodeId: `deal:${deal.id}:reply`,
+      dealId: deal.id,
+      taskType: 'inbound_reply',
+      nodeLabel: null,
+      deadline: null,
+      hoursUntilDue: null,
+      slack: null,
+      cpId: bestCpId,
+      entityMapSnapshot,
+      beliefSnapshot,
+    }
+  } catch (err) {
+    console.warn(`[GraphWalker] inbound_reply classify failed for deal ${deal.id}:`, err)
+    return null
   }
 }
 
