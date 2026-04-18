@@ -37,7 +37,16 @@ const BASE_URL =
   'http://localhost:3000'
 const API_KEY = process.env.MILA_USER_API_KEY || ''
 const CRON_SECRET = process.env.CRON_SECRET || ''
-const RUN_ID = `E2E-AUTO-${Date.now()}`
+const CASSETTE = !!process.env.AI_CASSETTE_MODE
+const RUN_ID = CASSETTE ? 'E2E-AUTO-FIXED' : `E2E-AUTO-${Date.now()}`
+
+function mailNow(): Date {
+  if (CASSETTE && process.env.AI_CASSETTE_FIXED_NOW) {
+    const d = new Date(process.env.AI_CASSETTE_FIXED_NOW)
+    if (!isNaN(d.getTime())) return d
+  }
+  return new Date()
+}
 
 if (!API_KEY) { console.error('MILA_USER_API_KEY not set'); process.exit(1) }
 if (!CRON_SECRET) { console.error('CRON_SECRET not set'); process.exit(1) }
@@ -98,7 +107,7 @@ async function injectHistoryThread(
 
     const fromAddr = e.direction === 'outbound' ? me : e.from
     const toAddr = e.direction === 'outbound' ? extractAddr(e.from) : me
-    const date = new Date(); date.setDate(date.getDate() - e.daysAgo)
+    const date = mailNow(); date.setDate(date.getDate() - e.daysAgo)
 
     const headers = [
       `From: ${fromAddr}`,
@@ -136,7 +145,7 @@ async function injectCurrentEmail(e: FixtureCurrentEmail): Promise<void> {
     `From: ${e.from}`,
     `To: ${me}`,
     `Subject: [${RUN_ID}] ${e.subjectSuffix}`,
-    `Date: ${new Date().toUTCString()}`,
+    `Date: ${mailNow().toUTCString()}`,
     `Message-ID: ${rfcId}`,
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="UTF-8"',
@@ -160,7 +169,7 @@ async function injectSelfEmail(): Promise<void> {
     `From: ${me}`,
     `To: ${me}`,
     `Subject: [${RUN_ID}] ${SELF_EMAIL_COMMAND.subjectSuffix}`,
-    `Date: ${new Date().toUTCString()}`,
+    `Date: ${mailNow().toUTCString()}`,
     `Message-ID: ${rfcId}`,
     'MIME-Version: 1.0',
     'Content-Type: text/plain; charset="UTF-8"',

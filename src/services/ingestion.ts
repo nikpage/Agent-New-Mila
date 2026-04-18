@@ -12,6 +12,7 @@ import {
   type EmailMessage,
 } from '@/lib/google/gmail'
 import { filterEmail, classifyEmail, enrichMessage, enrichedTextToString } from '@/lib/ai/tasks'
+import { cassetteMode } from '@/lib/ai/cassette'
 import { findOrCreateCP, isSameGmailAddress } from '@/lib/db/counterparties'
 import { createMessage, messageExists, updateMessage } from '@/lib/db/messages'
 import { getUserById, upsertUser, getUserSettings } from '@/lib/db/users'
@@ -278,6 +279,7 @@ async function processOneInboundEmail(
       return null
     }
   } catch (error) {
+    if (cassetteMode() === 'replay') throw error
     // Fail-open: if filter AI is unavailable, let the email through
     console.error(`[Ingest] Filter failed for ${email.id}, allowing (fail-open):`, error)
   }
