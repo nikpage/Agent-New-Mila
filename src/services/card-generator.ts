@@ -138,6 +138,25 @@ function buildCardPrompt(
         ? `Hours until due: ${task.hoursUntilDue.toFixed(1)}`
         : 'No deadline set'
 
+  const cpMessageBlock = task.taskType === 'inbound_reply' && task.latestInboundText
+    ? `
+
+CP's latest inbound message (what you are replying to):
+"""
+${task.latestInboundText.slice(0, 2000)}
+"""
+
+REPLY grounding rules (MUST follow for inbound_reply):
+- Identify the questions the CP literally asked in the message above.
+- For each question, attempt to answer from the entity map facts.
+- Questions you CAN answer from entity map → include the answer directly in draft_skeleton, NO placeholder.
+- Questions you CANNOT answer from entity map → add to "placeholders" and use {{ placeholder }} in draft_skeleton.
+- NEVER invent questions the CP did not ask.
+- NEVER add verification/confirmation questions ("Confirmed X?", "Did you send Y?").
+- NEVER restate the CP's own deadlines as questions back to them.
+- If the CP asked no questions, "placeholders" MUST be [] and draft_skeleton is a plain acknowledgment/next-step.`
+    : ''
+
   return `You are generating an action card for a real estate agent's deal management system.
 
 Deal context:
@@ -150,7 +169,7 @@ Entity map (known facts about this deal):
 ${entityLines}
 
 Current beliefs about this counterparty:
-${beliefLines}
+${beliefLines}${cpMessageBlock}
 
 Your task: Determine the correct action type AND generate a concise, actionable card in ${language}.
 
